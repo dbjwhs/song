@@ -1,0 +1,11 @@
+# MIT License
+# Copyright (c) 2026 dbjwhs
+
+# Echo example
+add_executable(echo_service echo/echo_service.cpp)
+target_link_libraries(echo_service song)
+target_include_directories(echo_service PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_executable(echo_client echo/echo_client.cpp)
+target_link_libraries(echo_client song)
+target_include_directories(echo_client PRIVATE ${CMAKE_SOURCE_DIR}/include)

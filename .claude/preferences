@@ -1,0 +1,21 @@
+# Claude Code Preferences for Song Project
+
+## Communication Style
+- Do NOT use emojis or icons in any output (code, comments, documentation, commit messages)
+- Use plain text markers instead: [DONE], [TODO], [WIP], [WARNING], etc.
+- Keep communication professional and concise
+- Use markdown formatting but without emoji decorations
+
+## Code Style
+- Modern C++20
+- 2-space indentation
+- snake_case for variables and functions
+- Follow existing code patterns
+- Document public APIs thoroughly
+- No emojis in comments or documentation
+
+## Commit Messages
+- Follow conventional commits format
+- No emojis or icons
+- Clear, descriptive, factual
+- Include Co-Authored-By when appropriate
