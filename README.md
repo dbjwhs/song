@@ -1,6 +1,6 @@
-# Song: High-Performance Service Framework
+# Song: Services Over Native Gateways
 
-Song is a modern C++ framework for building high-performance, type-safe service architectures with process isolation and binary wire protocols.
+**Song** (**S**ervices **O**ver **N**ative **G**ateways) is a modern C++ framework for building high-performance, type-safe service architectures with process isolation and binary wire protocols.
 
 ## Features
 
