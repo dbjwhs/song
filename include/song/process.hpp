@@ -19,6 +19,7 @@ class ServiceProcess {
     Pipe to_service_;
     Pipe from_service_;
     bool reusable_ = true;
+    u16 negotiated_version_ = 0;  // Negotiated protocol version (0 = not negotiated)
 
 public:
     ServiceProcess() = default;
@@ -57,6 +58,10 @@ public:
 
     /// Get process ID
     pid_t pid() const { return pid_; }
+
+    /// Get negotiated protocol version
+    /// Returns 0 if not yet negotiated
+    u16 negotiated_version() const { return negotiated_version_; }
 
 private:
     ServiceProcess(pid_t pid, Pipe to_service, Pipe from_service);

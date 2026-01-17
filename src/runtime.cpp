@@ -16,9 +16,9 @@ void ServiceRuntime::register_dispatcher(u16 service_id,
 void ServiceRuntime::send_init_confirmation() {
     // Send init message to confirm we're ready
     Buffer init_msg = wire::create_init_message(
-        wire::kVersionMajor,
-        wire::kVersionMajor,
-        0
+        wire::kFirstVersion,
+        wire::kCurrentVersion,
+        0  // capabilities
     );
 
     // Write to stdout

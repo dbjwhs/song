@@ -23,8 +23,10 @@ ServiceProcess::ServiceProcess(ServiceProcess&& other) noexcept
     : pid_(other.pid_)
     , to_service_(std::move(other.to_service_))
     , from_service_(std::move(other.from_service_))
-    , reusable_(other.reusable_) {
+    , reusable_(other.reusable_)
+    , negotiated_version_(other.negotiated_version_) {
     other.pid_ = -1;
+    other.negotiated_version_ = 0;
 }
 
 ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
@@ -36,7 +38,9 @@ ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
         to_service_ = std::move(other.to_service_);
         from_service_ = std::move(other.from_service_);
         reusable_ = other.reusable_;
+        negotiated_version_ = other.negotiated_version_;
         other.pid_ = -1;
+        other.negotiated_version_ = 0;
     }
     return *this;
 }
@@ -102,8 +106,29 @@ void ServiceProcess::init_handshake() {
         throw ProtocolError("Invalid magic in init message");
     }
 
-    // TODO: Version negotiation logic here
-    // For now, just accept any version
+    // Version negotiation
+    // Rule 1: If peer's current version < our first supported version, peer is too old
+    if (init.current_version < wire::kFirstVersion) {
+        throw VersionMismatchError("Service version too old: service=" +
+            std::to_string(init.current_version >> 8) + "." +
+            std::to_string(init.current_version & 0xFF) +
+            ", minimum required=" +
+            std::to_string(wire::kFirstVersion >> 8) + "." +
+            std::to_string(wire::kFirstVersion & 0xFF));
+    }
+
+    // Rule 2: If peer's first supported version > our current version, we are too old
+    if (init.first_version > wire::kCurrentVersion) {
+        throw VersionMismatchError("Host version too old: host=" +
+            std::to_string(wire::kCurrentVersion >> 8) + "." +
+            std::to_string(wire::kCurrentVersion & 0xFF) +
+            ", service requires=" +
+            std::to_string(init.first_version >> 8) + "." +
+            std::to_string(init.first_version & 0xFF));
+    }
+
+    // Rule 3: Effective version = min(our current, peer current)
+    negotiated_version_ = std::min(wire::kCurrentVersion, init.current_version);
 }
 
 bool ServiceProcess::alive() const {

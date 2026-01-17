@@ -57,6 +57,11 @@ int main() {
         auto conn = mgr.connect("echo");
         EchoProxy proxy(conn);
 
+        // Show negotiated version
+        u16 ver = conn.process()->negotiated_version();
+        std::cout << "Negotiated protocol version: "
+                  << (ver >> 8) << "." << (ver & 0xFF) << "\n\n";
+
         // Test echo
         std::cout << "Testing echo method...\n";
         std::string result = proxy.echo("Hello, Song!");

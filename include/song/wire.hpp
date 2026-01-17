@@ -17,6 +17,18 @@ constexpr u32 kMagic = 0x534F4E47;
 constexpr u16 kVersionMajor = 1;
 constexpr u16 kVersionMinor = 0;
 
+// Version encoding helper: major in high byte, minor in low byte
+constexpr u16 make_version(u8 major, u8 minor) {
+    return (static_cast<u16>(major) << 8) | minor;
+}
+
+// Current protocol version (what we speak)
+constexpr u16 kCurrentVersion = make_version(kVersionMajor, kVersionMinor);
+
+// First supported version (oldest we can talk to)
+// For now, same as current since we only have v1.0
+constexpr u16 kFirstVersion = make_version(1, 0);
+
 // Message types
 enum class MsgType : u8 {
     init         = 0x01,
