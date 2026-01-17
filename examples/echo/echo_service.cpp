@@ -12,6 +12,7 @@ constexpr u16 kService_Echo = 1;
 // Method IDs
 constexpr u16 kMethod_echo = 1;
 constexpr u16 kMethod_add = 2;
+constexpr u16 kMethod_double_all = 3;
 
 // Echo service dispatcher
 void echo_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
@@ -28,6 +29,15 @@ void echo_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
             i32 b = decode_i32(request);
             i32 result = a + b;
             encode_i32(response, result);
+            break;
+        }
+        case kMethod_double_all: {
+            // Double all method: i32[] -> i32[]
+            std::vector<i32> vals = decode_array<i32>(request);
+            for (auto& v : vals) {
+                v *= 2;
+            }
+            encode_array<i32>(response, vals);
             break;
         }
         default:

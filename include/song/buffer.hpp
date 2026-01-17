@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 #include <cstring>
+#include <stdexcept>
+#include <type_traits>
 
 namespace song {
 
@@ -101,10 +103,90 @@ std::string decode_string(Buffer& buf);
 std::vector<std::byte> decode_bytes(Buffer& buf);
 
 // Array encoders/decoders
-template<typename T>
-void encode_array(Buffer& buf, std::span<const T> vals);
+// Maximum array count (1M elements) - matches wire::kMaxArrayCount
+constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;
 
 template<typename T>
-std::vector<T> decode_array(Buffer& buf);
+void encode_array(Buffer& buf, std::span<const T> vals) {
+    if (vals.size() > kMaxArrayCount) {
+        throw std::runtime_error("Array too large");
+    }
+
+    u32 count = static_cast<u32>(vals.size());
+    encode_u32(buf, count);
+
+    for (const auto& val : vals) {
+        if constexpr (std::is_same_v<T, bool>) {
+            encode_bool(buf, val);
+        } else if constexpr (std::is_same_v<T, i8>) {
+            encode_i8(buf, val);
+        } else if constexpr (std::is_same_v<T, i16>) {
+            encode_i16(buf, val);
+        } else if constexpr (std::is_same_v<T, i32>) {
+            encode_i32(buf, val);
+        } else if constexpr (std::is_same_v<T, i64>) {
+            encode_i64(buf, val);
+        } else if constexpr (std::is_same_v<T, u8>) {
+            encode_u8(buf, val);
+        } else if constexpr (std::is_same_v<T, u16>) {
+            encode_u16(buf, val);
+        } else if constexpr (std::is_same_v<T, u32>) {
+            encode_u32(buf, val);
+        } else if constexpr (std::is_same_v<T, u64>) {
+            encode_u64(buf, val);
+        } else if constexpr (std::is_same_v<T, f32>) {
+            encode_f32(buf, val);
+        } else if constexpr (std::is_same_v<T, f64>) {
+            encode_f64(buf, val);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            encode_string(buf, val);
+        } else {
+            static_assert(sizeof(T) == 0, "Unsupported array element type");
+        }
+    }
+}
+
+template<typename T>
+std::vector<T> decode_array(Buffer& buf) {
+    u32 count = decode_u32(buf);
+    if (count > kMaxArrayCount) {
+        throw std::runtime_error("Array too large");
+    }
+
+    std::vector<T> result;
+    result.reserve(count);
+
+    for (u32 i = 0; i < count; ++i) {
+        if constexpr (std::is_same_v<T, bool>) {
+            result.push_back(decode_bool(buf));
+        } else if constexpr (std::is_same_v<T, i8>) {
+            result.push_back(decode_i8(buf));
+        } else if constexpr (std::is_same_v<T, i16>) {
+            result.push_back(decode_i16(buf));
+        } else if constexpr (std::is_same_v<T, i32>) {
+            result.push_back(decode_i32(buf));
+        } else if constexpr (std::is_same_v<T, i64>) {
+            result.push_back(decode_i64(buf));
+        } else if constexpr (std::is_same_v<T, u8>) {
+            result.push_back(decode_u8(buf));
+        } else if constexpr (std::is_same_v<T, u16>) {
+            result.push_back(decode_u16(buf));
+        } else if constexpr (std::is_same_v<T, u32>) {
+            result.push_back(decode_u32(buf));
+        } else if constexpr (std::is_same_v<T, u64>) {
+            result.push_back(decode_u64(buf));
+        } else if constexpr (std::is_same_v<T, f32>) {
+            result.push_back(decode_f32(buf));
+        } else if constexpr (std::is_same_v<T, f64>) {
+            result.push_back(decode_f64(buf));
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            result.push_back(decode_string(buf));
+        } else {
+            static_assert(sizeof(T) == 0, "Unsupported array element type");
+        }
+    }
+
+    return result;
+}
 
 } // namespace song
