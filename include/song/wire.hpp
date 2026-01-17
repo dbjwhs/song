@@ -64,12 +64,30 @@ constexpr size_t kMaxPayloadSize = 16 * 1024 * 1024;  // 16 MB
 constexpr size_t kMaxStringSize = 1 * 1024 * 1024;    // 1 MB
 constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;    // 1M elements
 
-// Init message
+// Method flags for capability exchange
+enum class MethodFlags : u16 {
+    none      = 0x0000,
+    optional  = 0x0001,  // Method may not be implemented
+    streaming = 0x0002,  // Method returns a stream
+    oneway    = 0x0004,  // No response expected
+};
+
+// Method descriptor for capability exchange
+struct MethodDescriptor {
+    u16 service_id;      // Service this method belongs to
+    u16 method_id;       // Method ID within the service
+    MethodFlags flags;   // Method flags
+    u16 reserved;        // Alignment padding
+};
+static_assert(sizeof(MethodDescriptor) == 8, "MethodDescriptor must be 8 bytes");
+
+// Init message (fixed part - followed by method list)
 struct InitMessage {
     u32 magic;           // kMagic
     u16 first_version;   // Oldest version we support
     u16 current_version; // Our current version
     u32 capabilities;    // Feature flags
+    u32 method_count;    // Number of MethodDescriptors following
 };
 
 // Method call header
@@ -87,12 +105,18 @@ Header decode_header_validated(Buffer& buf);  // Throws on invalid magic
 void encode_init(Buffer& buf, const InitMessage& msg);
 InitMessage decode_init(Buffer& buf);
 
+// Method descriptor encoding/decoding
+void encode_method_descriptor(Buffer& buf, const MethodDescriptor& desc);
+MethodDescriptor decode_method_descriptor(Buffer& buf);
+
 // Method call encoding/decoding
 void encode_method_call(Buffer& buf, u16 service_id, u16 method_id, const Buffer& args);
 std::pair<u16, u16> decode_method_call_header(Buffer& buf);
 
 // Full message creation helpers
 Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities = 0);
+Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities,
+                          std::span<const MethodDescriptor> methods);
 Buffer create_call_message(u32 sequence_id, u16 service_id, u16 method_id, const Buffer& args);
 Buffer create_result_message(u32 sequence_id, const Buffer& result);
 Buffer create_error_message(u32 sequence_id, ErrorCode code, const std::string& message);

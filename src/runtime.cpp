@@ -13,12 +13,17 @@ void ServiceRuntime::register_dispatcher(u16 service_id,
     dispatchers_[service_id] = std::move(dispatcher);
 }
 
+void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::MethodFlags flags) {
+    methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
+}
+
 void ServiceRuntime::send_init_confirmation() {
-    // Send init message to confirm we're ready
+    // Send init message with method list
     Buffer init_msg = wire::create_init_message(
         wire::kFirstVersion,
         wire::kCurrentVersion,
-        0  // capabilities
+        0,  // capabilities
+        methods_
     );
 
     // Write to stdout

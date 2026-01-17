@@ -24,7 +24,8 @@ ServiceProcess::ServiceProcess(ServiceProcess&& other) noexcept
     , to_service_(std::move(other.to_service_))
     , from_service_(std::move(other.from_service_))
     , reusable_(other.reusable_)
-    , negotiated_version_(other.negotiated_version_) {
+    , negotiated_version_(other.negotiated_version_)
+    , methods_(std::move(other.methods_)) {
     other.pid_ = -1;
     other.negotiated_version_ = 0;
 }
@@ -39,6 +40,7 @@ ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
         from_service_ = std::move(other.from_service_);
         reusable_ = other.reusable_;
         negotiated_version_ = other.negotiated_version_;
+        methods_ = std::move(other.methods_);
         other.pid_ = -1;
         other.negotiated_version_ = 0;
     }
@@ -129,6 +131,13 @@ void ServiceProcess::init_handshake() {
 
     // Rule 3: Effective version = min(our current, peer current)
     negotiated_version_ = std::min(wire::kCurrentVersion, init.current_version);
+
+    // Decode method list
+    methods_.clear();
+    methods_.reserve(init.method_count);
+    for (u32 i = 0; i < init.method_count; ++i) {
+        methods_.push_back(wire::decode_method_descriptor(init_msg));
+    }
 }
 
 bool ServiceProcess::alive() const {
@@ -302,6 +311,18 @@ void ServiceConnection::call_oneway(u16 service_id, u16 method_id, const Buffer&
     u32 seq = next_seq_++;
     Buffer call_msg = wire::create_call_message(seq, service_id, method_id, args);
     proc_->send(call_msg);
+}
+
+bool ServiceConnection::supports(u16 service_id, u16 method_id) const {
+    if (!proc_) return false;
+
+    const auto& methods = proc_->methods();
+    for (const auto& m : methods) {
+        if (m.service_id == service_id && m.method_id == method_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace song

@@ -51,6 +51,11 @@ int main() {
     // Register echo service
     runtime.register_dispatcher(kService_Echo, echo_dispatcher);
 
+    // Register methods for capability exchange
+    runtime.register_method(kService_Echo, kMethod_echo);
+    runtime.register_method(kService_Echo, kMethod_add);
+    runtime.register_method(kService_Echo, kMethod_double_all);
+
     // Run forever (reads stdin, writes stdout)
     runtime.run();
 }

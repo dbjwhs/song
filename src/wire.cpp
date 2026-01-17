@@ -3,6 +3,7 @@
 
 #include "song/wire.hpp"
 #include <cstring>
+#include <span>
 
 namespace song {
 namespace wire {
@@ -43,6 +44,7 @@ void encode_init(Buffer& buf, const InitMessage& msg) {
     encode_u16(buf, msg.first_version);
     encode_u16(buf, msg.current_version);
     encode_u32(buf, msg.capabilities);
+    encode_u32(buf, msg.method_count);
 }
 
 InitMessage decode_init(Buffer& buf) {
@@ -51,7 +53,24 @@ InitMessage decode_init(Buffer& buf) {
     msg.first_version = decode_u16(buf);
     msg.current_version = decode_u16(buf);
     msg.capabilities = decode_u32(buf);
+    msg.method_count = decode_u32(buf);
     return msg;
+}
+
+void encode_method_descriptor(Buffer& buf, const MethodDescriptor& desc) {
+    encode_u16(buf, desc.service_id);
+    encode_u16(buf, desc.method_id);
+    encode_u16(buf, static_cast<u16>(desc.flags));
+    encode_u16(buf, desc.reserved);
+}
+
+MethodDescriptor decode_method_descriptor(Buffer& buf) {
+    MethodDescriptor desc;
+    desc.service_id = decode_u16(buf);
+    desc.method_id = decode_u16(buf);
+    desc.flags = static_cast<MethodFlags>(decode_u16(buf));
+    desc.reserved = decode_u16(buf);
+    return desc;
 }
 
 void encode_method_call(Buffer& buf, u16 service_id, u16 method_id, const Buffer& args) {
@@ -69,8 +88,34 @@ std::pair<u16, u16> decode_method_call_header(Buffer& buf) {
 
 Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities) {
     Buffer payload;
-    InitMessage msg{kMagic, first_version, current_version, capabilities};
+    InitMessage msg{kMagic, first_version, current_version, capabilities, 0};
     encode_init(payload, msg);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::init,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities,
+                          std::span<const MethodDescriptor> methods) {
+    Buffer payload;
+    InitMessage msg{kMagic, first_version, current_version, capabilities,
+                    static_cast<u32>(methods.size())};
+    encode_init(payload, msg);
+
+    // Encode method descriptors
+    for (const auto& method : methods) {
+        encode_method_descriptor(payload, method);
+    }
 
     Buffer buf;
     Header hdr{

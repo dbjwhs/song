@@ -9,6 +9,7 @@
 #include "wire.hpp"
 #include <sys/types.h>
 #include <string>
+#include <vector>
 
 namespace song {
 
@@ -20,6 +21,7 @@ class ServiceProcess {
     Pipe from_service_;
     bool reusable_ = true;
     u16 negotiated_version_ = 0;  // Negotiated protocol version (0 = not negotiated)
+    std::vector<wire::MethodDescriptor> methods_;  // Methods supported by service
 
 public:
     ServiceProcess() = default;
@@ -63,6 +65,9 @@ public:
     /// Returns 0 if not yet negotiated
     u16 negotiated_version() const { return negotiated_version_; }
 
+    /// Get methods supported by the service
+    const std::vector<wire::MethodDescriptor>& methods() const { return methods_; }
+
 private:
     ServiceProcess(pid_t pid, Pipe to_service, Pipe from_service);
 };
@@ -82,6 +87,10 @@ public:
 
     /// Make a one-way call (no response expected)
     void call_oneway(u16 service_id, u16 method_id, const Buffer& args);
+
+    /// Check if service supports a specific method
+    /// Returns true if the method was declared in the service's init message
+    bool supports(u16 service_id, u16 method_id) const;
 
     /// Get the service process
     ServiceProcess* process() { return proc_; }

@@ -60,7 +60,20 @@ int main() {
         // Show negotiated version
         u16 ver = conn.process()->negotiated_version();
         std::cout << "Negotiated protocol version: "
-                  << (ver >> 8) << "." << (ver & 0xFF) << "\n\n";
+                  << (ver >> 8) << "." << (ver & 0xFF) << "\n";
+
+        // Show method capabilities
+        std::cout << "Service supports " << conn.process()->methods().size() << " methods:\n";
+        for (const auto& m : conn.process()->methods()) {
+            std::cout << "  service=" << m.service_id << " method=" << m.method_id << "\n";
+        }
+
+        // Test supports() API
+        std::cout << "\nCapability checks:\n";
+        std::cout << "  supports echo: " << (conn.supports(kService_Echo, kMethod_echo) ? "yes" : "no") << "\n";
+        std::cout << "  supports add: " << (conn.supports(kService_Echo, kMethod_add) ? "yes" : "no") << "\n";
+        std::cout << "  supports double_all: " << (conn.supports(kService_Echo, kMethod_double_all) ? "yes" : "no") << "\n";
+        std::cout << "  supports unknown (99): " << (conn.supports(kService_Echo, 99) ? "yes" : "no") << "\n\n";
 
         // Test echo
         std::cout << "Testing echo method...\n";

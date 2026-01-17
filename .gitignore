@@ -43,3 +43,6 @@
 # Build directories
 build/
 cmake-build-*/
+
+# IDE cache
+.cache/
