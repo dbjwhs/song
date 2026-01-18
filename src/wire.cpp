@@ -50,6 +50,9 @@ void encode_init(Buffer& buf, const InitMessage& msg) {
 InitMessage decode_init(Buffer& buf) {
     InitMessage msg;
     msg.magic = decode_u32(buf);
+    if (msg.magic != kMagic) {
+        throw ProtocolError("Invalid magic in init message");
+    }
     msg.first_version = decode_u16(buf);
     msg.current_version = decode_u16(buf);
     msg.capabilities = decode_u32(buf);

@@ -3,7 +3,6 @@
 
 #include "song/buffer.hpp"
 #include <stdexcept>
-#include <algorithm>
 
 namespace song {
 
@@ -16,7 +15,8 @@ Buffer::~Buffer() {
 Buffer::Buffer(Buffer&& other) noexcept
     : size_(other.size_), capacity_(other.capacity_), read_pos_(other.read_pos_) {
     if (other.is_inline()) {
-        std::memcpy(inline_, other.inline_, kInlineSize);
+        // Only copy the bytes actually in use, not the full 4KB buffer
+        std::memcpy(inline_, other.inline_, other.size_);
         data_ = inline_;
     } else {
         data_ = other.data_;
@@ -38,7 +38,8 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
         read_pos_ = other.read_pos_;
 
         if (other.is_inline()) {
-            std::memcpy(inline_, other.inline_, kInlineSize);
+            // Only copy the bytes actually in use, not the full 4KB buffer
+            std::memcpy(inline_, other.inline_, other.size_);
             data_ = inline_;
         } else {
             data_ = other.data_;
@@ -211,7 +212,7 @@ f64 decode_f64(Buffer& buf) {
 
 std::string decode_string(Buffer& buf) {
     u32 len = decode_u32(buf);
-    if (len > 1024 * 1024) {  // 1 MB max
+    if (len > kMaxStringSize) {
         throw std::runtime_error("String too large");
     }
     std::string result(len, '\0');
@@ -221,7 +222,7 @@ std::string decode_string(Buffer& buf) {
 
 std::vector<std::byte> decode_bytes(Buffer& buf) {
     u32 len = decode_u32(buf);
-    if (len > 1024 * 1024) {  // 1 MB max
+    if (len > kMaxBytesSize) {
         throw std::runtime_error("Byte array too large");
     }
     std::vector<std::byte> result(len);

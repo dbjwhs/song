@@ -5,8 +5,46 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <iostream>
+#include <cerrno>
 
 namespace song {
+
+namespace {
+
+// Write all bytes to fd, handling partial writes and EINTR
+bool write_all(int fd, const void* data, size_t len) {
+    const auto* ptr = static_cast<const std::byte*>(data);
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t written = ::write(fd, ptr, remaining);
+        if (written < 0) {
+            if (errno == EINTR) continue;  // Interrupted, retry
+            return false;
+        }
+        ptr += written;
+        remaining -= written;
+    }
+    return true;
+}
+
+// Read exactly len bytes from fd, handling partial reads and EINTR
+bool read_all(int fd, void* data, size_t len) {
+    auto* ptr = static_cast<std::byte*>(data);
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t n = ::read(fd, ptr, remaining);
+        if (n < 0) {
+            if (errno == EINTR) continue;  // Interrupted, retry
+            return false;
+        }
+        if (n == 0) return false;  // EOF
+        ptr += n;
+        remaining -= n;
+    }
+    return true;
+}
+
+} // anonymous namespace
 
 void ServiceRuntime::register_dispatcher(u16 service_id,
                                         std::function<void(u16, Buffer&, Buffer&)> dispatcher) {
@@ -27,8 +65,7 @@ void ServiceRuntime::send_init_confirmation() {
     );
 
     // Write to stdout
-    ssize_t written = ::write(STDOUT_FILENO, init_msg.data(), init_msg.size());
-    if (written != static_cast<ssize_t>(init_msg.size())) {
+    if (!write_all(STDOUT_FILENO, init_msg.data(), init_msg.size())) {
         std::exit(1);
     }
 }
@@ -47,7 +84,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
                 ErrorCode::unknown_service,
                 "Unknown service ID"
             );
-            ::write(STDOUT_FILENO, error_msg.data(), error_msg.size());
+            write_all(STDOUT_FILENO, error_msg.data(), error_msg.size());
             return;
         }
 
@@ -58,7 +95,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
 
             // Send result
             Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            ::write(STDOUT_FILENO, result_msg.data(), result_msg.size());
+            write_all(STDOUT_FILENO, result_msg.data(), result_msg.size());
         } catch (const std::exception& e) {
             // Send error
             Buffer error_msg = wire::create_error_message(
@@ -66,7 +103,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
                 ErrorCode::unknown_method,
                 e.what()
             );
-            ::write(STDOUT_FILENO, error_msg.data(), error_msg.size());
+            write_all(STDOUT_FILENO, error_msg.data(), error_msg.size());
         }
     }
 }
@@ -79,14 +116,9 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
     for (;;) {
         // Read header (16 bytes)
         std::byte header_buf[16];
-        ssize_t n = ::read(STDIN_FILENO, header_buf, 16);
-        if (n == 0) {
-            // EOF - parent died
+        if (!read_all(STDIN_FILENO, header_buf, 16)) {
+            // EOF or error - parent died or pipe broken
             std::exit(0);
-        }
-        if (n < 0 || n != 16) {
-            // Error reading
-            std::exit(1);
         }
 
         // Parse header
@@ -109,13 +141,8 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
         Buffer payload;
         if (hdr.payload_size > 0) {
             std::vector<std::byte> payload_buf(hdr.payload_size);
-            size_t offset = 0;
-            while (offset < hdr.payload_size) {
-                n = ::read(STDIN_FILENO, payload_buf.data() + offset, hdr.payload_size - offset);
-                if (n <= 0) {
-                    std::exit(1);
-                }
-                offset += n;
+            if (!read_all(STDIN_FILENO, payload_buf.data(), hdr.payload_size)) {
+                std::exit(1);
             }
             payload.write(payload_buf.data(), hdr.payload_size);
             payload.reset_read();

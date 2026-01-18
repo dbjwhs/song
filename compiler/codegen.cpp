@@ -18,16 +18,15 @@ std::string CodeGenerator::type_to_cpp(const Type& t) {
 
     // Handle arrays
     if (t.is_array) {
-        std::string result = "std::vector<";
-        for (int i = 1; i < t.array_dimensions; ++i) {
+        // Treat array_dimensions == 0 as 1D array for backwards compatibility
+        int dims = t.array_dimensions > 0 ? t.array_dimensions : 1;
+        std::string result = "";
+        for (int i = 0; i < dims; ++i) {
             result += "std::vector<";
         }
         result += base_type;
-        for (int i = 0; i < t.array_dimensions; ++i) {
+        for (int i = 0; i < dims; ++i) {
             result += ">";
-        }
-        if (t.array_dimensions == 0) {
-            result = "std::vector<" + base_type + ">";
         }
         return result;
     }

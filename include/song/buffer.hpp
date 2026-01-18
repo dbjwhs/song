@@ -102,9 +102,11 @@ f64 decode_f64(Buffer& buf);
 std::string decode_string(Buffer& buf);
 std::vector<std::byte> decode_bytes(Buffer& buf);
 
-// Array encoders/decoders
-// Maximum array count (1M elements) - matches wire::kMaxArrayCount
-constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;
+// Maximum sizes for serialization
+// These match the corresponding wire:: constants
+constexpr size_t kMaxStringSize = 1 * 1024 * 1024;   // 1 MB
+constexpr size_t kMaxBytesSize = 1 * 1024 * 1024;    // 1 MB
+constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;   // 1M elements
 
 template<typename T>
 void encode_array(Buffer& buf, std::span<const T> vals) {

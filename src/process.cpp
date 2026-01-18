@@ -102,11 +102,8 @@ void ServiceProcess::init_handshake() {
         throw ProtocolError("Expected init message from service");
     }
 
-    // Decode init payload
+    // Decode init payload (validates magic internally)
     auto init = wire::decode_init(init_msg);
-    if (init.magic != wire::kMagic) {
-        throw ProtocolError("Invalid magic in init message");
-    }
 
     // Version negotiation
     // Rule 1: If peer's current version < our first supported version, peer is too old

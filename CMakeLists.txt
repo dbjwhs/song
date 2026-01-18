@@ -25,9 +25,6 @@ target_include_directories(song PUBLIC include)
 # Compiler
 add_executable(songc
     compiler/main.cpp
-    compiler/lexer.cpp
-    compiler/parser.cpp
-    compiler/resolver.cpp
     compiler/codegen.cpp
 )
 

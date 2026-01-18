@@ -59,10 +59,9 @@ struct Header {
 };
 static_assert(sizeof(Header) == 16, "Header must be 16 bytes");
 
-// Maximum sizes
+// Maximum payload size (larger than individual field limits)
 constexpr size_t kMaxPayloadSize = 16 * 1024 * 1024;  // 16 MB
-constexpr size_t kMaxStringSize = 1 * 1024 * 1024;    // 1 MB
-constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;    // 1M elements
+// Note: kMaxStringSize, kMaxBytesSize, kMaxArrayCount are defined in buffer.hpp
 
 // Method flags for capability exchange
 enum class MethodFlags : u16 {

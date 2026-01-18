@@ -5,7 +5,6 @@
 
 #include "types.hpp"
 #include <string>
-#include <variant>
 #include <stdexcept>
 
 namespace song {
@@ -34,52 +33,6 @@ enum class ErrorCode : u16 {
 
     // Application errors (1000+)
     // Reserved for service-specific errors
-};
-
-/// Error class for Song framework
-class Error {
-    ErrorCode code_;
-    std::string message_;
-
-public:
-    Error(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
-
-    ErrorCode code() const { return code_; }
-    const std::string& message() const { return message_; }
-};
-
-/// Result type for operations that can fail
-template<typename T>
-class Result {
-    std::variant<T, Error> value_;
-
-public:
-    Result(T value) : value_(std::move(value)) {}
-    Result(Error error) : value_(std::move(error)) {}
-
-    bool ok() const { return std::holds_alternative<T>(value_); }
-
-    T& value() {
-        if (!ok()) {
-            throw std::runtime_error("Attempted to access value of error result");
-        }
-        return std::get<T>(value_);
-    }
-
-    const T& value() const {
-        if (!ok()) {
-            throw std::runtime_error("Attempted to access value of error result");
-        }
-        return std::get<T>(value_);
-    }
-
-    const Error& error() const {
-        if (ok()) {
-            throw std::runtime_error("Attempted to access error of success result");
-        }
-        return std::get<Error>(value_);
-    }
 };
 
 /// Exception types
