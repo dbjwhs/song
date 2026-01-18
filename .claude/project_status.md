@@ -1,122 +1,121 @@
 # Song Project Status
 
-## Current State: Phase 1 Complete - Foundation Established
+## Current State: Phase 1 Complete, Tests Needed
 
-**Last Updated:** 2026-01-14
+**Last Updated:** 2026-01-18
+
+## PRIORITY FOR NEXT SESSION
+
+**Automated tests are the #1 priority.** The codebase has grown without test coverage. Before adding new features, we need to establish a test suite and adopt TDD going forward.
 
 ## What is Song?
 
-Song is a high-performance C++ service framework for building process-isolated microservices that communicate via Unix pipes. It provides zero-copy IPC, type-safe RPC, and automatic service lifecycle management.
+Song (Services Over Native Gateways) is a high-performance C++ service framework for building process-isolated microservices that communicate via Unix pipes. It provides zero-copy IPC, type-safe RPC, and automatic service lifecycle management.
 
 ## Project History
 
 1. Started as "Bolt" based on design document in ../new-world/SONG_DESIGN.md
 2. Renamed to "Song" with complete code transformation
 3. Initial implementation completed and committed to GitHub: https://github.com/dbjwhs/song
+4. Phase 1 punch list completed (P1.1-P1.8)
+5. Code review and cleanup performed (2026-01-18)
 
-## What's Been Implemented (Phase 1)
+## What's Been Implemented (Phase 1 - Complete)
 
-### Core Runtime (100% Complete)
-- ✅ Buffer class with small-buffer optimization (4KB inline storage)
-- ✅ Pipe class with RAII for Unix pipe management
-- ✅ Wire protocol with 16-byte fixed headers (magic: 0x534F4E47 "SONG")
-- ✅ ServiceProcess for spawning and managing child processes
-- ✅ ServiceManager for managing multiple services
-- ✅ ServiceRuntime for service-side request handling
-- ✅ Init handshake protocol for service startup
+### Core Runtime
+- Buffer class with small-buffer optimization (4KB inline storage)
+- Pipe class with RAII for Unix pipe management
+- Wire protocol with 16-byte fixed headers (magic: 0x534F4E47 "SONG")
+- ServiceProcess for spawning and managing child processes
+- ServiceManager for managing multiple services with auto-restart
+- ServiceRuntime for service-side request handling
+- Init handshake with version negotiation
+- Method list capability exchange (supports() API)
+- Array serialization (encode_array/decode_array)
 
-### Compiler Stubs (Structure Only)
-- ✅ Lexer stub (compiler/lexer.cpp)
-- ✅ Parser stub (compiler/parser.cpp)
-- ✅ Resolver stub (compiler/resolver.cpp)
-- ✅ Codegen stub (compiler/codegen.cpp)
-- ⚠️  These are placeholder files - not yet implemented
+### Compiler (Partial)
+- AST definitions (compiler/ast.hpp)
+- Code generator for structs and enums (compiler/codegen.cpp)
+- Lexer/parser not yet implemented
 
 ### Examples
-- ✅ Echo service and client (examples/echo/)
-- ✅ Full working demonstration of service spawn, RPC call, and response
-
-### Build System
-- ✅ CMake configuration with C++20
-- ✅ Optimization flags (-O3 -march=native -flto)
-- ✅ Test framework structure (test/CMakeLists.txt)
-
-### Code Quality
-- ✅ MIT License headers on all files (Copyright 2026 dbjwhs)
-- ✅ Pre-commit hooks for enforcing standards:
-  - tooling/new_line.sh - ensures trailing newlines
-  - tooling/update_header_license.sh - adds/verifies license headers
-- ✅ .claude/preferences - no emoji rule configured
+- Echo service and client (examples/echo/)
+- Crash/restart test (examples/crash/)
 
 ## Project Structure
 
 ```
 song/
 ├── include/song/           # Public API headers
-│   ├── buffer.hpp         # Buffer with small-buffer optimization
+│   ├── buffer.hpp         # Buffer with SBO, encode/decode functions
 │   ├── pipe.hpp           # RAII pipe wrapper
 │   ├── wire.hpp           # Wire protocol definitions
-│   ├── process.hpp        # ServiceProcess (spawn & manage)
-│   ├── manager.hpp        # ServiceManager (multi-service)
+│   ├── process.hpp        # ServiceProcess, ServiceConnection
+│   ├── manager.hpp        # ServiceManager with auto-restart
 │   ├── runtime.hpp        # ServiceRuntime (service-side)
-│   ├── types.hpp          # Type definitions (u8, u16, u32, u64)
-│   ├── error.hpp          # Error codes
+│   ├── types.hpp          # Type aliases (i8-i64, u8-u64, f32, f64)
+│   ├── error.hpp          # Error codes and exception types
 │   └── song.hpp           # Convenience header
 ├── src/                    # Implementation files
-├── compiler/               # Compiler stubs (not implemented)
-├── examples/echo/          # Working echo example
-├── test/                   # Test structure (empty)
+├── compiler/
+│   ├── ast.hpp            # AST node definitions
+│   ├── codegen.hpp/.cpp   # Code generator
+│   └── main.cpp           # songc entry point
+├── examples/
+│   ├── echo/              # Echo service example
+│   └── crash/             # Auto-restart test
+├── test/                   # TEST SUITE NEEDED
 ├── tooling/                # Pre-commit hook scripts
 └── .claude/                # Claude Code configuration
 ```
 
-## Testing Status
+## Testing Status - NEEDS ATTENTION
 
-- Echo example builds and runs successfully
-- No formal test suite yet (Phase 2 task)
+**Current state:** No automated tests. Only manual testing via examples.
 
-## What's Next: The Punch List
+**Test plan for next session:**
+1. Choose test framework (GoogleTest or Catch2)
+2. Add unit tests for Buffer (encode/decode round-trips, SBO, move semantics)
+3. Add unit tests for wire protocol (header encoding, message creation)
+4. Add integration tests for ServiceProcess/ServiceManager
+5. Establish rule: new code requires tests
 
-See ../new-world/SONG_DESIGN.md Section 19 for the complete 55+ task punch list.
+## What's Next
 
-**High Priority Next Steps:**
-1. Implement actual tests in test/ directory
-2. Add string encoder/decoder to wire protocol
-3. Implement list/vector encoding
-4. Add proper error handling and logging
-5. Begin compiler implementation (lexer first)
+### Immediate Priority
+- Automated test suite
+
+### Phase 2 (Compiler)
+- P2.1: Lexer implementation
+- P2.2: Parser implementation
+- P2.3: Semantic resolver
+- P2.4: Complete code generation with parsed AST
+
+### Future
+- Class support (DAG-style reference types)
+- Streaming support
+- Property support
 
 ## Key Technical Details
 
 **Magic Number:** 0x534F4E47 ("SONG")
 **Wire Protocol:** 16-byte fixed header + variable payload
 **IPC Mechanism:** Unix pipes (stdin/stdout redirection)
-**Service Model:** Fork/exec with init handshake
+**Service Model:** Fork/exec with init handshake and version negotiation
 **Language:** C++20 with modern idioms (RAII, move semantics)
 
 ## Design Document
 
 The authoritative design document is at: **../new-world/SONG_DESIGN.md**
 
-This document contains:
-- Complete architecture description
-- Wire protocol specification
-- Service lifecycle details
-- Implementation punch list with 55+ bite-sized tasks
-- Current implementation status with checkboxes
-
 ## Repository
 
 GitHub: https://github.com/dbjwhs/song
 Branch: main
-Clean working tree: Yes
-All changes committed and pushed: Yes
 
 ## Notes for Future Sessions
 
-- Pre-commit hooks are active - they run automatically on commit
-- All code must have MIT License headers (enforced by hook)
-- No emojis in code or commits (per .claude/preferences)
-- Compiler stubs exist but are not functional yet
-- Focus should be on completing punch list tasks from design doc
-- Test infrastructure exists but has no tests yet
+- Pre-commit hooks are active (license headers, trailing newlines)
+- No emojis in code or commits
+- **New code must include tests**
+- Compiler lexer/parser files were removed (were empty stubs)
