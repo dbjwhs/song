@@ -28,9 +28,9 @@
 
 | Component | Purpose |
 |-----------|---------|
-| **songc** | IDL compiler: `.song` files to C++ (coming soon) |
-| **libsong** | Runtime library: wire protocol, serialization |
-| **song-host** | Service manager: fork/exec, lifecycle, pipes |
+| **songc** | IDL compiler: generates C++ from AST (parser coming soon) |
+| **libsong** | Runtime library: wire protocol, serialization, process management |
+| **ServiceManager** | Service lifecycle: fork/exec, auto-restart, connection pooling |
 
 ## Building
 
@@ -131,23 +131,25 @@ All tests passed!
 ### Implemented
 - [x] Buffer class with small-buffer optimization
 - [x] Primitive type encoders/decoders (i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, string, bytes)
+- [x] Array encoders/decoders (encode_array/decode_array with nested support)
 - [x] Pipe abstraction with RAII
 - [x] Wire protocol (16-byte fixed headers, binary format)
 - [x] ServiceProcess (fork/exec, terminate, send/receive)
 - [x] ServiceManager (lifecycle management)
 - [x] ServiceRuntime (service-side main loop)
 - [x] ServiceConnection (client-side RPC)
+- [x] Version negotiation (first_version/current_version in init handshake)
+- [x] Method list capability exchange (services declare methods, clients can query with supports())
+- [x] Auto-restart on crash (background monitor thread with configurable restart limits)
+- [x] Struct code generation (songc --test-struct generates C++ from AST)
 - [x] Working echo example
+- [x] Crash/restart test example
 
 ### Coming Soon
-- [ ] Compiler (songc) - IDL to C++ code generation
-- [ ] Array encoders/decoders
-- [ ] Struct encoders/decoders
-- [ ] Error handling with custom exceptions
+- [ ] Compiler (songc) - lexer and parser for .song IDL files
+- [ ] Class support (DAG-style reference types with remote identity)
 - [ ] Streaming support
 - [ ] Property support
-- [ ] Version negotiation
-- [ ] Auto-restart on crash
 - [ ] Comprehensive test suite
 - [ ] Performance benchmarks
 
@@ -162,15 +164,20 @@ song/
 │       ├── pipe.hpp          # POSIX pipe wrapper
 │       ├── wire.hpp          # Wire protocol definitions
 │       ├── process.hpp       # Service process management
-│       ├── manager.hpp       # Service lifecycle manager
+│       ├── manager.hpp       # Service lifecycle manager (with auto-restart)
 │       ├── runtime.hpp       # Service-side runtime
 │       ├── error.hpp         # Error types
 │       └── song.hpp          # Main include
 ├── src/                      # Implementation files
-├── compiler/                 # songc compiler (coming soon)
+├── compiler/
+│   ├── ast.hpp               # AST node definitions
+│   ├── codegen.hpp           # Code generator interface
+│   ├── codegen.cpp           # Struct/enum code generation
+│   └── main.cpp              # songc entry point
 ├── test/                     # Tests (coming soon)
 └── examples/
-    └── echo/                 # Echo service example
+    ├── echo/                 # Echo service example
+    └── crash/                # Auto-restart test example
 ```
 
 ## Performance Characteristics
