@@ -28,7 +28,7 @@
 
 | Component | Purpose |
 |-----------|---------|
-| **songc** | IDL compiler: generates C++ from AST (parser coming soon) |
+| **songc** | IDL compiler: lexer, parser, code generator for .song files |
 | **libsong** | Runtime library: wire protocol, serialization, process management |
 | **ServiceManager** | Service lifecycle: fork/exec, auto-restart, connection pooling |
 
@@ -144,13 +144,16 @@ All tests passed!
 - [x] Struct code generation (songc --test-struct generates C++ from AST)
 - [x] Working echo example
 - [x] Crash/restart test example
+- [x] Comprehensive test suite (162 tests: buffer, wire, pipe, process, manager, lexer, parser)
+- [x] Lexer for Song IDL (tokenizes keywords, identifiers, literals, doc comments)
+- [x] Recursive descent parser (converts tokens to AST nodes)
 
 ### Coming Soon
-- [ ] Compiler (songc) - lexer and parser for .song IDL files
+- [ ] Semantic resolver (type checking, symbol tables, validation)
+- [ ] Full code generation from parsed .song files
 - [ ] Class support (DAG-style reference types with remote identity)
 - [ ] Streaming support
 - [ ] Property support
-- [ ] Comprehensive test suite
 - [ ] Performance benchmarks
 
 ## Project Structure
@@ -171,10 +174,11 @@ song/
 ├── src/                      # Implementation files
 ├── compiler/
 │   ├── ast.hpp               # AST node definitions
-│   ├── codegen.hpp           # Code generator interface
-│   ├── codegen.cpp           # Struct/enum code generation
+│   ├── lexer.hpp/cpp         # Tokenizer for Song IDL
+│   ├── parser.hpp/cpp        # Recursive descent parser
+│   ├── codegen.hpp/cpp       # C++ code generation
 │   └── main.cpp              # songc entry point
-├── test/                     # Tests (coming soon)
+├── test/                     # GoogleTest suite (162 tests)
 └── examples/
     ├── echo/                 # Echo service example
     └── crash/                # Auto-restart test example
