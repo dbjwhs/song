@@ -28,6 +28,7 @@ target_include_directories(song PUBLIC include)
 add_executable(songc
     compiler/main.cpp
     compiler/codegen.cpp
+    compiler/lexer.cpp
 )
 
 # Tests

@@ -25,6 +25,8 @@ add_executable(song_tests
     pipe_test.cpp
     process_test.cpp
     manager_test.cpp
+    lexer_test.cpp
+    ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
 )
 
 target_link_libraries(song_tests
@@ -32,7 +34,10 @@ target_link_libraries(song_tests
     GTest::gtest_main
 )
 
-target_include_directories(song_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(song_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/compiler
+)
 
 # Discover tests for CTest
 gtest_discover_tests(song_tests)
