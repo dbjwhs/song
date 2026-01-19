@@ -1,12 +1,8 @@
 # Song Project Status
 
-## Current State: Phase 1 Complete, Tests Needed
+## Current State: Phase 1 Complete with Full Test Coverage
 
-**Last Updated:** 2026-01-18
-
-## PRIORITY FOR NEXT SESSION
-
-**Automated tests are the #1 priority.** The codebase has grown without test coverage. Before adding new features, we need to establish a test suite and adopt TDD going forward.
+**Last Updated:** 2026-01-19
 
 ## What is Song?
 
@@ -19,6 +15,7 @@ Song (Services Over Native Gateways) is a high-performance C++ service framework
 3. Initial implementation completed and committed to GitHub: https://github.com/dbjwhs/song
 4. Phase 1 punch list completed (P1.1-P1.8)
 5. Code review and cleanup performed (2026-01-18)
+6. Comprehensive test suite added (2026-01-19) - 90 tests, all passing
 
 ## What's Been Implemented (Phase 1 - Complete)
 
@@ -42,6 +39,10 @@ Song (Services Over Native Gateways) is a high-performance C++ service framework
 - Echo service and client (examples/echo/)
 - Crash/restart test (examples/crash/)
 
+### Test Suite (Complete)
+- GoogleTest framework integrated via CMake FetchContent
+- 90 tests across 5 test suites, all passing
+
 ## Project Structure
 
 ```
@@ -64,26 +65,40 @@ song/
 ├── examples/
 │   ├── echo/              # Echo service example
 │   └── crash/             # Auto-restart test
-├── test/                   # TEST SUITE NEEDED
+├── test/                   # Automated test suite
+│   ├── buffer_test.cpp    # 31 tests
+│   ├── wire_test.cpp      # 17 tests
+│   ├── pipe_test.cpp      # 15 tests
+│   ├── process_test.cpp   # 11 tests
+│   └── manager_test.cpp   # 16 tests
 ├── tooling/                # Pre-commit hook scripts
 └── .claude/                # Claude Code configuration
 ```
 
-## Testing Status - NEEDS ATTENTION
+## Testing Status - COMPLETE
 
-**Current state:** No automated tests. Only manual testing via examples.
+**Test Framework:** GoogleTest v1.14.0 (via CMake FetchContent)
 
-**Test plan for next session:**
-1. Choose test framework (GoogleTest or Catch2)
-2. Add unit tests for Buffer (encode/decode round-trips, SBO, move semantics)
-3. Add unit tests for wire protocol (header encoding, message creation)
-4. Add integration tests for ServiceProcess/ServiceManager
-5. Establish rule: new code requires tests
+| Test Suite | Tests | Coverage |
+|------------|-------|----------|
+| BufferTest | 31 | SBO, move semantics, all primitive encode/decode round-trips, arrays, error handling |
+| WireTest | 17 | Header encoding, init messages, method descriptors, message creation, version helpers |
+| PipeTest | 15 | Basic I/O, closure semantics, move semantics, timeout functionality |
+| ProcessTest | 11 | Spawn, communication, lifecycle, method list, ServiceConnection |
+| ManagerTest | 16 | Start/stop, connect, restart, replace, auto-restart on crash, monitor thread |
+| **Total** | **90** | **All passing** |
+
+**Running tests:**
+```bash
+cd build && make -j8 && ./test/song_tests
+```
+
+**Key testing features:**
+- Tests auto-discovered with `gtest_discover_tests()`
+- Integration tests gracefully skip when example services aren't built
+- Timing-sensitive tests use polling with timeouts for reliability
 
 ## What's Next
-
-### Immediate Priority
-- Automated test suite
 
 ### Phase 2 (Compiler)
 - P2.1: Lexer implementation
@@ -117,5 +132,6 @@ Branch: main
 
 - Pre-commit hooks are active (license headers, trailing newlines)
 - No emojis in code or commits
-- **New code must include tests**
+- **New code must include tests** - TDD going forward
 - Compiler lexer/parser files were removed (were empty stubs)
+- Test suite uses GoogleTest - add tests to appropriate *_test.cpp file
