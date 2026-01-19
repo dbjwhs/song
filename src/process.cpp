@@ -91,8 +91,9 @@ ServiceProcess ServiceProcess::spawn(const char* executable) {
 
 void ServiceProcess::init_handshake() {
     // Wait for init message from service (with timeout)
+    // Use 5 second timeout to handle cold start scenarios (first exec is slower)
     Buffer init_msg;
-    if (!receive(init_msg, 1000)) {  // 1 second timeout
+    if (!receive(init_msg, 5000)) {
         throw ServiceError("Service failed to send init message");
     }
 
