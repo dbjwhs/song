@@ -8,8 +8,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Compiler flags for speed
-add_compile_options(-O3 -march=native -flto)
+# Compiler flags - use Release flags only in Release mode
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_options(-O3 -march=native -flto)
+endif()
 
 # Runtime library
 add_library(song STATIC
