@@ -30,6 +30,7 @@ add_executable(songc
     compiler/codegen.cpp
     compiler/lexer.cpp
     compiler/parser.cpp
+    compiler/resolver.cpp
 )
 
 # Tests
