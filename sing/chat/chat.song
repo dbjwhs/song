@@ -1,0 +1,57 @@
+// Chat Service - Sing Integration Test
+// Demonstrates stateful server interactions and message history
+
+namespace chat;
+
+/// A chat message with metadata
+struct Message {
+    /// Unique message ID
+    i64 id;
+    /// Message sender name
+    string sender;
+    /// Message content
+    string content;
+    /// Timestamp when sent (unix milliseconds)
+    i64 timestamp;
+}
+
+/// Server response after sending a message
+struct SendResult {
+    /// Whether the message was accepted
+    bool success;
+    /// Assigned message ID
+    i64 message_id;
+    /// Server timestamp
+    i64 timestamp;
+}
+
+/// Chat history query result
+struct HistoryResult {
+    /// Messages in chronological order
+    Message[] messages;
+    /// Total number of messages in history
+    i32 total_count;
+    /// Whether there are more messages
+    bool has_more;
+}
+
+/// Chat service for sending and retrieving messages
+service Chat {
+    /// Send a message to the chat
+    send(string sender, string content) -> SendResult;
+
+    /// Get recent message history (last N messages)
+    get_history(i32 count) -> HistoryResult;
+
+    /// Get messages after a specific message ID
+    get_messages_after(i64 after_id, i32 count) -> HistoryResult;
+
+    /// Clear all message history
+    clear_history() -> i32;
+
+    /// Get total message count
+    get_message_count() -> i32;
+
+    /// Check if a message exists
+    message_exists(i64 message_id) -> bool;
+}
