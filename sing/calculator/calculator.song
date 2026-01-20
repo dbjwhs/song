@@ -1,0 +1,33 @@
+// Calculator Service - Sing Integration Test
+// Demonstrates basic Song RPC patterns
+
+namespace calculator;
+
+/// Result of a division operation
+struct DivResult {
+    /// The quotient
+    i32 quotient;
+    /// The remainder
+    i32 remainder;
+}
+
+/// Calculator service with basic arithmetic operations
+service Calculator {
+    /// Add two numbers
+    add(i32 a, i32 b) -> i32;
+
+    /// Subtract b from a
+    subtract(i32 a, i32 b) -> i32;
+
+    /// Multiply two numbers
+    multiply(i32 a, i32 b) -> i32;
+
+    /// Integer division returning quotient and remainder
+    divide(i32 a, i32 b) -> DivResult;
+
+    /// Compute factorial (demonstrates larger computation)
+    factorial(i32 n) -> i64;
+
+    /// Sum an array of numbers
+    sum(i32[] values) -> i64;
+}
