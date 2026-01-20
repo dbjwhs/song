@@ -39,3 +39,6 @@ add_subdirectory(test)
 
 # Examples
 add_subdirectory(examples)
+
+# Sing - Integration Tests
+add_subdirectory(sing)
