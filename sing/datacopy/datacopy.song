@@ -1,0 +1,73 @@
+// Data Copy Service - Sing Integration Test
+// Demonstrates file transfer with binary data and chunked operations
+
+namespace datacopy;
+
+/// A chunk of file data
+struct FileChunk {
+    /// Filename being transferred
+    string filename;
+    /// Offset in bytes from start of file
+    i64 offset;
+    /// Chunk data
+    bytes data;
+    /// Whether this is the last chunk
+    bool is_final;
+}
+
+/// Result of a chunk write operation
+struct WriteResult {
+    /// Whether the write succeeded
+    bool success;
+    /// Number of bytes written
+    i64 bytes_written;
+    /// Total bytes received for this file so far
+    i64 total_received;
+}
+
+/// Result of a file read operation
+struct ReadResult {
+    /// Whether the file exists
+    bool found;
+    /// File data (empty if not found)
+    bytes data;
+    /// File size in bytes
+    i64 size;
+}
+
+/// File metadata
+struct FileInfo {
+    /// Filename
+    string filename;
+    /// File size in bytes
+    i64 size;
+    /// Whether the file transfer is complete
+    bool complete;
+}
+
+/// Data copy service for transferring files
+service DataCopy {
+    /// Write a chunk of data to a file
+    write_chunk(FileChunk chunk) -> WriteResult;
+
+    /// Read an entire file
+    read_file(string filename) -> ReadResult;
+
+    /// Get info about a file
+    get_file_info(string filename) -> FileInfo;
+
+    /// List all files on the server
+    list_files() -> FileInfo[];
+
+    /// Delete a file
+    delete_file(string filename) -> bool;
+
+    /// Clear all files
+    clear_all() -> i32;
+
+    /// Check if a file exists
+    file_exists(string filename) -> bool;
+
+    /// Get total storage used
+    get_storage_used() -> i64;
+}
