@@ -45,6 +45,23 @@ inline DivResult decode_DivResult(Buffer& buf) {
     return val;
 }
 
+inline void encode_array_DivResult(Buffer& buf, const std::vector<DivResult>& arr) {
+    encode_u32(buf, static_cast<u32>(arr.size()));
+    for (const auto& val : arr) {
+        encode_DivResult(buf, val);
+    }
+}
+
+inline std::vector<DivResult> decode_array_DivResult(Buffer& buf) {
+    u32 count = decode_u32(buf);
+    std::vector<DivResult> arr;
+    arr.reserve(count);
+    for (u32 i = 0; i < count; ++i) {
+        arr.push_back(decode_DivResult(buf));
+    }
+    return arr;
+}
+
 /// Calculator service with basic arithmetic operations
 class CalculatorProxy {
     ServiceConnection& m_conn;

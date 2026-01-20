@@ -203,6 +203,33 @@ std::string CodeGenerator::generate_struct_decode(const StructDef& s) {
     return out.str();
 }
 
+// Generate array encode helper for struct
+std::string generate_struct_array_encode(const StructDef& s) {
+    std::ostringstream out;
+    out << "inline void encode_array_" << s.name << "(Buffer& buf, const std::vector<" << s.name << ">& arr) {\n";
+    out << "    encode_u32(buf, static_cast<u32>(arr.size()));\n";
+    out << "    for (const auto& val : arr) {\n";
+    out << "        encode_" << s.name << "(buf, val);\n";
+    out << "    }\n";
+    out << "}\n";
+    return out.str();
+}
+
+// Generate array decode helper for struct
+std::string generate_struct_array_decode(const StructDef& s) {
+    std::ostringstream out;
+    out << "inline std::vector<" << s.name << "> decode_array_" << s.name << "(Buffer& buf) {\n";
+    out << "    u32 count = decode_u32(buf);\n";
+    out << "    std::vector<" << s.name << "> arr;\n";
+    out << "    arr.reserve(count);\n";
+    out << "    for (u32 i = 0; i < count; ++i) {\n";
+    out << "        arr.push_back(decode_" << s.name << "(buf));\n";
+    out << "    }\n";
+    out << "    return arr;\n";
+    out << "}\n";
+    return out.str();
+}
+
 // =============================================================================
 // Enum Generation
 // =============================================================================
@@ -493,6 +520,11 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
         for (const auto& s : ns.structs) {
             out << generate_struct_encode(s) << "\n";
             out << generate_struct_decode(s) << "\n";
+        }
+        // Array helpers for structs
+        for (const auto& s : ns.structs) {
+            out << generate_struct_array_encode(s) << "\n";
+            out << generate_struct_array_decode(s) << "\n";
         }
     }
 

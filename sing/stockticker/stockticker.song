@@ -1,0 +1,61 @@
+// Stock Ticker Service - Sing Integration Test
+// Demonstrates complex types, arrays, and optional fields
+
+namespace stockticker;
+
+/// A stock quote with price and metadata
+struct Quote {
+    /// Stock symbol (e.g., "AAPL")
+    string symbol;
+    /// Current price in cents (to avoid float precision issues)
+    i64 price_cents;
+    /// Price change from previous close in cents
+    i64 change_cents;
+    /// Volume traded today
+    i64 volume;
+    /// Timestamp of quote (unix milliseconds)
+    i64 timestamp;
+}
+
+/// Historical price point
+struct PricePoint {
+    /// Timestamp (unix milliseconds)
+    i64 timestamp;
+    /// Price in cents
+    i64 price_cents;
+    /// Volume at this point
+    i64 volume;
+}
+
+/// Market status information
+struct MarketStatus {
+    /// Whether market is currently open
+    bool is_open;
+    /// Next market open time (unix milliseconds)
+    i64 next_open;
+    /// Next market close time (unix milliseconds)
+    i64 next_close;
+    /// Status message
+    string message;
+}
+
+/// Stock ticker service
+service StockTicker {
+    /// Get current quote for a symbol
+    get_quote(string symbol) -> Quote;
+
+    /// Get quotes for multiple symbols at once
+    get_quotes(string[] symbols) -> Quote[];
+
+    /// Get price history for a symbol (last N points)
+    get_history(string symbol, i32 points) -> PricePoint[];
+
+    /// Get current market status
+    get_market_status() -> MarketStatus;
+
+    /// Check if a symbol exists
+    symbol_exists(string symbol) -> bool;
+
+    /// Get list of all available symbols
+    list_symbols() -> string[];
+}
