@@ -28,9 +28,11 @@ add_executable(song_tests
     lexer_test.cpp
     parser_test.cpp
     resolver_test.cpp
+    codegen_test.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp
+    ${CMAKE_SOURCE_DIR}/compiler/codegen.cpp
 )
 
 target_link_libraries(song_tests

@@ -1,172 +1,173 @@
 // MIT License
 // Copyright (c) 2026 dbjwhs
 
+#include "parser.hpp"
+#include "resolver.hpp"
 #include "codegen.hpp"
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <filesystem>
 
+namespace fs = std::filesystem;
+using namespace song;
 using namespace song::compiler;
 
-// Test: Generate code for a simple Point struct
-void test_point_struct() {
-    // Manually construct AST for:
-    // namespace example;
-    // struct Point { i32 x; i32 y; }
-
-    Namespace ns;
-    ns.name = "example";
-
-    StructDef point;
-    point.name = "Point";
-    point.doc = "A 2D point";
-
-    Field x;
-    x.name = "x";
-    x.type.base = PrimitiveType::i32;
-    x.doc = "X coordinate";
-
-    Field y;
-    y.name = "y";
-    y.type.base = PrimitiveType::i32;
-    y.doc = "Y coordinate";
-
-    point.fields.push_back(x);
-    point.fields.push_back(y);
-    ns.structs.push_back(point);
-
-    // Also test a more complex struct: Rect with nested Point
-    StructDef rect;
-    rect.name = "Rect";
-    rect.doc = "A rectangle defined by origin and size";
-
-    Field origin;
-    origin.name = "origin";
-    origin.type.base = std::string("Point");
-    origin.doc = "Top-left corner";
-
-    Field size;
-    size.name = "size";
-    size.type.base = std::string("Point");
-    size.doc = "Width and height";
-
-    rect.fields.push_back(origin);
-    rect.fields.push_back(size);
-    ns.structs.push_back(rect);
-
-    // Test array field
-    StructDef polygon;
-    polygon.name = "Polygon";
-    polygon.doc = "A polygon defined by vertices";
-
-    Field vertices;
-    vertices.name = "vertices";
-    vertices.type.base = std::string("Point");
-    vertices.type.is_array = true;
-    vertices.doc = "List of vertices";
-
-    polygon.fields.push_back(vertices);
-    ns.structs.push_back(polygon);
-
-    // Generate code
-    CodeGenerator gen;
-
-    std::cout << "=== Types Header ===\n";
-    std::cout << gen.generate_types_header(ns);
-
-    std::cout << "\n=== Wire Implementation ===\n";
-    std::cout << gen.generate_wire_impl(ns);
+// Read entire file into string
+static std::string read_file(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Cannot open file: " + path);
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
-// Test: Generate enum
-void test_enum() {
-    Namespace ns;
-    ns.name = "example";
-
-    EnumDef status;
-    status.name = "Status";
-    status.doc = "Operation status";
-    status.is_flags = false;
-
-    EnumItem idle;
-    idle.name = "idle";
-    idle.value = 0;
-    status.items.push_back(idle);
-
-    EnumItem running;
-    running.name = "running";
-    running.value = 1;
-    status.items.push_back(running);
-
-    EnumItem error;
-    error.name = "error";
-    error.value = 2;
-    status.items.push_back(error);
-
-    ns.enums.push_back(status);
-
-    // Flags example
-    EnumDef options;
-    options.name = "Options";
-    options.doc = "Configuration flags";
-    options.is_flags = true;
-
-    EnumItem verbose;
-    verbose.name = "verbose";
-    verbose.value = 0x01;
-    options.items.push_back(verbose);
-
-    EnumItem debug;
-    debug.name = "debug";
-    debug.value = 0x02;
-    options.items.push_back(debug);
-
-    EnumItem async;
-    async.name = "async";
-    async.value = 0x04;
-    options.items.push_back(async);
-
-    ns.enums.push_back(options);
-
-    CodeGenerator gen;
-    std::cout << "=== Enum Test ===\n";
-    std::cout << gen.generate_types_header(ns);
+// Write string to file
+static void write_file(const std::string& path, const std::string& content) {
+    std::ofstream file(path);
+    if (!file) {
+        throw std::runtime_error("Cannot write file: " + path);
+    }
+    file << content;
 }
 
-void print_usage() {
-    std::cout << "songc - Song IDL Compiler\n";
-    std::cout << "Usage: songc [options] <input.song>\n";
-    std::cout << "\nOptions:\n";
-    std::cout << "  --test-struct   Run struct generation test\n";
-    std::cout << "  --test-enum     Run enum generation test\n";
-    std::cout << "  --help          Show this help\n";
+static void print_usage(const char* program) {
+    std::cerr << "songc - Song IDL Compiler\n";
+    std::cerr << "Usage: " << program << " [options] <input.song>\n";
+    std::cerr << "\nOptions:\n";
+    std::cerr << "  -o, --output <dir>  Output directory (default: current)\n";
+    std::cerr << "  --single            Generate single header file (default)\n";
+    std::cerr << "  --split             Generate separate files\n";
+    std::cerr << "  -h, --help          Show this help\n";
+    std::cerr << "\nOutput:\n";
+    std::cerr << "  Single mode: <name>.hpp (all-in-one header)\n";
+    std::cerr << "  Split mode:  <name>_types.hpp, <name>_wire.cpp,\n";
+    std::cerr << "               <name>_client.hpp, <name>_server.hpp\n";
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        print_usage();
-        return 0;
+    std::string input_path;
+    std::string output_dir = ".";
+    bool split_mode = false;
+
+    // Parse arguments
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return 0;
+        }
+
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: -o requires an argument\n";
+                return 1;
+            }
+            output_dir = argv[++i];
+            continue;
+        }
+
+        if (arg == "--single") {
+            split_mode = false;
+            continue;
+        }
+
+        if (arg == "--split") {
+            split_mode = true;
+            continue;
+        }
+
+        if (arg[0] == '-') {
+            std::cerr << "Error: Unknown option: " << arg << "\n";
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        // Positional argument = input file
+        if (input_path.empty()) {
+            input_path = arg;
+        } else {
+            std::cerr << "Error: Multiple input files not supported\n";
+            return 1;
+        }
     }
 
-    std::string arg = argv[1];
-
-    if (arg == "--help" || arg == "-h") {
-        print_usage();
-        return 0;
+    if (input_path.empty()) {
+        print_usage(argv[0]);
+        return 1;
     }
 
-    if (arg == "--test-struct") {
-        test_point_struct();
-        return 0;
+    // Read source file
+    std::string source;
+    try {
+        source = read_file(input_path);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
     }
 
-    if (arg == "--test-enum") {
-        test_enum();
-        return 0;
+    // Parse
+    Parser parser(source);
+    AST ast;
+    try {
+        ast = parser.parse();
+    } catch (const ParserError& e) {
+        std::cerr << input_path << ":" << e.line() << ":" << e.column()
+                  << ": error: " << e.what() << "\n";
+        return 1;
     }
 
-    // TODO: Parse actual .song file
-    std::cout << "songc: parsing " << arg << " not yet implemented\n";
-    std::cout << "Use --test-struct or --test-enum to test code generation\n";
+    // Resolve (semantic analysis)
+    Resolver resolver(ast);
+    if (!resolver.resolve()) {
+        for (const auto& err : resolver.errors()) {
+            std::cerr << input_path << ":" << err.line() << ":" << err.column()
+                      << ": error: " << err.what() << "\n";
+        }
+        return 1;
+    }
+
+    // Generate code
+    const Namespace& ns = ast.namespaces.front();
+    CodeGenerator gen;
+
+    // Create output directory if needed
+    if (!fs::exists(output_dir)) {
+        fs::create_directories(output_dir);
+    }
+
+    std::string base_name = ns.name;
+
+    try {
+        if (split_mode) {
+            // Split mode: separate files
+            write_file(output_dir + "/" + base_name + "_types.hpp",
+                       gen.generate_types_header(ns));
+            write_file(output_dir + "/" + base_name + "_wire.cpp",
+                       gen.generate_wire_impl(ns));
+            write_file(output_dir + "/" + base_name + "_client.hpp",
+                       gen.generate_client_header(ns));
+            write_file(output_dir + "/" + base_name + "_server.hpp",
+                       gen.generate_server_header(ns));
+
+            std::cout << "Generated:\n";
+            std::cout << "  " << output_dir << "/" << base_name << "_types.hpp\n";
+            std::cout << "  " << output_dir << "/" << base_name << "_wire.cpp\n";
+            std::cout << "  " << output_dir << "/" << base_name << "_client.hpp\n";
+            std::cout << "  " << output_dir << "/" << base_name << "_server.hpp\n";
+        } else {
+            // Single mode: all-in-one header
+            std::string output_path = output_dir + "/" + base_name + ".hpp";
+            write_file(output_path, gen.generate_header(ns));
+            std::cout << "Generated: " << output_path << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error writing output: " << e.what() << "\n";
+        return 1;
+    }
 
     return 0;
 }

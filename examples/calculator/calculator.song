@@ -1,0 +1,32 @@
+// Example: Calculator service
+// Demonstrates basic Song IDL features
+
+namespace calculator;
+
+/// Result of a division operation
+struct DivResult {
+    /// The quotient
+    i32 quotient;
+    /// The remainder
+    i32 remainder;
+}
+
+/// Error thrown when dividing by zero
+error DivisionByZero {
+    string message;
+}
+
+/// Simple calculator service
+service Calculator {
+    /// Add two numbers
+    add(i32 a, i32 b) -> i32;
+
+    /// Subtract b from a
+    subtract(i32 a, i32 b) -> i32;
+
+    /// Multiply two numbers
+    multiply(i32 a, i32 b) -> i32;
+
+    /// Divide a by b, returning quotient and remainder
+    divide(i32 a, i32 b) -> DivResult throws DivisionByZero;
+}

@@ -3,8 +3,11 @@
 
 #include "codegen.hpp"
 #include <sstream>
+#include <cstdint>
 
 namespace song::compiler {
+
+using u16 = std::uint16_t;
 
 // Convert Type to C++ type string
 std::string CodeGenerator::type_to_cpp(const Type& t) {
@@ -18,9 +21,8 @@ std::string CodeGenerator::type_to_cpp(const Type& t) {
 
     // Handle arrays
     if (t.is_array) {
-        // Treat array_dimensions == 0 as 1D array for backwards compatibility
         int dims = t.array_dimensions > 0 ? t.array_dimensions : 1;
-        std::string result = "";
+        std::string result;
         for (int i = 0; i < dims; ++i) {
             result += "std::vector<";
         }
@@ -61,7 +63,6 @@ std::string CodeGenerator::type_to_param(const Type& t, const std::string& name)
 // Generate encode call for a type
 std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
     if (t.is_array) {
-        // For arrays, need to determine element type
         Type elem = t;
         elem.is_array = false;
         elem.array_dimensions = 0;
@@ -77,7 +78,6 @@ std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
     if (t.is_optional) {
         Type inner = t;
         inner.is_optional = false;
-        // Optional encoding: presence byte + value
         return "encode_optional(buf, " + expr + ", [&](const auto& v) { " +
                encode_call(inner, "v") + "; })";
     }
@@ -151,18 +151,19 @@ std::string CodeGenerator::decode_call(const Type& t) {
     return "decode_" + get_user_type(t) + "(buf)";
 }
 
-// Generate struct definition
+// =============================================================================
+// Struct Generation
+// =============================================================================
+
 std::string CodeGenerator::generate_struct_def(const StructDef& s) {
     std::ostringstream out;
 
-    // Doc comment
     if (!s.doc.empty()) {
         out << "/// " << s.doc << "\n";
     }
 
     out << "struct " << s.name << " {\n";
 
-    // Fields
     for (const auto& f : s.fields) {
         if (!f.doc.empty()) {
             out << "    /// " << f.doc << "\n";
@@ -174,7 +175,6 @@ std::string CodeGenerator::generate_struct_def(const StructDef& s) {
     return out.str();
 }
 
-// Generate encode function for struct
 std::string CodeGenerator::generate_struct_encode(const StructDef& s) {
     std::ostringstream out;
 
@@ -188,7 +188,6 @@ std::string CodeGenerator::generate_struct_encode(const StructDef& s) {
     return out.str();
 }
 
-// Generate decode function for struct
 std::string CodeGenerator::generate_struct_decode(const StructDef& s) {
     std::ostringstream out;
 
@@ -204,7 +203,10 @@ std::string CodeGenerator::generate_struct_decode(const StructDef& s) {
     return out.str();
 }
 
-// Generate enum definition
+// =============================================================================
+// Enum Generation
+// =============================================================================
+
 std::string CodeGenerator::generate_enum_def(const EnumDef& e) {
     std::ostringstream out;
 
@@ -212,10 +214,7 @@ std::string CodeGenerator::generate_enum_def(const EnumDef& e) {
         out << "/// " << e.doc << "\n";
     }
 
-    // Use enum class for type safety
     out << "enum class " << e.name << " : ";
-
-    // Determine underlying type based on values
     out << (e.is_flags ? "u32" : "i32");
     out << " {\n";
 
@@ -238,7 +237,285 @@ std::string CodeGenerator::generate_enum_def(const EnumDef& e) {
     return out.str();
 }
 
-// Generate types header for a namespace
+// =============================================================================
+// Service ID Generation
+// =============================================================================
+
+std::string CodeGenerator::generate_service_ids(const Namespace& ns) {
+    std::ostringstream out;
+
+    out << "// Service and method IDs\n";
+
+    u16 service_id = 1;
+    for (const auto& s : ns.services) {
+        out << "constexpr u16 kService_" << s.name << " = " << service_id++ << ";\n";
+
+        u16 method_id = 1;
+        for (const auto& m : s.methods) {
+            out << "constexpr u16 kMethod_" << s.name << "_" << m.name
+                << " = " << method_id++ << ";\n";
+        }
+        out << "\n";
+    }
+
+    return out.str();
+}
+
+// =============================================================================
+// Service Proxy Generation (Client Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_method_params(const std::vector<Param>& params) {
+    std::ostringstream out;
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << type_to_param(params[i].type, params[i].name);
+    }
+    return out.str();
+}
+
+std::string CodeGenerator::generate_encode_params(const std::vector<Param>& params) {
+    std::ostringstream out;
+    for (const auto& p : params) {
+        out << "        " << encode_call(p.type, p.name) << ";\n";
+    }
+    return out.str();
+}
+
+std::string CodeGenerator::generate_decode_params(const std::vector<Param>& params) {
+    std::ostringstream out;
+    for (const auto& p : params) {
+        out << "        " << type_to_cpp(p.type) << " " << p.name
+            << " = " << decode_call(p.type) << ";\n";
+    }
+    return out.str();
+}
+
+std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
+    std::ostringstream out;
+
+    if (!s.doc.empty()) {
+        out << "/// " << s.doc << "\n";
+    }
+    out << "class " << s.name << "Proxy {\n";
+    out << "    ServiceConnection& m_conn;\n";
+    out << "public:\n";
+    out << "    explicit " << s.name << "Proxy(ServiceConnection& conn) : m_conn(conn) {}\n\n";
+
+    for (const auto& m : s.methods) {
+        // Method signature
+        std::string return_type = type_to_cpp(m.return_type);
+        bool is_void = is_primitive(m.return_type) &&
+                       get_primitive(m.return_type) == PrimitiveType::void_;
+
+        if (!m.doc.empty()) {
+            out << "    /// " << m.doc << "\n";
+        }
+
+        out << "    " << return_type << " " << m.name << "(";
+        out << generate_method_params(m.params);
+        out << ") {\n";
+
+        // Encode request
+        out << "        Buffer req;\n";
+        for (const auto& p : m.params) {
+            std::string encode = encode_call(p.type, p.name);
+            // Replace buf with req
+            size_t pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "req");
+            }
+            out << "        " << encode << ";\n";
+        }
+
+        // Call
+        out << "        Buffer resp = m_conn.call(kService_" << s.name
+            << ", kMethod_" << s.name << "_" << m.name << ", req);\n";
+
+        // Decode response
+        if (!is_void) {
+            // Generate decode call using resp buffer
+            std::string decode = decode_call(m.return_type);
+            // Replace buf with resp in the decode call
+            size_t pos = decode.find("buf");
+            if (pos != std::string::npos) {
+                decode.replace(pos, 3, "resp");
+            }
+            out << "        return " << decode << ";\n";
+        }
+
+        out << "    }\n\n";
+    }
+
+    out << "};\n";
+    return out.str();
+}
+
+// =============================================================================
+// Service Interface Generation (Server Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_service_interface(const ServiceDef& s) {
+    std::ostringstream out;
+
+    if (!s.doc.empty()) {
+        out << "/// " << s.doc << " (interface)\n";
+    }
+    out << "class I" << s.name << " {\n";
+    out << "public:\n";
+    out << "    virtual ~I" << s.name << "() = default;\n\n";
+
+    for (const auto& m : s.methods) {
+        std::string return_type = type_to_cpp(m.return_type);
+
+        if (!m.doc.empty()) {
+            out << "    /// " << m.doc << "\n";
+        }
+
+        out << "    virtual " << return_type << " " << m.name << "(";
+        out << generate_method_params(m.params);
+        out << ") = 0;\n";
+    }
+
+    out << "};\n";
+    return out.str();
+}
+
+// =============================================================================
+// Service Dispatcher Generation (Server Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
+    std::ostringstream out;
+
+    out << "inline void dispatch_" << s.name << "(I" << s.name << "& impl, "
+        << "u16 method_id, Buffer& request, Buffer& response) {\n";
+    out << "    switch (method_id) {\n";
+
+    for (const auto& m : s.methods) {
+        out << "        case kMethod_" << s.name << "_" << m.name << ": {\n";
+
+        // Decode parameters from request buffer
+        for (const auto& p : m.params) {
+            std::string decode = decode_call(p.type);
+            // Replace buf with request
+            size_t pos = decode.find("buf");
+            if (pos != std::string::npos) {
+                decode.replace(pos, 3, "request");
+            }
+            out << "            " << type_to_cpp(p.type) << " " << p.name
+                << " = " << decode << ";\n";
+        }
+
+        // Call implementation
+        bool is_void = is_primitive(m.return_type) &&
+                       get_primitive(m.return_type) == PrimitiveType::void_;
+
+        out << "            ";
+        if (!is_void) {
+            out << "auto result = ";
+        }
+        out << "impl." << m.name << "(";
+        for (size_t i = 0; i < m.params.size(); ++i) {
+            if (i > 0) out << ", ";
+            out << m.params[i].name;
+        }
+        out << ");\n";
+
+        // Encode response to response buffer
+        if (!is_void) {
+            std::string encode = encode_call(m.return_type, "result");
+            // Replace buf with response
+            size_t pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "response");
+            }
+            out << "            " << encode << ";\n";
+        }
+
+        out << "            break;\n";
+        out << "        }\n";
+    }
+
+    out << "        default:\n";
+    out << "            throw std::runtime_error(\"Unknown method ID: \" + std::to_string(method_id));\n";
+    out << "    }\n";
+    out << "}\n";
+
+    return out.str();
+}
+
+// =============================================================================
+// Header Generation
+// =============================================================================
+
+std::string CodeGenerator::generate_header(const Namespace& ns) {
+    std::ostringstream out;
+
+    out << "// Generated by songc - DO NOT EDIT\n";
+    out << "// Source: " << ns.name << ".song\n\n";
+    out << "#pragma once\n\n";
+    out << "#include <song/song.hpp>\n";
+    out << "#include <string>\n";
+    out << "#include <vector>\n";
+    out << "#include <optional>\n";
+    out << "#include <stdexcept>\n\n";
+
+    out << "namespace song::" << ns.name << " {\n\n";
+    out << "using namespace song;\n\n";
+
+    // Service/method IDs
+    if (!ns.services.empty()) {
+        out << generate_service_ids(ns);
+    }
+
+    // Forward declarations
+    for (const auto& s : ns.structs) {
+        out << "struct " << s.name << ";\n";
+    }
+    if (!ns.structs.empty()) {
+        out << "\n";
+    }
+
+    // Enums
+    for (const auto& e : ns.enums) {
+        out << generate_enum_def(e) << "\n";
+    }
+
+    // Structs
+    for (const auto& s : ns.structs) {
+        out << generate_struct_def(s) << "\n";
+    }
+
+    // Struct serialization (inline)
+    if (!ns.structs.empty()) {
+        out << "// Serialization\n";
+        for (const auto& s : ns.structs) {
+            out << generate_struct_encode(s) << "\n";
+            out << generate_struct_decode(s) << "\n";
+        }
+    }
+
+    // Service proxies (client side)
+    for (const auto& s : ns.services) {
+        out << generate_service_proxy(s) << "\n";
+    }
+
+    // Service interfaces (server side)
+    for (const auto& s : ns.services) {
+        out << generate_service_interface(s) << "\n";
+    }
+
+    // Service dispatchers (server side)
+    for (const auto& s : ns.services) {
+        out << generate_service_dispatcher(s) << "\n";
+    }
+
+    out << "} // namespace song::" << ns.name << "\n";
+
+    return out.str();
+}
+
 std::string CodeGenerator::generate_types_header(const Namespace& ns) {
     std::ostringstream out;
 
@@ -283,7 +560,6 @@ std::string CodeGenerator::generate_types_header(const Namespace& ns) {
     return out.str();
 }
 
-// Generate wire implementation for a namespace
 std::string CodeGenerator::generate_wire_impl(const Namespace& ns) {
     std::ostringstream out;
 
@@ -295,7 +571,6 @@ std::string CodeGenerator::generate_wire_impl(const Namespace& ns) {
 
     out << "using namespace song;\n\n";
 
-    // Struct encode/decode implementations
     for (const auto& s : ns.structs) {
         out << generate_struct_encode(s) << "\n";
         out << generate_struct_decode(s) << "\n";
@@ -306,15 +581,22 @@ std::string CodeGenerator::generate_wire_impl(const Namespace& ns) {
     return out.str();
 }
 
-// Placeholder implementations for client/server generation
 std::string CodeGenerator::generate_client_header(const Namespace& ns) {
     std::ostringstream out;
     out << "// Generated by songc - DO NOT EDIT\n";
     out << "// Client proxies for " << ns.name << "\n";
     out << "#pragma once\n\n";
     out << "#include \"" << ns.name << "_types.hpp\"\n\n";
+
     out << "namespace song::" << ns.name << " {\n\n";
-    out << "// TODO: Generate client proxy classes\n\n";
+    out << "using namespace song;\n\n";
+
+    out << generate_service_ids(ns);
+
+    for (const auto& s : ns.services) {
+        out << generate_service_proxy(s) << "\n";
+    }
+
     out << "} // namespace song::" << ns.name << "\n";
     return out.str();
 }
@@ -324,9 +606,19 @@ std::string CodeGenerator::generate_server_header(const Namespace& ns) {
     out << "// Generated by songc - DO NOT EDIT\n";
     out << "// Server skeletons for " << ns.name << "\n";
     out << "#pragma once\n\n";
-    out << "#include \"" << ns.name << "_types.hpp\"\n\n";
+    out << "#include \"" << ns.name << "_types.hpp\"\n";
+    out << "#include <stdexcept>\n\n";
+
     out << "namespace song::" << ns.name << " {\n\n";
-    out << "// TODO: Generate server skeleton classes\n\n";
+    out << "using namespace song;\n\n";
+
+    out << generate_service_ids(ns);
+
+    for (const auto& s : ns.services) {
+        out << generate_service_interface(s) << "\n";
+        out << generate_service_dispatcher(s) << "\n";
+    }
+
     out << "} // namespace song::" << ns.name << "\n";
     return out.str();
 }
