@@ -33,8 +33,9 @@ cd examples
 
 Build targets:
 - `libsong` - Static library with core runtime
-- `songc` - IDL compiler (placeholder, not yet implemented)
-- `echo_service` / `echo_client` - Example service and client
+- `songc` - IDL compiler for .song files
+- `song_tests` - Unit test suite (216+ tests)
+- `sing_*` - Integration test services and tests (76 tests)
 
 ## Code Style
 
@@ -45,6 +46,7 @@ Build targets:
 - No emojis in code, comments, documentation, or commit messages
 - Use plain text markers: [DONE], [TODO], [WIP], [WARNING]
 - MIT License headers required on all source files (enforced by pre-commit hook)
+- **NO WARNINGS ALLOWED**: Code must compile cleanly with `-Wall -Wextra -Werror`. Use `[[maybe_unused]]` for intentionally unused parameters.
 
 ## Architecture
 
@@ -94,12 +96,26 @@ Buffer resp = conn.call(service_id, method_id, request);
 
 ## Project Status
 
-Phase 1 complete: Core runtime, wire protocol, service lifecycle, echo example.
+**Phase 1 complete**: Core runtime, wire protocol, service lifecycle, examples.
+
+**Phase 2 complete**: Full IDL compiler pipeline:
+- Lexer with all token types
+- Parser for full Song grammar (structs, enums, services, classes)
+- Semantic resolver with type checking
+- Code generator producing C++ headers (proxy, interface, dispatcher)
+
+**Integration Test Suite** (`sing/`): 4 standalone projects demonstrating Song:
+- Calculator - basic RPC, primitives, struct returns
+- Stock Ticker - complex types, arrays of structs
+- Chat - stateful services, message history, pagination
+- Data Copy - binary data, chunked file transfer
+
+**Test coverage**: 292 tests (216 unit + 76 integration)
 
 Not yet implemented:
-- songc compiler (stubs only in `compiler/`)
-- Test suite (structure in `test/` but empty)
-- Streaming support, property support, auto-restart
+- Streaming support, property support
+- Multi-dimensional arrays in codegen
+- Optional types in codegen
 
 ## Pre-commit Hooks
 

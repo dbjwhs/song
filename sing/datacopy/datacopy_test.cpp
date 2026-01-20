@@ -9,7 +9,6 @@
 #include "datacopy.hpp"
 #include <unistd.h>
 #include <algorithm>
-#include <numeric>
 
 using namespace song;
 using namespace song::datacopy;

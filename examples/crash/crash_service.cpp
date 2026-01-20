@@ -18,7 +18,7 @@ constexpr u16 kMethod_test = 1;
 // Message counter
 static int message_count = 0;
 
-void crash_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
+void crash_dispatcher([[maybe_unused]] u16 method_id, [[maybe_unused]] Buffer& request, Buffer& response) {
     message_count++;
     std::cerr << "[crash_service] Got message #" << message_count << "\n";
 

@@ -287,7 +287,7 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);
         std::string msg = decode_string(response);
-        throw ServiceError("Service error: " + msg);
+        throw ServiceError("Service error (code " + std::to_string(code) + "): " + msg);
     }
 
     if (hdr.type != wire::MsgType::result) {

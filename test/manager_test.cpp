@@ -118,7 +118,7 @@ TEST(ManagerTest, ConnectAutoStarts) {
 
     EXPECT_FALSE(mgr.is_alive("echo"));
 
-    ServiceConnection conn = mgr.connect("echo");  // Should auto-start
+    [[maybe_unused]] ServiceConnection conn = mgr.connect("echo");  // Should auto-start
 
     EXPECT_TRUE(mgr.is_alive("echo"));
 
@@ -202,7 +202,7 @@ TEST(ManagerTest, AutoRestartOnCrash) {
     mgr.set_max_restarts("crash", 2);
 
     std::atomic<int> restart_count{0};
-    mgr.set_restart_callback([&](const std::string& name, int count) {
+    mgr.set_restart_callback([&]([[maybe_unused]] const std::string& name, [[maybe_unused]] int count) {
         restart_count++;
     });
 

@@ -436,7 +436,7 @@ compiler::Property Parser::parse_property() {
     return prop;
 }
 
-compiler::Constructor Parser::parse_constructor(const std::string& class_name) {
+compiler::Constructor Parser::parse_constructor([[maybe_unused]] const std::string& class_name) {
     compiler::Constructor ctor;
     ctor.loc = current_loc();
     ctor.doc = take_doc();

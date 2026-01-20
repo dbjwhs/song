@@ -240,13 +240,11 @@ std::optional<Token> Lexer::lex_integer() {
     size_t start_column = m_column;
     std::string value;
     int64_t int_value = 0;
-    int base = 10;
 
     // Check for hex prefix
     if (peek() == '0' && (peek_next() == 'x' || peek_next() == 'X')) {
         value += peek(); advance(); // 0
         value += peek(); advance(); // x
-        base = 16;
 
         while (!at_end() && std::isxdigit(peek())) {
             value += peek();
