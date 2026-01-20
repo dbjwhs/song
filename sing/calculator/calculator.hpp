@@ -32,6 +32,10 @@ struct DivResult {
     i32 remainder;
 };
 
+// Forward declare array helpers
+inline void encode_array_DivResult(Buffer& buf, const std::vector<DivResult>& arr);
+inline std::vector<DivResult> decode_array_DivResult(Buffer& buf);
+
 // Serialization
 inline void encode_DivResult(Buffer& buf, const DivResult& val) {
     encode_i32(buf, val.quotient);

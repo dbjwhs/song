@@ -62,6 +62,14 @@ struct MarketStatus {
     std::string message;
 };
 
+// Forward declare array helpers
+inline void encode_array_Quote(Buffer& buf, const std::vector<Quote>& arr);
+inline std::vector<Quote> decode_array_Quote(Buffer& buf);
+inline void encode_array_PricePoint(Buffer& buf, const std::vector<PricePoint>& arr);
+inline std::vector<PricePoint> decode_array_PricePoint(Buffer& buf);
+inline void encode_array_MarketStatus(Buffer& buf, const std::vector<MarketStatus>& arr);
+inline std::vector<MarketStatus> decode_array_MarketStatus(Buffer& buf);
+
 // Serialization
 inline void encode_Quote(Buffer& buf, const Quote& val) {
     encode_string(buf, val.symbol);

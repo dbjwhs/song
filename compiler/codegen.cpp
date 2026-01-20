@@ -515,13 +515,21 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
     }
 
     // Struct serialization (inline)
+    // First, generate array helpers for all structs (forward declarations)
+    // This ensures they're available when struct encode/decode use them
     if (!ns.structs.empty()) {
+        out << "// Forward declare array helpers\n";
+        for (const auto& s : ns.structs) {
+            out << "inline void encode_array_" << s.name << "(Buffer& buf, const std::vector<" << s.name << ">& arr);\n";
+            out << "inline std::vector<" << s.name << "> decode_array_" << s.name << "(Buffer& buf);\n";
+        }
+        out << "\n";
         out << "// Serialization\n";
         for (const auto& s : ns.structs) {
             out << generate_struct_encode(s) << "\n";
             out << generate_struct_decode(s) << "\n";
         }
-        // Array helpers for structs
+        // Array helper implementations
         for (const auto& s : ns.structs) {
             out << generate_struct_array_encode(s) << "\n";
             out << generate_struct_array_decode(s) << "\n";
