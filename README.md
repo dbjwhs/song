@@ -48,7 +48,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (297 tests)
+# Run all tests (323 tests)
 ctest --output-on-failure
 ```
 
@@ -210,6 +210,53 @@ SecureTransport secure_client(std::move(client_tcp), security);
 | macOS    | CommonCrypto  |
 | Linux    | OpenSSL       |
 
+## Cross-Subnet Discovery (Registry)
+
+When mDNS can't reach services (different VLANs, cloud environments), use a registry service.
+
+### Running the Registry
+
+```bash
+# Start registry on a known host (default port 9999)
+./registry_service --port 9999
+```
+
+### Client Configuration
+
+```cpp
+ServiceManager mgr;
+
+// Configure registry for cross-subnet discovery
+mgr.set_registry("registry.example.com", 9999);
+
+// Register a discoverable service (will use registry as fallback)
+mgr.register_discoverable_service("calc", "calculator", 1);
+
+// Connect - tries mDNS first, then registry
+auto conn = mgr.connect("calc");
+```
+
+### Service Registration
+
+Services can register with the registry programmatically:
+
+```cpp
+RegistryClient registry("registry.example.com", 9999);
+
+ServiceInfo info;
+info.name = "my-calculator";
+info.host = "10.0.0.50";
+info.port = 12345;
+
+registry.register_service(info);
+
+// Keep alive with periodic heartbeats
+while (running) {
+    registry.heartbeat("my-calculator");
+    sleep(30);
+}
+```
+
 ## Integration Test Suite (Sing)
 
 The `sing/` folder contains four complete example projects demonstrating Song's capabilities. Each project includes a `.song` IDL file, generated code, server implementation, and comprehensive integration tests.
@@ -268,14 +315,15 @@ ctest -R sing_
 - **Service Type Format**: `_<type>._song._tcp` (e.g., `_calculator._song._tcp`)
 - **HMAC Security**: SecureTransport wrapper with HMAC-SHA256 authentication
 - **Platform Crypto**: CommonCrypto (macOS), OpenSSL (Linux)
+- **Registry Service**: Cross-subnet service discovery via central registry
+- **Registry Fallback**: ServiceManager tries mDNS first, then registry
 
 ### Test Coverage
-- **221 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, lexer, parser, resolver, codegen
+- **247 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, lexer, parser, resolver, codegen
 - **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 297 tests**
+- **Total: 323 tests**
 
 ### Coming Soon
-- Phase 3.4: Cross-subnet registry service
 - Class support (DAG-style reference types with object IDs)
 - Streaming support (bidirectional message streams)
 - Property support (get/set with change notifications)
@@ -296,6 +344,7 @@ song/
 │   ├── transport.hpp     # Transport interface (pipes, TCP)
 │   ├── discovery.hpp     # mDNS service discovery
 │   ├── security.hpp      # HMAC authentication
+│   ├── registry.hpp      # Cross-subnet registry
 │   ├── error.hpp         # Error types
 │   └── song.hpp          # Main include
 ├── src/
@@ -307,7 +356,8 @@ song/
 │   ├── runtime.cpp
 │   ├── transport.cpp     # TCP/pipe transport implementations
 │   ├── discovery.cpp     # mDNS implementation (macOS Bonjour)
-│   └── security.cpp      # HMAC (CommonCrypto/OpenSSL)
+│   ├── security.cpp      # HMAC (CommonCrypto/OpenSSL)
+│   └── registry.cpp      # Registry client/server
 ├── compiler/
 │   ├── ast.hpp           # AST node definitions
 │   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
@@ -315,11 +365,12 @@ song/
 │   ├── resolver.hpp/cpp  # Semantic analysis
 │   ├── codegen.hpp/cpp   # C++ code generation
 │   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (221 tests)
+├── test/                 # Unit tests (247 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example
-│   └── crash/            # Auto-restart test
+│   ├── crash/            # Auto-restart test
+│   └── registry/         # Registry service
 └── sing/                 # Integration test suite (76 tests)
     ├── README.md         # Sing documentation
     ├── calculator/       # Basic RPC patterns
