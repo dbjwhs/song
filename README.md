@@ -8,6 +8,7 @@
 - **Type Safe**: Compile-time verification of message structures and service contracts
 - **Process Isolation**: Services run as separate processes, communicating via pipes
 - **Network Distribution**: TCP transport with zero-config mDNS service discovery
+- **Security**: HMAC-SHA256 authentication for shared-secret protection
 - **Minimal Footprint**: Suitable for embedded Linux, IoT devices, resource-constrained systems
 - **Clean Architecture**: Modern C++20, no external dependencies beyond POSIX
 - **Full IDL Compiler**: Complete pipeline from `.song` files to C++ code
@@ -37,7 +38,7 @@
 | Component | Purpose |
 |-----------|---------|
 | **songc** | IDL compiler: `.song` files → C++ headers with proxy, interface, and dispatcher |
-| **libsong** | Runtime library: wire protocol, serialization, process management, TCP transport |
+| **libsong** | Runtime library: wire protocol, serialization, process management, TCP transport, security |
 | **ServiceManager** | Service lifecycle: fork/exec, auto-restart, TCP connections, mDNS discovery |
 
 ## Building
@@ -47,7 +48,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (274 tests)
+# Run all tests (297 tests)
 ctest --output-on-failure
 ```
 
@@ -175,6 +176,40 @@ int main() {
 }
 ```
 
+## Security
+
+Song provides HMAC-SHA256 authentication for services communicating over untrusted networks.
+
+### Shared Secret Authentication
+
+```cpp
+// Configure security with a shared key
+SecurityConfig security("my-secret-key-32-bytes-long!!!!");
+
+// Client: wrap connection in SecureTransport
+auto tcp = std::make_unique<TcpTransport>();
+tcp->connect("192.168.1.50", 12345, 5000);
+SecureTransport secure(std::move(tcp), security);
+
+// Server: wrap accepted connection
+auto client_tcp = listener.accept();
+SecureTransport secure_client(std::move(client_tcp), security);
+```
+
+### How It Works
+
+- HMAC-SHA256 computed over each message (header + payload)
+- Tag embedded in wire protocol (transparent to application)
+- Constant-time comparison prevents timing attacks
+- Mismatched keys throw `SecurityError`
+
+### Platform Support
+
+| Platform | Crypto Library |
+|----------|---------------|
+| macOS    | CommonCrypto  |
+| Linux    | OpenSSL       |
+
 ## Integration Test Suite (Sing)
 
 The `sing/` folder contains four complete example projects demonstrating Song's capabilities. Each project includes a `.song` IDL file, generated code, server implementation, and comprehensive integration tests.
@@ -231,14 +266,15 @@ ctest -R sing_
 - **mDNS Discovery**: Zero-config service discovery using native Bonjour API (macOS)
 - **Discoverable Services**: `register_discoverable_service()` for mDNS lookup
 - **Service Type Format**: `_<type>._song._tcp` (e.g., `_calculator._song._tcp`)
+- **HMAC Security**: SecureTransport wrapper with HMAC-SHA256 authentication
+- **Platform Crypto**: CommonCrypto (macOS), OpenSSL (Linux)
 
 ### Test Coverage
-- **198 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, lexer, parser, resolver, codegen
+- **221 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, lexer, parser, resolver, codegen
 - **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 274 tests**
+- **Total: 297 tests**
 
 ### Coming Soon
-- Phase 3.3: Security (SharedSecret/HMAC authentication)
 - Phase 3.4: Cross-subnet registry service
 - Class support (DAG-style reference types with object IDs)
 - Streaming support (bidirectional message streams)
@@ -259,6 +295,7 @@ song/
 │   ├── runtime.hpp       # Service-side runtime
 │   ├── transport.hpp     # Transport interface (pipes, TCP)
 │   ├── discovery.hpp     # mDNS service discovery
+│   ├── security.hpp      # HMAC authentication
 │   ├── error.hpp         # Error types
 │   └── song.hpp          # Main include
 ├── src/
@@ -269,7 +306,8 @@ song/
 │   ├── manager.cpp
 │   ├── runtime.cpp
 │   ├── transport.cpp     # TCP/pipe transport implementations
-│   └── discovery.cpp     # mDNS implementation (macOS Bonjour)
+│   ├── discovery.cpp     # mDNS implementation (macOS Bonjour)
+│   └── security.cpp      # HMAC (CommonCrypto/OpenSSL)
 ├── compiler/
 │   ├── ast.hpp           # AST node definitions
 │   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
@@ -277,7 +315,7 @@ song/
 │   ├── resolver.hpp/cpp  # Semantic analysis
 │   ├── codegen.hpp/cpp   # C++ code generation
 │   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (198 tests)
+├── test/                 # Unit tests (221 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example
