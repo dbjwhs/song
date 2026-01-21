@@ -27,6 +27,7 @@ add_library(song STATIC
     src/transport.cpp
     src/discovery.cpp
     src/security.cpp
+    src/registry.cpp
 )
 target_include_directories(song PUBLIC include)
 

@@ -201,26 +201,52 @@ ServiceConnection ServiceManager::connect(std::string_view name) {
     }
 
     if (entry->is_discoverable) {
-        // Discover service via mDNS
+        std::string host;
+        u16 port = 0;
+
+        // First, try mDNS discovery
         auto discovery = create_discovery();
-        if (!discovery || !discovery->is_available()) {
-            throw ServiceError("mDNS discovery not available on this platform");
+        bool mdns_available = discovery && discovery->is_available();
+
+        if (mdns_available) {
+            auto found = discovery->discover_one(
+                std::string(name),
+                entry->service_type,
+                std::chrono::milliseconds(3000)
+            );
+
+            if (found) {
+                host = found->host;
+                port = found->port;
+            }
         }
 
-        // Look for service with matching name
-        auto found = discovery->discover_one(
-            std::string(name),
-            entry->service_type,
-            std::chrono::milliseconds(3000)
-        );
+        // If mDNS failed or unavailable, try registry
+        if (port == 0 && has_registry()) {
+            // Temporarily release lock to avoid deadlock with registry_client()
+            mutex_.unlock();
+            auto* client = registry_client();
+            mutex_.lock();
 
-        if (!found) {
-            throw ServiceError("Service not found via mDNS: " + std::string(name));
+            if (client && client->is_connected()) {
+                auto info = client->discover(std::string(name));
+                if (info.is_valid()) {
+                    host = info.host;
+                    port = info.port;
+                }
+            }
+        }
+
+        if (port == 0) {
+            if (!mdns_available && !has_registry()) {
+                throw ServiceError("Service discovery not available: no mDNS and no registry configured");
+            }
+            throw ServiceError("Service not found: " + std::string(name));
         }
 
         // Connect to discovered service via TCP
         auto tcp = std::make_unique<TcpTransport>();
-        tcp->connect(found->host, found->port, 5000);
+        tcp->connect(host, port, 5000);
 
         ServiceConnection conn(std::move(tcp));
         conn.init_handshake();
@@ -433,6 +459,33 @@ const ServiceManager::ServiceEntry* ServiceManager::find_service(std::string_vie
     auto it = std::find_if(services_.begin(), services_.end(),
         [name](const ServiceEntry& e) { return e.name == name; });
     return it != services_.end() ? &(*it) : nullptr;
+}
+
+// =============================================================================
+// Registry Support
+// =============================================================================
+
+void ServiceManager::set_registry(std::string_view host, u16 port) {
+    std::lock_guard lock(mutex_);
+    registry_host_ = host;
+    registry_port_ = port;
+    // Reset client so it will reconnect with new address
+    registry_client_.reset();
+}
+
+RegistryClient* ServiceManager::registry_client() {
+    std::lock_guard lock(mutex_);
+
+    if (!has_registry()) {
+        return nullptr;
+    }
+
+    // Create client if needed
+    if (!registry_client_) {
+        registry_client_ = std::make_unique<RegistryClient>(registry_host_, registry_port_);
+    }
+
+    return registry_client_.get();
 }
 
 } // namespace song

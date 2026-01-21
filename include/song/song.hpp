@@ -15,4 +15,5 @@
 #include "transport.hpp"
 #include "discovery.hpp"
 #include "security.hpp"
+#include "registry.hpp"
 #include "error.hpp"

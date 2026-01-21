@@ -5,6 +5,7 @@
 
 #include "types.hpp"
 #include "process.hpp"
+#include "registry.hpp"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,11 @@ class ServiceManager {
 
     // Callback for restart events
     std::function<void(const std::string& name, int restart_count)> on_restart_;
+
+    // Registry client for cross-subnet discovery
+    std::unique_ptr<RegistryClient> registry_client_;
+    std::string registry_host_;
+    u16 registry_port_{0};
 
 public:
     ServiceManager() = default;
@@ -121,6 +127,23 @@ public:
 
     /// Manually check all services and restart if needed (called by monitor thread)
     void check_and_restart();
+
+    // =========================================================================
+    // Registry Support
+    // =========================================================================
+
+    /// Set registry server address for cross-subnet discovery
+    /// When set, discovery will try mDNS first, then fall back to registry
+    /// @param host Registry server hostname or IP
+    /// @param port Registry server port (default: 9999)
+    void set_registry(std::string_view host, u16 port = 9999);
+
+    /// Check if registry is configured
+    bool has_registry() const { return !registry_host_.empty() && registry_port_ != 0; }
+
+    /// Get registry client (creates connection if needed)
+    /// Returns nullptr if registry is not configured
+    RegistryClient* registry_client();
 
 private:
     ServiceEntry* find_service(std::string_view name);
