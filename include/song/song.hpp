@@ -14,4 +14,5 @@
 #include "runtime.hpp"
 #include "transport.hpp"
 #include "discovery.hpp"
+#include "security.hpp"
 #include "error.hpp"

@@ -26,6 +26,7 @@ add_library(song STATIC
     src/runtime.cpp
     src/transport.cpp
     src/discovery.cpp
+    src/security.cpp
 )
 target_include_directories(song PUBLIC include)
 
@@ -34,6 +35,14 @@ if(APPLE)
     find_library(DNSSD_LIBRARY dns_sd)
     if(DNSSD_LIBRARY)
         target_link_libraries(song PUBLIC ${DNSSD_LIBRARY})
+    endif()
+endif()
+
+# Link OpenSSL on Linux for HMAC support
+if(UNIX AND NOT APPLE)
+    find_package(OpenSSL)
+    if(OpenSSL_FOUND)
+        target_link_libraries(song PUBLIC OpenSSL::Crypto)
     endif()
 endif()
 
