@@ -1,8 +1,8 @@
 # Song Project Status
 
-## Current State: Phase 2 In Progress (Lexer & Parser Complete)
+## Current State: Phase 2 Complete + Network Distribution Phase 2 Complete
 
-**Last Updated:** 2026-01-19
+**Last Updated:** 2026-01-20
 
 ## What is Song?
 
@@ -16,15 +16,17 @@ Song (Services Over Native Gateways) is a high-performance C++ service framework
 |-----------|--------|-------------|
 | P2.1 Lexer | ✅ Complete | Tokenizes .song files |
 | P2.2 Parser | ✅ Complete | Builds AST from tokens |
-| P2.3 Semantic Resolver | ⏳ Next | Type checking, validation |
-| P2.4 Code Generation | ⏳ Pending | Emit C++ from validated AST |
-| **POC Ready** | **After P2.4** | Write .song → run songc → working service |
+| P2.3 Semantic Resolver | ✅ Complete | Type checking, validation |
+| P2.4 Code Generation | ✅ Complete | Emit C++ from validated AST |
+| Phase 3.1 TCP Transport | ✅ Complete | TCP-based service communication |
+| Phase 3.2 mDNS Discovery | ✅ Complete | Zero-config service discovery |
+| **POC Ready** | **YES** | Write .song → run songc → working service |
 
-**Demo will show:**
+**Demo now supports:**
 1. Write a simple .song IDL file (e.g., Calculator service)
-2. Run `songc calculator.song` to generate C++ code
+2. Run `./songc calculator.song` to generate C++ code
 3. Implement service logic in generated stubs
-4. Run client calling the service over pipes
+4. Run client calling the service over pipes, TCP, or mDNS discovery
 
 ## Project History
 
@@ -36,6 +38,10 @@ Song (Services Over Native Gateways) is a high-performance C++ service framework
 6. Comprehensive test suite added (2026-01-19) - 90 tests
 7. Lexer implemented (2026-01-19) - P2.1, 32 tests
 8. Parser implemented (2026-01-19) - P2.2, 40 tests
+9. Resolver implemented (2026-01-19) - P2.3, 38 tests
+10. Code generator implemented (2026-01-19) - P2.4, 16 tests
+11. TCP Transport implemented (2026-01-20) - Phase 3.1, 32 tests
+12. mDNS Discovery implemented (2026-01-20) - Phase 3.2, 22 tests
 
 ## What's Been Implemented
 
@@ -49,6 +55,22 @@ Song (Services Over Native Gateways) is a high-performance C++ service framework
 - Init handshake with version negotiation
 - Method list capability exchange (supports() API)
 - Array serialization (encode_array/decode_array)
+
+### Network Distribution - Phase 3.1 TCP Transport (Complete)
+- Transport interface (abstract base class)
+- PipeTransport wrapping Unix pipe communication
+- TcpTransport for TCP socket communication
+- TcpListener for accepting TCP connections
+- ServiceRuntime `run_tcp()` for TCP-based services
+- ServiceManager `register_remote_service()` for explicit TCP endpoints
+
+### Network Distribution - Phase 3.2 Local Discovery (Complete)
+- Discovery interface for mDNS service discovery
+- DnssdDiscovery implementation for macOS (Bonjour via dns_sd API)
+- ServiceRegistration RAII wrapper for service registration
+- ServiceRuntime `run_tcp_discoverable()` for mDNS-registered services
+- ServiceManager `register_discoverable_service()` for mDNS discovery
+- Service type format: `_<type>._song._tcp` (e.g., `_calculator._song._tcp`)
 
 ### Phase 2 - Compiler (In Progress)
 - AST definitions (compiler/ast.hpp) ✅
@@ -92,12 +114,14 @@ song/
 ├── examples/
 │   ├── echo/              # Echo service example
 │   └── crash/             # Auto-restart test
-├── test/                   # Automated test suite (162 tests)
+├── test/                   # Automated test suite (274 tests)
 │   ├── buffer_test.cpp    # 31 tests
 │   ├── wire_test.cpp      # 17 tests
 │   ├── pipe_test.cpp      # 15 tests
 │   ├── process_test.cpp   # 11 tests
-│   ├── manager_test.cpp   # 16 tests
+│   ├── manager_test.cpp   # 16 tests + remote tests
+│   ├── transport_test.cpp # TCP/pipe transport tests
+│   ├── discovery_test.cpp # mDNS discovery tests
 │   ├── lexer_test.cpp     # 32 tests
 │   └── parser_test.cpp    # 40 tests
 ├── tooling/                # Pre-commit hook scripts
@@ -114,10 +138,14 @@ song/
 | WireTest | 17 | Header encoding, init messages, method descriptors, message creation, version helpers |
 | PipeTest | 15 | Basic I/O, closure semantics, move semantics, timeout functionality |
 | ProcessTest | 11 | Spawn, communication, lifecycle, method list, ServiceConnection |
-| ManagerTest | 16 | Start/stop, connect, restart, replace, auto-restart on crash, monitor thread |
+| ManagerTest | 27 | Start/stop, connect, restart, replace, auto-restart, remote services, discoverable services |
+| TransportTest | 32 | Pipe transport, TCP transport, TcpListener, remote connections |
+| DiscoveryTest | 22 | mDNS registration, discovery, ServiceRegistration RAII, ServiceManager integration |
 | LexerTest | 32 | All token types, keywords, identifiers, integers, comments, doc comments, errors |
 | ParserTest | 40 | All IDL constructs, types, inheritance, doc comments, error cases |
-| **Total** | **162** | **All passing** |
+| ResolverTest | 38 | Symbol tables, type resolution, validation, namespace handling |
+| CodegenTest | 16 | Struct/enum generation, service proxies, server interfaces, dispatchers |
+| **Total** | **274** | **All passing** |
 
 **Running tests:**
 ```bash
@@ -126,24 +154,22 @@ cd build && make -j8 && ./test/song_tests
 
 ## What's Next
 
-### Phase 2 (Compiler) - Remaining
-- **P2.3: Semantic Resolver**
-  - Build symbol table of all defined types
-  - Resolve type references (verify types exist)
-  - Detect duplicates and cycles
-  - Validate inheritance chains
-  - Check throws clauses reference valid errors
+### Network Distribution (Phase 3) - Remaining
+- **Phase 3.3: Security (SharedSecret)**
+  - Add HMAC to wire protocol header
+  - Shared key in config
+  - Validate on receive
 
-- **P2.4: Code Generation**
-  - Wire up parser → resolver → codegen pipeline
-  - Generate service stubs and proxies
-  - Generate struct serialization code
-  - Main songc workflow: file.song → file.hpp
+- **Phase 3.4: Cross-Subnet (Registry)**
+  - Implement Registry service in Song IDL
+  - Services register with registry if configured
+  - Clients try mDNS first, then registry
 
-### Future (Phase 3+)
-- Class support (DAG-style reference types)
-- Streaming support
-- Property support
+### Future Features
+- Class support (DAG-style reference types with object IDs)
+- Streaming support (`stream` keyword)
+- Property support (get/set via RPC)
+- Linux Avahi support for mDNS discovery
 - Performance benchmarks
 
 ## Key Technical Details

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "song/process.hpp"
+#include "song/transport.hpp"
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -255,12 +256,115 @@ bool ServiceProcess::receive(Buffer& msg, int timeout_ms) {
 
 // ServiceConnection implementation
 
+// Destructor must be in cpp file because unique_ptr<Transport> requires complete type
+ServiceConnection::~ServiceConnection() = default;
+
 ServiceConnection::ServiceConnection(ServiceProcess* proc)
-    : proc_(proc) {}
+    : proc_(proc)
+    , transport_(nullptr) {
+    // For local connections, methods come from the ServiceProcess
+}
+
+ServiceConnection::ServiceConnection(Transport* transport)
+    : proc_(nullptr)
+    , transport_(transport) {}
+
+ServiceConnection::ServiceConnection(std::unique_ptr<Transport> transport)
+    : proc_(nullptr)
+    , transport_(transport.get())
+    , owned_transport_(std::move(transport)) {}
+
+ServiceConnection::ServiceConnection(ServiceConnection&& other) noexcept
+    : proc_(other.proc_)
+    , transport_(other.transport_)
+    , owned_transport_(std::move(other.owned_transport_))
+    , next_seq_(other.next_seq_)
+    , methods_(std::move(other.methods_)) {
+    other.proc_ = nullptr;
+    other.transport_ = nullptr;
+    other.next_seq_ = 1;
+}
+
+ServiceConnection& ServiceConnection::operator=(ServiceConnection&& other) noexcept {
+    if (this != &other) {
+        proc_ = other.proc_;
+        transport_ = other.transport_;
+        owned_transport_ = std::move(other.owned_transport_);
+        next_seq_ = other.next_seq_;
+        methods_ = std::move(other.methods_);
+        other.proc_ = nullptr;
+        other.transport_ = nullptr;
+        other.next_seq_ = 1;
+    }
+    return *this;
+}
+
+void ServiceConnection::init_handshake() {
+    if (!transport_ || !transport_->is_connected()) {
+        throw ServiceError("ServiceConnection: not connected for init handshake");
+    }
+
+    // Wait for init message from service (with timeout)
+    Buffer init_msg;
+    if (!transport_->receive(init_msg, 5000)) {
+        throw ServiceError("Service failed to send init message");
+    }
+
+    // Decode and validate init message
+    auto hdr = wire::decode_header_validated(init_msg);
+    if (hdr.type != wire::MsgType::init) {
+        throw ProtocolError("Expected init message from service");
+    }
+
+    // Decode init payload (validates magic internally)
+    auto init = wire::decode_init(init_msg);
+
+    // Version negotiation
+    if (init.current_version < wire::kFirstVersion) {
+        throw VersionMismatchError("Service version too old: service=" +
+            std::to_string(init.current_version >> 8) + "." +
+            std::to_string(init.current_version & 0xFF) +
+            ", minimum required=" +
+            std::to_string(wire::kFirstVersion >> 8) + "." +
+            std::to_string(wire::kFirstVersion & 0xFF));
+    }
+
+    if (init.first_version > wire::kCurrentVersion) {
+        throw VersionMismatchError("Client version too old: client=" +
+            std::to_string(wire::kCurrentVersion >> 8) + "." +
+            std::to_string(wire::kCurrentVersion & 0xFF) +
+            ", service requires=" +
+            std::to_string(init.first_version >> 8) + "." +
+            std::to_string(init.first_version & 0xFF));
+    }
+
+    // Decode method list
+    methods_.clear();
+    methods_.reserve(init.method_count);
+    for (u32 i = 0; i < init.method_count; ++i) {
+        methods_.push_back(wire::decode_method_descriptor(init_msg));
+    }
+}
+
+const std::vector<wire::MethodDescriptor>& ServiceConnection::methods() const {
+    if (proc_) {
+        return proc_->methods();
+    }
+    return methods_;
+}
 
 Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args) {
-    if (!proc_ || !proc_->alive()) {
-        throw ServiceError("Service not running");
+    // For local connections, check process health
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
     }
 
     u32 seq = next_seq_++;
@@ -268,12 +372,23 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
     // Create call message
     Buffer call_msg = wire::create_call_message(seq, service_id, method_id, args);
 
-    // Send to service
-    proc_->send(call_msg);
+    // Send via appropriate transport
+    if (proc_) {
+        proc_->send(call_msg);
+    } else {
+        transport_->send(call_msg);
+    }
 
     // Wait for response
     Buffer response;
-    if (!proc_->receive(response, 5000)) {  // 5 second timeout
+    bool received = false;
+    if (proc_) {
+        received = proc_->receive(response, 5000);
+    } else {
+        received = transport_->receive(response, 5000);
+    }
+
+    if (!received) {
         throw ServiceError("Service died or timed out");
     }
 
@@ -302,20 +417,31 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
 }
 
 void ServiceConnection::call_oneway(u16 service_id, u16 method_id, const Buffer& args) {
-    if (!proc_ || !proc_->alive()) {
-        throw ServiceError("Service not running");
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
     }
 
     u32 seq = next_seq_++;
     Buffer call_msg = wire::create_call_message(seq, service_id, method_id, args);
-    proc_->send(call_msg);
+
+    if (proc_) {
+        proc_->send(call_msg);
+    } else {
+        transport_->send(call_msg);
+    }
 }
 
 bool ServiceConnection::supports(u16 service_id, u16 method_id) const {
-    if (!proc_) return false;
-
-    const auto& methods = proc_->methods();
-    for (const auto& m : methods) {
+    const auto& method_list = methods();
+    for (const auto& m : method_list) {
         if (m.service_id == service_id && m.method_id == method_id) {
             return true;
         }

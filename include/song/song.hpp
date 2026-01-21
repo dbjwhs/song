@@ -12,4 +12,6 @@
 #include "process.hpp"
 #include "manager.hpp"
 #include "runtime.hpp"
+#include "transport.hpp"
+#include "discovery.hpp"
 #include "error.hpp"

@@ -18,11 +18,16 @@
 namespace song {
 
 /// Service manager
-/// Manages the lifecycle of service processes
+/// Manages the lifecycle of service processes and remote service connections
 class ServiceManager {
     struct ServiceEntry {
         std::string name;
-        std::string executable;
+        std::string executable;  // For local services
+        std::string host;        // For remote services
+        u16 port = 0;            // For remote services
+        std::string service_type; // For discoverable services (mDNS type)
+        bool is_remote = false;  // True for TCP-based remote services
+        bool is_discoverable = false;  // True for mDNS-discoverable services
         u32 version;
         std::unique_ptr<ServiceProcess> process;
         bool auto_restart = false;
@@ -44,10 +49,33 @@ class ServiceManager {
 public:
     ServiceManager() = default;
     ~ServiceManager();
-    /// Register a service (does not start it)
+
+    /// Register a local service (does not start it)
+    /// The service will be spawned as a child process when needed
     void register_service(std::string_view name,
                          std::string_view executable,
                          u32 version = 1);
+
+    /// Register a remote service (TCP-based)
+    /// The service is expected to be running and listening on host:port
+    void register_remote_service(std::string_view name,
+                                std::string_view host,
+                                u16 port,
+                                u32 version = 1);
+
+    /// Register a discoverable service (mDNS-based)
+    /// The service will be discovered via mDNS when connecting
+    /// @param name Service name (used for registration lookup)
+    /// @param type Service type for mDNS (e.g., "calculator")
+    void register_discoverable_service(std::string_view name,
+                                       std::string_view type,
+                                       u32 version = 1);
+
+    /// Check if a service is registered as remote
+    bool is_remote(std::string_view name) const;
+
+    /// Check if a service is registered as discoverable
+    bool is_discoverable(std::string_view name) const;
 
     /// Start a service process
     ServiceProcess* start(std::string_view name);

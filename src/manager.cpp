@@ -2,6 +2,8 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "song/manager.hpp"
+#include "song/transport.hpp"
+#include "song/discovery.hpp"
 #include <algorithm>
 #include <chrono>
 
@@ -26,8 +28,53 @@ void ServiceManager::register_service(std::string_view name,
     ServiceEntry entry;
     entry.name = name;
     entry.executable = executable;
+    entry.is_remote = false;
     entry.version = version;
     services_.push_back(std::move(entry));
+}
+
+void ServiceManager::register_remote_service(std::string_view name,
+                                            std::string_view host,
+                                            u16 port,
+                                            u32 version) {
+    std::lock_guard lock(mutex_);
+    ServiceEntry entry;
+    entry.name = name;
+    entry.host = host;
+    entry.port = port;
+    entry.is_remote = true;
+    entry.version = version;
+    services_.push_back(std::move(entry));
+}
+
+bool ServiceManager::is_remote(std::string_view name) const {
+    std::lock_guard lock(mutex_);
+    const auto* entry = find_service(name);
+    if (!entry) {
+        throw ServiceError("Service not found: " + std::string(name));
+    }
+    return entry->is_remote;
+}
+
+void ServiceManager::register_discoverable_service(std::string_view name,
+                                                   std::string_view type,
+                                                   u32 version) {
+    std::lock_guard lock(mutex_);
+    ServiceEntry entry;
+    entry.name = name;
+    entry.service_type = type;
+    entry.is_discoverable = true;
+    entry.version = version;
+    services_.push_back(std::move(entry));
+}
+
+bool ServiceManager::is_discoverable(std::string_view name) const {
+    std::lock_guard lock(mutex_);
+    const auto* entry = find_service(name);
+    if (!entry) {
+        throw ServiceError("Service not found: " + std::string(name));
+    }
+    return entry->is_discoverable;
 }
 
 ServiceProcess* ServiceManager::start(std::string_view name) {
@@ -35,6 +82,16 @@ ServiceProcess* ServiceManager::start(std::string_view name) {
     auto* entry = find_service(name);
     if (!entry) {
         throw ServiceError("Service not found: " + std::string(name));
+    }
+
+    if (entry->is_remote) {
+        throw ServiceError("Cannot start remote service: " + std::string(name) +
+                          " (use connect() instead)");
+    }
+
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot start discoverable service: " + std::string(name) +
+                          " (use connect() instead)");
     }
 
     if (entry->process && entry->process->alive()) {
@@ -56,6 +113,14 @@ void ServiceManager::stop(std::string_view name) {
         throw ServiceError("Service not found: " + std::string(name));
     }
 
+    if (entry->is_remote) {
+        throw ServiceError("Cannot stop remote service: " + std::string(name));
+    }
+
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot stop discoverable service: " + std::string(name));
+    }
+
     if (entry->process) {
         entry->process->terminate();
         entry->process.reset();
@@ -67,6 +132,14 @@ void ServiceManager::restart(std::string_view name) {
     auto* entry = find_service(name);
     if (!entry) {
         throw ServiceError("Service not found: " + std::string(name));
+    }
+
+    if (entry->is_remote) {
+        throw ServiceError("Cannot restart remote service: " + std::string(name));
+    }
+
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot restart discoverable service: " + std::string(name));
     }
 
     // Stop if running
@@ -88,6 +161,14 @@ void ServiceManager::replace(std::string_view name, std::string_view new_executa
         throw ServiceError("Service not found: " + std::string(name));
     }
 
+    if (entry->is_remote) {
+        throw ServiceError("Cannot replace remote service: " + std::string(name));
+    }
+
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot replace discoverable service: " + std::string(name));
+    }
+
     // Stop if running
     if (entry->process) {
         entry->process->terminate();
@@ -103,14 +184,97 @@ void ServiceManager::replace(std::string_view name, std::string_view new_executa
 }
 
 ServiceConnection ServiceManager::connect(std::string_view name) {
-    auto* proc = start(name);  // Starts if not running
-    return ServiceConnection(proc);
+    std::lock_guard lock(mutex_);
+    auto* entry = find_service(name);
+    if (!entry) {
+        throw ServiceError("Service not found: " + std::string(name));
+    }
+
+    if (entry->is_remote) {
+        // Connect to remote service via TCP
+        auto tcp = std::make_unique<TcpTransport>();
+        tcp->connect(entry->host, entry->port, 5000);  // 5 second connect timeout
+
+        ServiceConnection conn(std::move(tcp));
+        conn.init_handshake();  // Perform protocol handshake
+        return conn;
+    }
+
+    if (entry->is_discoverable) {
+        // Discover service via mDNS
+        auto discovery = create_discovery();
+        if (!discovery || !discovery->is_available()) {
+            throw ServiceError("mDNS discovery not available on this platform");
+        }
+
+        // Look for service with matching name
+        auto found = discovery->discover_one(
+            std::string(name),
+            entry->service_type,
+            std::chrono::milliseconds(3000)
+        );
+
+        if (!found) {
+            throw ServiceError("Service not found via mDNS: " + std::string(name));
+        }
+
+        // Connect to discovered service via TCP
+        auto tcp = std::make_unique<TcpTransport>();
+        tcp->connect(found->host, found->port, 5000);
+
+        ServiceConnection conn(std::move(tcp));
+        conn.init_handshake();
+        return conn;
+    }
+
+    // Local service - ensure it's running
+    if (!entry->process || !entry->process->alive()) {
+        entry->process = std::make_unique<ServiceProcess>(
+            ServiceProcess::spawn(entry->executable.c_str())
+        );
+    }
+
+    return ServiceConnection(entry->process.get());
 }
 
 bool ServiceManager::is_alive(std::string_view name) const {
     std::lock_guard lock(mutex_);
     const auto* entry = find_service(name);
-    if (!entry || !entry->process) {
+    if (!entry) {
+        return false;
+    }
+
+    if (entry->is_remote) {
+        // For remote services, try a quick TCP connection test
+        try {
+            TcpTransport tcp;
+            tcp.connect(entry->host, entry->port, 1000);  // 1 second timeout
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    if (entry->is_discoverable) {
+        // For discoverable services, try mDNS discovery
+        try {
+            auto discovery = create_discovery();
+            if (!discovery || !discovery->is_available()) {
+                return false;
+            }
+            auto found = discovery->discover_one(
+                std::string(name),
+                entry->service_type,
+                std::chrono::milliseconds(1000)
+            );
+            return found.has_value();
+        } catch (...) {
+            return false;
+        }
+    }
+
+    // Local service
+    if (!entry->process) {
         return false;
     }
     return entry->process->alive();
@@ -122,6 +286,12 @@ void ServiceManager::set_auto_restart(std::string_view name, bool enable) {
     if (!entry) {
         throw ServiceError("Service not found: " + std::string(name));
     }
+    if (entry->is_remote) {
+        throw ServiceError("Cannot set auto-restart for remote service: " + std::string(name));
+    }
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot set auto-restart for discoverable service: " + std::string(name));
+    }
     entry->auto_restart = enable;
 }
 
@@ -130,6 +300,12 @@ void ServiceManager::set_max_restarts(std::string_view name, int max_restarts) {
     auto* entry = find_service(name);
     if (!entry) {
         throw ServiceError("Service not found: " + std::string(name));
+    }
+    if (entry->is_remote) {
+        throw ServiceError("Cannot set max-restarts for remote service: " + std::string(name));
+    }
+    if (entry->is_discoverable) {
+        throw ServiceError("Cannot set max-restarts for discoverable service: " + std::string(name));
     }
     entry->max_restarts = max_restarts;
 }
@@ -183,6 +359,16 @@ void ServiceManager::check_and_restart() {
     std::lock_guard lock(mutex_);
 
     for (auto& entry : services_) {
+        // Skip remote services (can't restart them)
+        if (entry.is_remote) {
+            continue;
+        }
+
+        // Skip discoverable services (can't restart them)
+        if (entry.is_discoverable) {
+            continue;
+        }
+
         // Skip services without auto-restart
         if (!entry.auto_restart) {
             continue;

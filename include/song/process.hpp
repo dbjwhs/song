@@ -10,8 +10,12 @@
 #include <sys/types.h>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace song {
+
+// Forward declaration for Transport
+class Transport;
 
 /// Service process handle
 /// Manages a spawned service process and its pipes
@@ -74,12 +78,35 @@ private:
 
 /// Connection to a service
 /// Used by client proxy to make RPC calls
+/// Supports both local (pipe-based) and remote (TCP-based) services
 class ServiceConnection {
-    ServiceProcess* proc_;
+    ServiceProcess* proc_ = nullptr;  // For local services (owns the process)
+    Transport* transport_ = nullptr;  // For remote services (borrows transport)
+    std::unique_ptr<Transport> owned_transport_;  // Owns transport if created internally
     u32 next_seq_ = 1;
+    std::vector<wire::MethodDescriptor> methods_;  // Cached method list
 
 public:
+    /// Default constructor
+    ServiceConnection() = default;
+
+    /// Destructor (defined in cpp due to unique_ptr<Transport>)
+    ~ServiceConnection();
+
+    /// Create connection to a local service process
     explicit ServiceConnection(ServiceProcess* proc);
+
+    /// Create connection using an existing transport (borrows, does not own)
+    explicit ServiceConnection(Transport* transport);
+
+    /// Create connection using an owned transport
+    explicit ServiceConnection(std::unique_ptr<Transport> transport);
+
+    // Non-copyable, movable
+    ServiceConnection(const ServiceConnection&) = delete;
+    ServiceConnection& operator=(const ServiceConnection&) = delete;
+    ServiceConnection(ServiceConnection&& other) noexcept;
+    ServiceConnection& operator=(ServiceConnection&& other) noexcept;
 
     /// Make a synchronous call to a service method
     /// Returns the result buffer
@@ -92,8 +119,21 @@ public:
     /// Returns true if the method was declared in the service's init message
     bool supports(u16 service_id, u16 method_id) const;
 
-    /// Get the service process
+    /// Get the service process (nullptr for remote connections)
     ServiceProcess* process() { return proc_; }
+
+    /// Get the transport (never nullptr for valid connection)
+    Transport* transport() { return transport_; }
+
+    /// Check if this is a remote (TCP) connection
+    bool is_remote() const { return proc_ == nullptr && transport_ != nullptr; }
+
+    /// Perform init handshake (for remote connections)
+    /// Local connections get this automatically from ServiceProcess
+    void init_handshake();
+
+    /// Get methods supported by the service
+    const std::vector<wire::MethodDescriptor>& methods() const;
 };
 
 } // namespace song

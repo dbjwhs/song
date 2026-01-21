@@ -25,6 +25,8 @@ add_executable(song_tests
     pipe_test.cpp
     process_test.cpp
     manager_test.cpp
+    transport_test.cpp
+    discovery_test.cpp
     lexer_test.cpp
     parser_test.cpp
     resolver_test.cpp

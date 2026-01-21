@@ -2,6 +2,8 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "song/runtime.hpp"
+#include "song/transport.hpp"
+#include "song/discovery.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <iostream>
@@ -22,7 +24,7 @@ bool write_all(int fd, const void* data, size_t len) {
             return false;
         }
         ptr += written;
-        remaining -= written;
+        remaining -= static_cast<size_t>(written);
     }
     return true;
 }
@@ -38,8 +40,8 @@ bool read_all(int fd, void* data, size_t len) {
             return false;
         }
         if (n == 0) return false;  // EOF
-        ptr += n;
-        remaining -= n;
+        ptr += static_cast<size_t>(n);
+        remaining -= static_cast<size_t>(n);
     }
     return true;
 }
@@ -55,7 +57,7 @@ void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::Method
     methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
 }
 
-void ServiceRuntime::send_init_confirmation() {
+void ServiceRuntime::send_init_confirmation_fd(int fd) {
     // Send init message with method list
     Buffer init_msg = wire::create_init_message(
         wire::kFirstVersion,
@@ -64,13 +66,29 @@ void ServiceRuntime::send_init_confirmation() {
         methods_
     );
 
-    // Write to stdout
-    if (!write_all(STDOUT_FILENO, init_msg.data(), init_msg.size())) {
+    // Write to fd
+    if (!write_all(fd, init_msg.data(), init_msg.size())) {
         std::exit(1);
     }
 }
 
-void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
+void ServiceRuntime::send_init_confirmation_transport(Transport& transport) {
+    // Send init message with method list
+    Buffer init_msg = wire::create_init_message(
+        wire::kFirstVersion,
+        wire::kCurrentVersion,
+        0,  // capabilities
+        methods_
+    );
+
+    try {
+        transport.send(init_msg);
+    } catch (...) {
+        // Transport error - will be handled in client_loop
+    }
+}
+
+void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload, int write_fd) {
     if (hdr.type == wire::MsgType::call) {
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
@@ -84,7 +102,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
                 ErrorCode::unknown_service,
                 "Unknown service ID"
             );
-            write_all(STDOUT_FILENO, error_msg.data(), error_msg.size());
+            write_all(write_fd, error_msg.data(), error_msg.size());
             return;
         }
 
@@ -95,7 +113,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
 
             // Send result
             Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(STDOUT_FILENO, result_msg.data(), result_msg.size());
+            write_all(write_fd, result_msg.data(), result_msg.size());
         } catch (const std::exception& e) {
             // Send error
             Buffer error_msg = wire::create_error_message(
@@ -103,14 +121,83 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
                 ErrorCode::unknown_method,
                 e.what()
             );
-            write_all(STDOUT_FILENO, error_msg.data(), error_msg.size());
+            write_all(write_fd, error_msg.data(), error_msg.size());
         }
     }
 }
 
+void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
+                                   Transport& transport) {
+    if (hdr.type == wire::MsgType::call) {
+        // Decode method call header
+        auto [service_id, method_id] = wire::decode_method_call_header(payload);
+
+        // Find dispatcher
+        auto it = dispatchers_.find(service_id);
+        if (it == dispatchers_.end()) {
+            // Unknown service - send error
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                "Unknown service ID"
+            );
+            transport.send(error_msg);
+            return;
+        }
+
+        // Dispatch to service
+        Buffer response;
+        try {
+            it->second(method_id, payload, response);
+
+            // Send result
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            transport.send(result_msg);
+        } catch (const std::exception& e) {
+            // Send error
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_method,
+                e.what()
+            );
+            transport.send(error_msg);
+        }
+    }
+}
+
+void ServiceRuntime::client_loop(Transport& transport) {
+    // Send init confirmation to client
+    send_init_confirmation_transport(transport);
+
+    // Handle messages until client disconnects
+    for (;;) {
+        Buffer msg;
+        if (!transport.receive(msg, -1)) {  // Blocking receive
+            // Client disconnected
+            return;
+        }
+
+        // Decode header
+        wire::Header hdr = wire::decode_header(msg);
+
+        // Validate
+        if (hdr.magic != wire::kMagic) {
+            return;  // Invalid client, disconnect
+        }
+
+        if (hdr.type == wire::MsgType::shutdown) {
+            // Client requested shutdown of this connection
+            return;
+        }
+
+        // Handle message
+        handle_message(hdr, msg, transport);
+    }
+}
+
 [[noreturn]] void ServiceRuntime::run() {
-    // Send init confirmation
-    send_init_confirmation();
+    // Send init confirmation via stdout
+    send_init_confirmation_fd(STDOUT_FILENO);
 
     // Main loop
     for (;;) {
@@ -149,7 +236,72 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload) {
         }
 
         // Handle message
-        handle_message(hdr, payload);
+        handle_message_fd(hdr, payload, STDOUT_FILENO);
+    }
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp(u16 port) {
+    TcpListener listener;
+    listener.listen(port);
+    run_tcp(listener);
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp(TcpListener& listener) {
+    // Accept clients in a loop
+    for (;;) {
+        // Wait for client connection (blocking)
+        auto client = listener.accept(-1);
+        if (!client) {
+            continue;  // Shouldn't happen with blocking accept
+        }
+
+        // Handle this client until they disconnect
+        try {
+            client_loop(*client);
+        } catch (...) {
+            // Client error, continue accepting new clients
+        }
+    }
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp_discoverable(u16 port,
+                                                       const std::string& name,
+                                                       const std::string& type) {
+    TcpListener listener;
+    listener.listen(port);
+    run_tcp_discoverable(listener, name, type);
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp_discoverable(TcpListener& listener,
+                                                       const std::string& name,
+                                                       const std::string& type) {
+    // Create discovery and register the service
+    auto discovery = create_discovery();
+    bool registered = false;
+
+    if (discovery && discovery->is_available()) {
+        registered = discovery->register_service(name, type, listener.bound_port());
+    }
+
+    // Log registration status (useful for debugging)
+    if (registered) {
+        std::cerr << "[" << name << "] Registered on mDNS as "
+                  << Discovery::make_service_type(type) << " port "
+                  << listener.bound_port() << std::endl;
+    }
+
+    // Accept clients in a loop (same as run_tcp)
+    for (;;) {
+        auto client = listener.accept(-1);
+        if (!client) {
+            continue;
+        }
+
+        try {
+            client_loop(*client);
+        } catch (...) {
+            // Client error, continue accepting new clients
+        }
     }
 }
 

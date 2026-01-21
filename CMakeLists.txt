@@ -24,8 +24,18 @@ add_library(song STATIC
     src/process.cpp
     src/manager.cpp
     src/runtime.cpp
+    src/transport.cpp
+    src/discovery.cpp
 )
 target_include_directories(song PUBLIC include)
+
+# Link dns_sd on macOS for mDNS/Bonjour support
+if(APPLE)
+    find_library(DNSSD_LIBRARY dns_sd)
+    if(DNSSD_LIBRARY)
+        target_link_libraries(song PUBLIC ${DNSSD_LIBRARY})
+    endif()
+endif()
 
 # Compiler
 add_executable(songc

@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 #include <song/manager.hpp>
+#include <song/transport.hpp>
+#include <song/wire.hpp>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -344,4 +346,164 @@ TEST(ManagerTest, MultipleServices) {
     mgr.stop("echo1");
     mgr.stop("echo2");
     mgr.stop("echo3");
+}
+
+// =============================================================================
+// ServiceManager Remote Services
+// =============================================================================
+
+TEST(ManagerRemoteTest, RegisterRemoteService) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    // Registration should succeed without throwing
+    EXPECT_TRUE(mgr.is_remote("remote"));
+}
+
+TEST(ManagerRemoteTest, IsRemoteForLocalService) {
+    ServiceManager mgr;
+    mgr.register_service("local", "/path/to/service", 1);
+    EXPECT_FALSE(mgr.is_remote("local"));
+}
+
+TEST(ManagerRemoteTest, IsRemoteForNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.is_remote("nonexistent"), ServiceError);
+}
+
+TEST(ManagerRemoteTest, StartRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.start("remote"), ServiceError);
+}
+
+TEST(ManagerRemoteTest, StopRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.stop("remote"), ServiceError);
+}
+
+TEST(ManagerRemoteTest, RestartRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.restart("remote"), ServiceError);
+}
+
+TEST(ManagerRemoteTest, ReplaceRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.replace("remote", "/new/path"), ServiceError);
+}
+
+TEST(ManagerRemoteTest, SetAutoRestartRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.set_auto_restart("remote", true), ServiceError);
+}
+
+TEST(ManagerRemoteTest, SetMaxRestartsRemoteServiceThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "localhost", 9000, 1);
+    EXPECT_THROW(mgr.set_max_restarts("remote", 5), ServiceError);
+}
+
+TEST(ManagerRemoteTest, IsAliveRemoteServiceNotListening) {
+    ServiceManager mgr;
+    // Use a port that's unlikely to be in use
+    mgr.register_remote_service("remote", "127.0.0.1", 59998, 1);
+    EXPECT_FALSE(mgr.is_alive("remote"));
+}
+
+TEST(ManagerRemoteTest, IsAliveRemoteServiceListening) {
+    // Start a listener
+    TcpListener listener;
+    listener.listen(0);  // Ephemeral port
+    u16 port = listener.bound_port();
+
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "127.0.0.1", port, 1);
+
+    // Should be able to connect (is_alive)
+    EXPECT_TRUE(mgr.is_alive("remote"));
+}
+
+TEST(ManagerRemoteTest, ConnectToRemoteService) {
+    // Start a listener and server thread
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> server_done{false};
+    std::exception_ptr server_exception;
+
+    std::thread server_thread([&]() {
+        try {
+            auto server = listener.accept(5000);
+            if (!server) return;
+
+            // Send init message
+            std::vector<wire::MethodDescriptor> methods = {
+                {1, 1, wire::MethodFlags::none, 0},  // echo method
+            };
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion,
+                wire::kCurrentVersion,
+                0,
+                methods
+            );
+            server->send(init_msg);
+
+            // Receive call and echo back
+            Buffer call;
+            if (!server->receive(call, 5000)) return;
+
+            auto hdr = wire::decode_header_validated(call);
+            [[maybe_unused]] auto call_info = wire::decode_method_call_header(call);
+            std::string input = decode_string(call);
+
+            Buffer response;
+            encode_string(response, input);
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            server->send(result_msg);
+
+            server_done = true;
+        } catch (...) {
+            server_exception = std::current_exception();
+        }
+    });
+
+    // Register and connect
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "127.0.0.1", port, 1);
+
+    try {
+        ServiceConnection conn = mgr.connect("remote");
+
+        // Make a call
+        Buffer args;
+        encode_string(args, "Hello Remote!");
+        Buffer result = conn.call(1, 1, args);
+        std::string response = decode_string(result);
+        EXPECT_EQ(response, "Hello Remote!");
+    } catch (const std::exception& e) {
+        FAIL() << "Client exception: " << e.what();
+    }
+
+    server_thread.join();
+
+    if (server_exception) {
+        try {
+            std::rethrow_exception(server_exception);
+        } catch (const std::exception& e) {
+            FAIL() << "Server exception: " << e.what();
+        }
+    }
+
+    EXPECT_TRUE(server_done);
+}
+
+TEST(ManagerRemoteTest, ConnectToNonexistentRemoteServiceThrows) {
+    ServiceManager mgr;
+    // Use a port that's unlikely to be in use
+    mgr.register_remote_service("remote", "127.0.0.1", 59997, 1);
+    EXPECT_THROW(mgr.connect("remote"), ServiceError);
 }
