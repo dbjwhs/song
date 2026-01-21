@@ -7,6 +7,7 @@
 - **Fast**: Zero-copy where possible, minimal allocations, cache-friendly data layouts
 - **Type Safe**: Compile-time verification of message structures and service contracts
 - **Process Isolation**: Services run as separate processes, communicating via pipes
+- **Network Distribution**: TCP transport with zero-config mDNS service discovery
 - **Minimal Footprint**: Suitable for embedded Linux, IoT devices, resource-constrained systems
 - **Clean Architecture**: Modern C++20, no external dependencies beyond POSIX
 - **Full IDL Compiler**: Complete pipeline from `.song` files to C++ code
@@ -14,21 +15,21 @@
 ## Architecture
 
 ```
-+------------------+     +------------------+
-|   Application    |     |   Application    |
-+------------------+     +------------------+
-        |                        |
-        v                        v
-+------------------+     +------------------+
-|  Song Runtime    |<--->|  Song Runtime    |
-|  (Host Process)  | pipe|  (Service Proc)  |
-+------------------+     +------------------+
-        |                        |
-        v                        v
-+------------------+     +------------------+
-|  Generated Code  |     |  Generated Code  |
-|  (from .song)    |     |  (from .song)    |
-+------------------+     +------------------+
++------------------+           +------------------+
+|   Application    |           |   Application    |
++------------------+           +------------------+
+        |                              |
+        v                              v
++------------------+           +------------------+
+|  Song Runtime    |<-- pipe ->|  Song Runtime    |  (local)
+|  (Host Process)  |<-- TCP -->|  (Service Proc)  |  (remote)
++------------------+           +------------------+
+        |                              |
+        v                              v
++------------------+           +------------------+
+|  Generated Code  |           |  Generated Code  |
+|  (from .song)    |           |  (from .song)    |
++------------------+           +------------------+
 ```
 
 ## Components
@@ -36,8 +37,8 @@
 | Component | Purpose |
 |-----------|---------|
 | **songc** | IDL compiler: `.song` files → C++ headers with proxy, interface, and dispatcher |
-| **libsong** | Runtime library: wire protocol, serialization, process management |
-| **ServiceManager** | Service lifecycle: fork/exec, auto-restart, connection pooling |
+| **libsong** | Runtime library: wire protocol, serialization, process management, TCP transport |
+| **ServiceManager** | Service lifecycle: fork/exec, auto-restart, TCP connections, mDNS discovery |
 
 ## Building
 
@@ -46,7 +47,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (292 tests)
+# Run all tests (274 tests)
 ctest --output-on-failure
 ```
 
@@ -103,7 +104,7 @@ void calc_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 int main() {
     ServiceRuntime runtime;
     runtime.register_dispatcher(kService_Calculator, calc_dispatcher);
-    runtime.run();
+    runtime.run();  // Pipe mode (stdin/stdout)
 }
 ```
 
@@ -126,6 +127,51 @@ int main() {
 
     auto div = calc.divide(17, 5);
     std::cout << "17 / 5 = " << div.quotient << " r " << div.remainder << "\n";
+}
+```
+
+## Network Distribution
+
+Song supports three communication modes with a unified API:
+
+### Local Services (Pipes)
+```cpp
+ServiceManager mgr;
+mgr.register_service("calc", "./calculator_service", 1);
+auto conn = mgr.connect("calc");  // Spawns process, uses pipes
+```
+
+### Remote Services (TCP with explicit address)
+```cpp
+ServiceManager mgr;
+mgr.register_remote_service("calc", "192.168.1.50", 12345, 1);
+auto conn = mgr.connect("calc");  // TCP connection to host:port
+```
+
+### Discoverable Services (TCP with mDNS)
+```cpp
+ServiceManager mgr;
+mgr.register_discoverable_service("calc", "calculator", 1);
+auto conn = mgr.connect("calc");  // Discovers via mDNS, then TCP
+```
+
+### Running a TCP Service
+
+```cpp
+// Service that listens on TCP (explicit port)
+int main() {
+    ServiceRuntime runtime;
+    runtime.register_dispatcher(kService_Calculator, calc_dispatcher);
+    runtime.run_tcp(12345);  // Listen on port 12345
+}
+
+// Service with mDNS registration (zero-config discovery)
+int main() {
+    ServiceRuntime runtime;
+    runtime.register_dispatcher(kService_Calculator, calc_dispatcher);
+    runtime.run_tcp_discoverable(0, "MyCalculator", "calculator");
+    // Registers as "_calculator._song._tcp" on local network
+    // Port 0 = ephemeral port (OS-assigned)
 }
 ```
 
@@ -159,21 +205,6 @@ ctest -R sing_
 ./sing/datacopy/sing_datacopy_test
 ```
 
-### Example: Running Calculator Tests
-
-```bash
-cd build
-./sing/calculator/sing_calculator_test
-
-# Output:
-[==========] Running 13 tests from 1 test suite.
-[ RUN      ] CalculatorTest.Add
-[calculator_service] Starting...
-[       OK ] CalculatorTest.Add (108 ms)
-...
-[  PASSED  ] 13 tests.
-```
-
 ## Current Status
 
 ### Phase 1: Core Runtime [COMPLETE]
@@ -193,16 +224,26 @@ cd build
 - Semantic resolver (type checking, symbol tables)
 - Code generator (proxy classes, interfaces, dispatchers)
 
+### Phase 3: Network Distribution [COMPLETE]
+- **TCP Transport**: TcpTransport and TcpListener for socket communication
+- **Transport Abstraction**: Unified Transport interface for pipes and TCP
+- **Remote Services**: `register_remote_service()` for explicit TCP endpoints
+- **mDNS Discovery**: Zero-config service discovery using native Bonjour API (macOS)
+- **Discoverable Services**: `register_discoverable_service()` for mDNS lookup
+- **Service Type Format**: `_<type>._song._tcp` (e.g., `_calculator._song._tcp`)
+
 ### Test Coverage
-- **216 unit tests**: buffer, wire, pipe, process, manager, lexer, parser, resolver, codegen
+- **198 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, lexer, parser, resolver, codegen
 - **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 292 tests**
+- **Total: 274 tests**
 
 ### Coming Soon
+- Phase 3.3: Security (SharedSecret/HMAC authentication)
+- Phase 3.4: Cross-subnet registry service
+- Class support (DAG-style reference types with object IDs)
 - Streaming support (bidirectional message streams)
 - Property support (get/set with change notifications)
-- Multi-dimensional arrays in codegen
-- Optional types in codegen
+- Linux Avahi support for mDNS discovery
 
 ## Project Structure
 
@@ -216,9 +257,19 @@ song/
 │   ├── process.hpp       # Service process management
 │   ├── manager.hpp       # Service lifecycle manager
 │   ├── runtime.hpp       # Service-side runtime
+│   ├── transport.hpp     # Transport interface (pipes, TCP)
+│   ├── discovery.hpp     # mDNS service discovery
 │   ├── error.hpp         # Error types
 │   └── song.hpp          # Main include
-├── src/                  # Implementation files
+├── src/
+│   ├── buffer.cpp
+│   ├── pipe.cpp
+│   ├── wire.cpp
+│   ├── process.cpp
+│   ├── manager.cpp
+│   ├── runtime.cpp
+│   ├── transport.cpp     # TCP/pipe transport implementations
+│   └── discovery.cpp     # mDNS implementation (macOS Bonjour)
 ├── compiler/
 │   ├── ast.hpp           # AST node definitions
 │   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
@@ -226,7 +277,7 @@ song/
 │   ├── resolver.hpp/cpp  # Semantic analysis
 │   ├── codegen.hpp/cpp   # C++ code generation
 │   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (216 tests)
+├── test/                 # Unit tests (198 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example
@@ -258,6 +309,11 @@ song/
 - Simpler than sockets (no address management)
 - Faster for local communication
 - Debugger-friendly (can attach to service process)
+
+### Why TCP + mDNS?
+- Transparent API (same code for local and remote)
+- Zero configuration (mDNS "just works" on LAN)
+- No heavy dependencies (native OS APIs only)
 
 ### Why Process Isolation?
 - Crash containment (service crash doesn't kill host)
