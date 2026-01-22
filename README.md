@@ -48,7 +48,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (323 tests)
+# Run all tests (351 tests)
 ctest --output-on-failure
 ```
 
@@ -318,16 +318,26 @@ ctest -R sing_
 - **Registry Service**: Cross-subnet service discovery via central registry
 - **Registry Fallback**: ServiceManager tries mDNS first, then registry
 
+### Phase 4: Class Support [COMPLETE]
+- **Object Base Class**: Reference-counted objects with identity (negative IDs like DAG)
+- **ObjectRegistry**: Server-side object lifecycle management
+- **Object Creation**: `MSG_CREATE` message type with constructor dispatch
+- **Object Release**: `MSG_RELEASE` for reference count decrement (fire-and-forget)
+- **Property Access**: `MSG_PROP_GET` and `MSG_PROP_SET` for remote property access
+- **Object Methods**: Method dispatch on object instances
+- **ServiceConnection**: `create_object()`, `release_object()`, `get_property()`, `set_property()`, `call_object()`
+- **ServiceRuntime**: Handles all object message types with factory registration
+
 ### Test Coverage
-- **247 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, lexer, parser, resolver, codegen
+- **275 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, lexer, parser, resolver, codegen
 - **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 323 tests**
+- **Total: 351 tests**
 
 ### Coming Soon
-- Class support (DAG-style reference types with object IDs)
 - Streaming support (bidirectional message streams)
-- Property support (get/set with change notifications)
+- Property change notifications
 - Linux Avahi support for mDNS discovery
+- Codegen updates for class proxy generation
 
 ## Project Structure
 
@@ -345,6 +355,7 @@ song/
 │   ├── discovery.hpp     # mDNS service discovery
 │   ├── security.hpp      # HMAC authentication
 │   ├── registry.hpp      # Cross-subnet registry
+│   ├── object.hpp        # Object base class and registry
 │   ├── error.hpp         # Error types
 │   └── song.hpp          # Main include
 ├── src/
@@ -357,7 +368,8 @@ song/
 │   ├── transport.cpp     # TCP/pipe transport implementations
 │   ├── discovery.cpp     # mDNS implementation (macOS Bonjour)
 │   ├── security.cpp      # HMAC (CommonCrypto/OpenSSL)
-│   └── registry.cpp      # Registry client/server
+│   ├── registry.cpp      # Registry client/server
+│   └── object.cpp        # ObjectRegistry implementation
 ├── compiler/
 │   ├── ast.hpp           # AST node definitions
 │   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
@@ -365,7 +377,7 @@ song/
 │   ├── resolver.hpp/cpp  # Semantic analysis
 │   ├── codegen.hpp/cpp   # C++ code generation
 │   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (247 tests)
+├── test/                 # Unit tests (275 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example

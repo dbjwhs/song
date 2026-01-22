@@ -449,4 +449,262 @@ bool ServiceConnection::supports(u16 service_id, u16 method_id) const {
     return false;
 }
 
+// =============================================================================
+// Object Operations
+// =============================================================================
+
+wire::ObjectRef ServiceConnection::create_object(u32 type_id, u16 constructor_id, const Buffer& args) {
+    // Validate connection
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
+    }
+
+    u32 seq = next_seq_++;
+
+    // Create object creation message
+    Buffer msg = wire::create_object_create_message(seq, type_id, constructor_id, args);
+
+    // Send
+    if (proc_) {
+        proc_->send(msg);
+    } else {
+        transport_->send(msg);
+    }
+
+    // Wait for response
+    Buffer response;
+    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
+
+    if (!received) {
+        throw ServiceError("Service died or timed out during object creation");
+    }
+
+    // Decode response header
+    auto hdr = wire::decode_header_validated(response);
+
+    if (hdr.sequence_id != seq) {
+        throw ProtocolError("Sequence ID mismatch");
+    }
+
+    if (hdr.type == wire::MsgType::error) {
+        u16 code = decode_u16(response);
+        std::string error_msg = decode_string(response);
+        throw ServiceError("Object creation error (code " + std::to_string(code) + "): " + error_msg);
+    }
+
+    if (hdr.type != wire::MsgType::result) {
+        throw ProtocolError("Unexpected message type in object creation response");
+    }
+
+    // Decode object reference from result
+    return wire::decode_object_ref(response);
+}
+
+void ServiceConnection::release_object(u32 type_id, i32 object_id) {
+    // Don't release null references
+    if (object_id == 0) {
+        return;
+    }
+
+    // Create release message (fire-and-forget, no sequence ID)
+    Buffer msg = wire::create_object_release_message(type_id, object_id);
+
+    // Best-effort send - don't throw if connection is dead
+    try {
+        if (proc_) {
+            if (proc_->alive()) {
+                proc_->send(msg);
+            }
+        } else if (transport_) {
+            if (transport_->is_connected()) {
+                transport_->send(msg);
+            }
+        }
+    } catch (...) {
+        // Ignore errors during release - object may already be cleaned up
+    }
+}
+
+Buffer ServiceConnection::get_property(u32 type_id, i32 object_id, u16 property_id) {
+    // Validate connection
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
+    }
+
+    u32 seq = next_seq_++;
+
+    // Create property get message
+    Buffer msg = wire::create_property_get_message(seq, type_id, object_id, property_id);
+
+    // Send
+    if (proc_) {
+        proc_->send(msg);
+    } else {
+        transport_->send(msg);
+    }
+
+    // Wait for response
+    Buffer response;
+    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
+
+    if (!received) {
+        throw ServiceError("Service died or timed out during property get");
+    }
+
+    // Decode response header
+    auto hdr = wire::decode_header_validated(response);
+
+    if (hdr.sequence_id != seq) {
+        throw ProtocolError("Sequence ID mismatch");
+    }
+
+    if (hdr.type == wire::MsgType::error) {
+        u16 code = decode_u16(response);
+        std::string error_msg = decode_string(response);
+        throw ServiceError("Property get error (code " + std::to_string(code) + "): " + error_msg);
+    }
+
+    if (hdr.type != wire::MsgType::result) {
+        throw ProtocolError("Unexpected message type in property get response");
+    }
+
+    // Return the payload (skip header)
+    Buffer result;
+    result.write(response.data() + 16, response.size() - 16);
+    result.reset_read();
+    return result;
+}
+
+Buffer ServiceConnection::set_property(u32 type_id, i32 object_id, u16 property_id, const Buffer& value) {
+    // Validate connection
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
+    }
+
+    u32 seq = next_seq_++;
+
+    // Create property set message
+    Buffer msg = wire::create_property_set_message(seq, type_id, object_id, property_id, value);
+
+    // Send
+    if (proc_) {
+        proc_->send(msg);
+    } else {
+        transport_->send(msg);
+    }
+
+    // Wait for response
+    Buffer response;
+    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
+
+    if (!received) {
+        throw ServiceError("Service died or timed out during property set");
+    }
+
+    // Decode response header
+    auto hdr = wire::decode_header_validated(response);
+
+    if (hdr.sequence_id != seq) {
+        throw ProtocolError("Sequence ID mismatch");
+    }
+
+    if (hdr.type == wire::MsgType::error) {
+        u16 code = decode_u16(response);
+        std::string error_msg = decode_string(response);
+        throw ServiceError("Property set error (code " + std::to_string(code) + "): " + error_msg);
+    }
+
+    if (hdr.type != wire::MsgType::result) {
+        throw ProtocolError("Unexpected message type in property set response");
+    }
+
+    // Return the payload (skip header)
+    Buffer result;
+    result.write(response.data() + 16, response.size() - 16);
+    result.reset_read();
+    return result;
+}
+
+Buffer ServiceConnection::call_object(u32 type_id, i32 object_id, u16 method_id, const Buffer& args) {
+    // Validate connection
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
+    }
+
+    u32 seq = next_seq_++;
+
+    // Create object method call message
+    Buffer msg = wire::create_object_method_message(seq, type_id, object_id, method_id, args);
+
+    // Send
+    if (proc_) {
+        proc_->send(msg);
+    } else {
+        transport_->send(msg);
+    }
+
+    // Wait for response
+    Buffer response;
+    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
+
+    if (!received) {
+        throw ServiceError("Service died or timed out during object method call");
+    }
+
+    // Decode response header
+    auto hdr = wire::decode_header_validated(response);
+
+    if (hdr.sequence_id != seq) {
+        throw ProtocolError("Sequence ID mismatch");
+    }
+
+    if (hdr.type == wire::MsgType::error) {
+        u16 code = decode_u16(response);
+        std::string error_msg = decode_string(response);
+        throw ServiceError("Object method error (code " + std::to_string(code) + "): " + error_msg);
+    }
+
+    if (hdr.type != wire::MsgType::result) {
+        throw ProtocolError("Unexpected message type in object method response");
+    }
+
+    // Return the payload (skip header)
+    Buffer result;
+    result.write(response.data() + 16, response.size() - 16);
+    result.reset_read();
+    return result;
+}
+
 } // namespace song

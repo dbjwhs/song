@@ -29,6 +29,7 @@ add_executable(song_tests
     discovery_test.cpp
     security_test.cpp
     registry_test.cpp
+    object_test.cpp
     lexer_test.cpp
     parser_test.cpp
     resolver_test.cpp

@@ -6,6 +6,7 @@
 #include "types.hpp"
 #include "buffer.hpp"
 #include "wire.hpp"
+#include "object.hpp"
 #include <unordered_map>
 #include <functional>
 #include <vector>
@@ -24,6 +25,7 @@ class Discovery;
 class ServiceRuntime {
     std::unordered_map<u16, std::function<void(u16, Buffer&, Buffer&)>> dispatchers_;
     std::vector<wire::MethodDescriptor> methods_;
+    ObjectRegistry object_registry_;
 
 public:
     /// Register a service dispatcher
@@ -38,6 +40,14 @@ public:
     /// flags: method flags (optional, streaming, oneway)
     void register_method(u16 service_id, u16 method_id,
                         wire::MethodFlags flags = wire::MethodFlags::none);
+
+    /// Register an object factory for creating instances of a class type
+    /// type_id: unique identifier for this class type
+    /// factory: function that creates instances given constructor_id and args
+    void register_factory(u32 type_id, ObjectFactory factory);
+
+    /// Get the object registry (for advanced use cases)
+    ObjectRegistry& objects() { return object_registry_; }
 
     /// Main service loop - reads from stdin, writes to stdout (pipe mode)
     /// Never returns (until shutdown message received)

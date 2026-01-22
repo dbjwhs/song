@@ -115,6 +115,46 @@ public:
     /// Make a one-way call (no response expected)
     void call_oneway(u16 service_id, u16 method_id, const Buffer& args);
 
+    // =========================================================================
+    // Object Operations (for class support)
+    // =========================================================================
+
+    /// Create a new object on the server
+    /// @param type_id Class type identifier
+    /// @param constructor_id Constructor to use (0 = default)
+    /// @param args Serialized constructor arguments
+    /// @return Object reference (type_id, object_id)
+    wire::ObjectRef create_object(u32 type_id, u16 constructor_id, const Buffer& args);
+
+    /// Release an object reference
+    /// Fire-and-forget: server decrements reference count
+    /// @param type_id Object type
+    /// @param object_id Object instance ID
+    void release_object(u32 type_id, i32 object_id);
+
+    /// Get a property value from an object
+    /// @param type_id Object type
+    /// @param object_id Object instance ID
+    /// @param property_id Property identifier
+    /// @return Buffer containing serialized property value
+    Buffer get_property(u32 type_id, i32 object_id, u16 property_id);
+
+    /// Set a property value on an object
+    /// @param type_id Object type
+    /// @param object_id Object instance ID
+    /// @param property_id Property identifier
+    /// @param value Serialized new value
+    /// @return Buffer containing actual stored value
+    Buffer set_property(u32 type_id, i32 object_id, u16 property_id, const Buffer& value);
+
+    /// Call a method on an object
+    /// @param type_id Object type
+    /// @param object_id Object instance ID
+    /// @param method_id Method identifier
+    /// @param args Serialized method arguments
+    /// @return Buffer containing method result
+    Buffer call_object(u32 type_id, i32 object_id, u16 method_id, const Buffer& args);
+
     /// Check if service supports a specific method
     /// Returns true if the method was declared in the service's init message
     bool supports(u16 service_id, u16 method_id) const;

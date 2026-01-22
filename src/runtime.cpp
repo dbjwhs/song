@@ -57,6 +57,10 @@ void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::Method
     methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
 }
 
+void ServiceRuntime::register_factory(u32 type_id, ObjectFactory factory) {
+    object_registry_.register_factory(type_id, std::move(factory));
+}
+
 void ServiceRuntime::send_init_confirmation_fd(int fd) {
     // Send init message with method list
     Buffer init_msg = wire::create_init_message(
@@ -123,6 +127,81 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
         }
+    } else if (hdr.type == wire::MsgType::create) {
+        // Object creation
+        auto create_hdr = wire::decode_object_create_header(payload);
+
+        Buffer response;
+        try {
+            // Create object using factory
+            i32 object_id = object_registry_.create_object(
+                create_hdr.type_id, create_hdr.constructor_id, payload);
+
+            // Send object reference as result
+            wire::ObjectRef ref{create_hdr.type_id, object_id};
+            wire::encode_object_ref(response, ref);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            write_all(write_fd, result_msg.data(), result_msg.size());
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                e.what()
+            );
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
+    } else if (hdr.type == wire::MsgType::release) {
+        // Object release (fire-and-forget)
+        auto release_hdr = wire::decode_object_release_header(payload);
+        object_registry_.release(release_hdr.object_id);
+        // No response for release
+    } else if (hdr.type == wire::MsgType::prop_get) {
+        // Property get
+        auto prop_hdr = wire::decode_property_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(prop_hdr.object_id);
+            if (!obj) {
+                throw ServiceError("Object not found");
+            }
+
+            obj->prop_get(prop_hdr.property_id, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            write_all(write_fd, result_msg.data(), result_msg.size());
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                e.what()
+            );
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
+    } else if (hdr.type == wire::MsgType::prop_set) {
+        // Property set
+        auto prop_hdr = wire::decode_property_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(prop_hdr.object_id);
+            if (!obj) {
+                throw ServiceError("Object not found");
+            }
+
+            obj->prop_set(prop_hdr.property_id, payload, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            write_all(write_fd, result_msg.data(), result_msg.size());
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                e.what()
+            );
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
     }
 }
 
@@ -158,6 +237,81 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
                 ErrorCode::unknown_method,
+                e.what()
+            );
+            transport.send(error_msg);
+        }
+    } else if (hdr.type == wire::MsgType::create) {
+        // Object creation
+        auto create_hdr = wire::decode_object_create_header(payload);
+
+        Buffer response;
+        try {
+            // Create object using factory
+            i32 object_id = object_registry_.create_object(
+                create_hdr.type_id, create_hdr.constructor_id, payload);
+
+            // Send object reference as result
+            wire::ObjectRef ref{create_hdr.type_id, object_id};
+            wire::encode_object_ref(response, ref);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            transport.send(result_msg);
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                e.what()
+            );
+            transport.send(error_msg);
+        }
+    } else if (hdr.type == wire::MsgType::release) {
+        // Object release (fire-and-forget)
+        auto release_hdr = wire::decode_object_release_header(payload);
+        object_registry_.release(release_hdr.object_id);
+        // No response for release
+    } else if (hdr.type == wire::MsgType::prop_get) {
+        // Property get
+        auto prop_hdr = wire::decode_property_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(prop_hdr.object_id);
+            if (!obj) {
+                throw ServiceError("Object not found");
+            }
+
+            obj->prop_get(prop_hdr.property_id, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            transport.send(result_msg);
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
+                e.what()
+            );
+            transport.send(error_msg);
+        }
+    } else if (hdr.type == wire::MsgType::prop_set) {
+        // Property set
+        auto prop_hdr = wire::decode_property_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(prop_hdr.object_id);
+            if (!obj) {
+                throw ServiceError("Object not found");
+            }
+
+            obj->prop_set(prop_hdr.property_id, payload, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            transport.send(result_msg);
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_service,
                 e.what()
             );
             transport.send(error_msg);

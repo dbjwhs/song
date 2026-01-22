@@ -200,5 +200,179 @@ Buffer create_shutdown_message() {
     return buf;
 }
 
+// =============================================================================
+// Object Protocol Functions
+// =============================================================================
+
+void encode_object_ref(Buffer& buf, const ObjectRef& ref) {
+    encode_u32(buf, ref.type_id);
+    encode_i32(buf, ref.object_id);
+}
+
+ObjectRef decode_object_ref(Buffer& buf) {
+    ObjectRef ref;
+    ref.type_id = decode_u32(buf);
+    ref.object_id = decode_i32(buf);
+    return ref;
+}
+
+void encode_object_create(Buffer& buf, u32 type_id, u16 constructor_id, const Buffer& args) {
+    encode_u32(buf, type_id);
+    encode_u16(buf, constructor_id);
+    encode_u16(buf, 0);  // reserved
+    buf.write(args.data(), args.size());
+}
+
+ObjectCreateHeader decode_object_create_header(Buffer& buf) {
+    ObjectCreateHeader hdr;
+    hdr.type_id = decode_u32(buf);
+    hdr.constructor_id = decode_u16(buf);
+    hdr.reserved = decode_u16(buf);
+    return hdr;
+}
+
+void encode_object_release(Buffer& buf, u32 type_id, i32 object_id) {
+    encode_u32(buf, type_id);
+    encode_i32(buf, object_id);
+}
+
+ObjectReleaseHeader decode_object_release_header(Buffer& buf) {
+    ObjectReleaseHeader hdr;
+    hdr.type_id = decode_u32(buf);
+    hdr.object_id = decode_i32(buf);
+    return hdr;
+}
+
+void encode_property_get(Buffer& buf, u32 type_id, i32 object_id, u16 property_id) {
+    encode_u32(buf, type_id);
+    encode_i32(buf, object_id);
+    encode_u16(buf, property_id);
+    encode_u16(buf, 0);  // reserved
+}
+
+void encode_property_set(Buffer& buf, u32 type_id, i32 object_id, u16 property_id, const Buffer& value) {
+    encode_u32(buf, type_id);
+    encode_i32(buf, object_id);
+    encode_u16(buf, property_id);
+    encode_u16(buf, 0);  // reserved
+    buf.write(value.data(), value.size());
+}
+
+PropertyHeader decode_property_header(Buffer& buf) {
+    PropertyHeader hdr;
+    hdr.type_id = decode_u32(buf);
+    hdr.object_id = decode_i32(buf);
+    hdr.property_id = decode_u16(buf);
+    hdr.reserved = decode_u16(buf);
+    return hdr;
+}
+
+void encode_object_method(Buffer& buf, u32 type_id, i32 object_id, u16 method_id, const Buffer& args) {
+    encode_u32(buf, type_id);
+    encode_i32(buf, object_id);
+    encode_u16(buf, method_id);
+    encode_u16(buf, 0);  // reserved
+    buf.write(args.data(), args.size());
+}
+
+ObjectMethodHeader decode_object_method_header(Buffer& buf) {
+    ObjectMethodHeader hdr;
+    hdr.type_id = decode_u32(buf);
+    hdr.object_id = decode_i32(buf);
+    hdr.method_id = decode_u16(buf);
+    hdr.reserved = decode_u16(buf);
+    return hdr;
+}
+
+Buffer create_object_create_message(u32 sequence_id, u32 type_id, u16 constructor_id, const Buffer& args) {
+    Buffer payload;
+    encode_object_create(payload, type_id, constructor_id, args);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::create,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_object_release_message(u32 type_id, i32 object_id) {
+    Buffer payload;
+    encode_object_release(payload, type_id, object_id);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::release,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0  // No sequence for fire-and-forget
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_property_get_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id) {
+    Buffer payload;
+    encode_property_get(payload, type_id, object_id, property_id);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::prop_get,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_property_set_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id, const Buffer& value) {
+    Buffer payload;
+    encode_property_set(payload, type_id, object_id, property_id, value);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::prop_set,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id, u16 method_id, const Buffer& args) {
+    Buffer payload;
+    encode_object_method(payload, type_id, object_id, method_id, args);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::call,  // Uses MSG_CALL type, but with object header format
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
 } // namespace wire
 } // namespace song

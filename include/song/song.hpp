@@ -16,4 +16,5 @@
 #include "discovery.hpp"
 #include "security.hpp"
 #include "registry.hpp"
+#include "object.hpp"
 #include "error.hpp"

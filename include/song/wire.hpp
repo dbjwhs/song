@@ -39,6 +39,10 @@ enum class MsgType : u8 {
     stream_end   = 0x06,
     ping         = 0x07,
     shutdown     = 0x08,
+    create       = 0x09,  // Create object (constructor call)
+    release      = 0x0A,  // Release object reference
+    prop_get     = 0x0B,  // Read property value
+    prop_set     = 0x0C,  // Write property value
 };
 
 // Message flags
@@ -95,6 +99,49 @@ struct MethodCallHeader {
     u16 method_id;
 };
 
+// Object reference encoding (8 bytes)
+struct ObjectRef {
+    u32 type_id;    // Class type identifier
+    i32 object_id;  // Server-assigned instance ID (negative integers, 0 = null)
+};
+static_assert(sizeof(ObjectRef) == 8, "ObjectRef must be 8 bytes");
+
+// Object creation header (MSG_CREATE payload)
+struct ObjectCreateHeader {
+    u32 type_id;         // Class to instantiate
+    u16 constructor_id;  // Which constructor (0 = default)
+    u16 reserved;        // Alignment padding
+    // followed by: serialized constructor arguments
+};
+static_assert(sizeof(ObjectCreateHeader) == 8, "ObjectCreateHeader must be 8 bytes");
+
+// Object release header (MSG_RELEASE payload)
+struct ObjectReleaseHeader {
+    u32 type_id;
+    i32 object_id;
+};
+static_assert(sizeof(ObjectReleaseHeader) == 8, "ObjectReleaseHeader must be 8 bytes");
+
+// Property access header (MSG_PROP_GET, MSG_PROP_SET payload)
+struct PropertyHeader {
+    u32 type_id;      // Object type
+    i32 object_id;    // Object instance
+    u16 property_id;  // Property to access
+    u16 reserved;     // Alignment padding
+    // MSG_PROP_SET: followed by serialized new value
+};
+static_assert(sizeof(PropertyHeader) == 12, "PropertyHeader must be 12 bytes");
+
+// Object method call header
+struct ObjectMethodHeader {
+    u32 type_id;      // Object type
+    i32 object_id;    // Object instance
+    u16 method_id;    // Method to call
+    u16 reserved;     // Alignment padding
+    // followed by: serialized arguments
+};
+static_assert(sizeof(ObjectMethodHeader) == 12, "ObjectMethodHeader must be 12 bytes");
+
 // Header encoding/decoding
 void encode_header(Buffer& buf, const Header& hdr);
 Header decode_header(Buffer& buf);
@@ -112,6 +159,27 @@ MethodDescriptor decode_method_descriptor(Buffer& buf);
 void encode_method_call(Buffer& buf, u16 service_id, u16 method_id, const Buffer& args);
 std::pair<u16, u16> decode_method_call_header(Buffer& buf);
 
+// Object reference encoding/decoding
+void encode_object_ref(Buffer& buf, const ObjectRef& ref);
+ObjectRef decode_object_ref(Buffer& buf);
+
+// Object creation encoding/decoding
+void encode_object_create(Buffer& buf, u32 type_id, u16 constructor_id, const Buffer& args);
+ObjectCreateHeader decode_object_create_header(Buffer& buf);
+
+// Object release encoding/decoding
+void encode_object_release(Buffer& buf, u32 type_id, i32 object_id);
+ObjectReleaseHeader decode_object_release_header(Buffer& buf);
+
+// Property access encoding/decoding
+void encode_property_get(Buffer& buf, u32 type_id, i32 object_id, u16 property_id);
+void encode_property_set(Buffer& buf, u32 type_id, i32 object_id, u16 property_id, const Buffer& value);
+PropertyHeader decode_property_header(Buffer& buf);
+
+// Object method call encoding/decoding
+void encode_object_method(Buffer& buf, u32 type_id, i32 object_id, u16 method_id, const Buffer& args);
+ObjectMethodHeader decode_object_method_header(Buffer& buf);
+
 // Full message creation helpers
 Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities = 0);
 Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilities,
@@ -120,6 +188,13 @@ Buffer create_call_message(u32 sequence_id, u16 service_id, u16 method_id, const
 Buffer create_result_message(u32 sequence_id, const Buffer& result);
 Buffer create_error_message(u32 sequence_id, ErrorCode code, const std::string& message);
 Buffer create_shutdown_message();
+
+// Object message creation helpers
+Buffer create_object_create_message(u32 sequence_id, u32 type_id, u16 constructor_id, const Buffer& args);
+Buffer create_object_release_message(u32 type_id, i32 object_id);  // No sequence (fire-and-forget)
+Buffer create_property_get_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id);
+Buffer create_property_set_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id, const Buffer& value);
+Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id, u16 method_id, const Buffer& args);
 
 } // namespace wire
 } // namespace song
