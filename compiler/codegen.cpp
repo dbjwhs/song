@@ -473,6 +473,433 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
 }
 
 // =============================================================================
+// Class ID Generation
+// =============================================================================
+
+std::string CodeGenerator::generate_class_ids(const Namespace& ns) {
+    std::ostringstream out;
+
+    out << "// Class type IDs, property IDs, and method IDs\n";
+
+    u16 type_id = 1;
+    for (const auto& c : ns.classes) {
+        out << "constexpr u32 kType_" << c.name << " = " << type_id++ << ";\n";
+
+        // Property IDs
+        u16 prop_id = 1;
+        for (const auto& p : c.properties) {
+            out << "constexpr u16 kProp_" << c.name << "_" << p.name
+                << " = " << prop_id++ << ";\n";
+        }
+
+        // Constructor IDs (0 = default, 1+ = overloads)
+        u16 ctor_id = 0;
+        for (size_t i = 0; i < c.constructors.size(); ++i) {
+            out << "constexpr u16 kCtor_" << c.name << "_" << ctor_id++
+                << " = " << i << ";\n";
+        }
+
+        // Method IDs
+        u16 method_id = 1;
+        for (const auto& m : c.methods) {
+            out << "constexpr u16 kMethod_" << c.name << "_" << m.name
+                << " = " << method_id++ << ";\n";
+        }
+        out << "\n";
+    }
+
+    return out.str();
+}
+
+// =============================================================================
+// Class Proxy Generation (Client Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
+    std::ostringstream out;
+
+    if (!c.doc.empty()) {
+        out << "/// " << c.doc << "\n";
+    }
+    out << "class " << c.name << "Proxy {\n";
+    out << "    ServiceConnection& m_conn;\n";
+    out << "    u32 m_type_id;\n";
+    out << "    i32 m_object_id;\n";
+    out << "\n";
+    out << "public:\n";
+
+    // Constructor from object reference
+    out << "    " << c.name << "Proxy(ServiceConnection& conn, u32 type_id, i32 object_id)\n";
+    out << "        : m_conn(conn), m_type_id(type_id), m_object_id(object_id) {}\n\n";
+
+    // Move constructor (transfers ownership)
+    out << "    " << c.name << "Proxy(" << c.name << "Proxy&& other) noexcept\n";
+    out << "        : m_conn(other.m_conn), m_type_id(other.m_type_id), m_object_id(other.m_object_id) {\n";
+    out << "        other.m_object_id = 0;  // Prevent double-release\n";
+    out << "    }\n\n";
+
+    // Move assignment
+    out << "    " << c.name << "Proxy& operator=(" << c.name << "Proxy&& other) noexcept {\n";
+    out << "        if (this != &other) {\n";
+    out << "            release();\n";
+    out << "            m_type_id = other.m_type_id;\n";
+    out << "            m_object_id = other.m_object_id;\n";
+    out << "            other.m_object_id = 0;\n";
+    out << "        }\n";
+    out << "        return *this;\n";
+    out << "    }\n\n";
+
+    // Delete copy (reference semantics)
+    out << "    " << c.name << "Proxy(const " << c.name << "Proxy&) = delete;\n";
+    out << "    " << c.name << "Proxy& operator=(const " << c.name << "Proxy&) = delete;\n\n";
+
+    // Destructor releases object
+    out << "    ~" << c.name << "Proxy() { release(); }\n\n";
+
+    // Release method
+    out << "    void release() {\n";
+    out << "        if (m_object_id != 0) {\n";
+    out << "            m_conn.release_object(m_type_id, m_object_id);\n";
+    out << "            m_object_id = 0;\n";
+    out << "        }\n";
+    out << "    }\n\n";
+
+    // Null check
+    out << "    bool is_null() const { return m_object_id == 0; }\n";
+    out << "    explicit operator bool() const { return !is_null(); }\n\n";
+
+    // Accessors
+    out << "    u32 type_id() const { return m_type_id; }\n";
+    out << "    i32 object_id() const { return m_object_id; }\n\n";
+
+    // Property getters and setters
+    for (const auto& p : c.properties) {
+        std::string cpp_type = type_to_cpp(p.type);
+
+        if (!p.doc.empty()) {
+            out << "    /// " << p.doc << "\n";
+        }
+
+        // Getter
+        out << "    " << cpp_type << " " << p.name << "() const {\n";
+        out << "        Buffer resp = m_conn.get_property(m_type_id, m_object_id, kProp_"
+            << c.name << "_" << p.name << ");\n";
+        std::string decode = decode_call(p.type);
+        size_t pos = decode.find("buf");
+        if (pos != std::string::npos) {
+            decode.replace(pos, 3, "resp");
+        }
+        out << "        return " << decode << ";\n";
+        out << "    }\n";
+
+        // Setter (if not readonly)
+        if (!p.readonly) {
+            out << "    void set_" << p.name << "(" << type_to_param(p.type, "value") << ") {\n";
+            out << "        Buffer val;\n";
+            std::string encode = encode_call(p.type, "value");
+            pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "val");
+            }
+            out << "        " << encode << ";\n";
+            out << "        m_conn.set_property(m_type_id, m_object_id, kProp_"
+                << c.name << "_" << p.name << ", val);\n";
+            out << "    }\n";
+        }
+        out << "\n";
+    }
+
+    // Methods
+    for (const auto& m : c.methods) {
+        std::string return_type = type_to_cpp(m.return_type);
+        bool is_void = is_primitive(m.return_type) &&
+                       get_primitive(m.return_type) == PrimitiveType::void_;
+
+        if (!m.doc.empty()) {
+            out << "    /// " << m.doc << "\n";
+        }
+
+        out << "    " << return_type << " " << m.name << "(";
+        out << generate_method_params(m.params);
+        out << ") {\n";
+
+        // Encode arguments
+        out << "        Buffer args;\n";
+        for (const auto& p : m.params) {
+            std::string encode = encode_call(p.type, p.name);
+            size_t pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "args");
+            }
+            out << "        " << encode << ";\n";
+        }
+
+        // Call object method
+        out << "        Buffer resp = m_conn.call_object(m_type_id, m_object_id, kMethod_"
+            << c.name << "_" << m.name << ", args);\n";
+
+        // Decode response
+        if (!is_void) {
+            std::string decode = decode_call(m.return_type);
+            size_t pos = decode.find("buf");
+            if (pos != std::string::npos) {
+                decode.replace(pos, 3, "resp");
+            }
+            out << "        return " << decode << ";\n";
+        }
+
+        out << "    }\n\n";
+    }
+
+    out << "};\n";
+
+    // Factory function(s) for creating instances
+    for (size_t i = 0; i < c.constructors.size(); ++i) {
+        const auto& ctor = c.constructors[i];
+
+        out << "\n/// Create a new " << c.name << " object\n";
+        out << "inline " << c.name << "Proxy create_" << c.name << "(ServiceConnection& conn";
+        for (const auto& p : ctor.params) {
+            out << ", " << type_to_param(p.type, p.name);
+        }
+        out << ") {\n";
+
+        out << "    Buffer args;\n";
+        for (const auto& p : ctor.params) {
+            std::string encode = encode_call(p.type, p.name);
+            size_t pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "args");
+            }
+            out << "    " << encode << ";\n";
+        }
+
+        out << "    auto ref = conn.create_object(kType_" << c.name << ", " << i << ", args);\n";
+        out << "    return " << c.name << "Proxy(conn, ref.type_id, ref.object_id);\n";
+        out << "}\n";
+    }
+
+    return out.str();
+}
+
+// =============================================================================
+// Class Skeleton Generation (Server Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
+    std::ostringstream out;
+    std::string upper_name;
+    for (char ch : c.name) {
+        upper_name += static_cast<char>(toupper(ch));
+    }
+
+    if (!c.doc.empty()) {
+        out << "/// " << c.doc << " (server implementation base)\n";
+    }
+
+    // Determine base class
+    std::string base_class = "song::Object";
+    if (c.base.has_value()) {
+        base_class = c.base.value() + "Base";
+    }
+
+    out << "class " << c.name << "Base : public " << base_class << " {\n";
+    out << "protected:\n";
+
+    // Property storage
+    for (const auto& p : c.properties) {
+        out << "    " << type_to_cpp(p.type) << " " << p.name << "_{};\n";
+    }
+
+    // Macro injection point for private members
+    out << "\n";
+    out << "    // User extension point: define " << upper_name << "_SERVER_PRIVATE before including\n";
+    out << "    // to add private members/methods to this class\n";
+    out << "#ifdef " << upper_name << "_SERVER_PRIVATE\n";
+    out << "    " << upper_name << "_SERVER_PRIVATE\n";
+    out << "#endif\n";
+
+    out << "\npublic:\n";
+    out << "    virtual ~" << c.name << "Base() = default;\n\n";
+
+    // Property accessors (virtual for override)
+    for (const auto& p : c.properties) {
+        std::string cpp_type = type_to_cpp(p.type);
+
+        if (!p.doc.empty()) {
+            out << "    /// " << p.doc << "\n";
+        }
+
+        // Getter
+        out << "    virtual " << cpp_type << " get_" << p.name << "() const { return "
+            << p.name << "_; }\n";
+
+        // Setter (if not readonly)
+        if (!p.readonly) {
+            out << "    virtual void set_" << p.name << "(" << type_to_param(p.type, "value")
+                << ") { " << p.name << "_ = value; }\n";
+        }
+        out << "\n";
+    }
+
+    // Method declarations (pure virtual)
+    for (const auto& m : c.methods) {
+        std::string return_type = type_to_cpp(m.return_type);
+
+        if (!m.doc.empty()) {
+            out << "    /// " << m.doc << "\n";
+        }
+
+        out << "    virtual " << return_type << " " << m.name << "(";
+        out << generate_method_params(m.params);
+        out << ") = 0;\n";
+    }
+
+    // Object interface implementations
+    out << "\n    // Object interface implementation (generated)\n";
+    out << "    void prop_get(u16 prop_id, Buffer& resp) override;\n";
+    out << "    void prop_set(u16 prop_id, Buffer& req, Buffer& resp) override;\n";
+    out << "    void dispatch(u16 method_id, Buffer& req, Buffer& resp) override;\n";
+
+    out << "};\n";
+
+    return out.str();
+}
+
+// =============================================================================
+// Class Dispatcher Generation (Server Side)
+// =============================================================================
+
+std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
+    std::ostringstream out;
+
+    // prop_get implementation
+    out << "inline void " << c.name << "Base::prop_get(u16 prop_id, Buffer& resp) {\n";
+    out << "    switch (prop_id) {\n";
+
+    for (const auto& p : c.properties) {
+        out << "        case kProp_" << c.name << "_" << p.name << ": {\n";
+        std::string encode = encode_call(p.type, "get_" + p.name + "()");
+        size_t pos = encode.find("buf");
+        if (pos != std::string::npos) {
+            encode.replace(pos, 3, "resp");
+        }
+        out << "            " << encode << ";\n";
+        out << "            break;\n";
+        out << "        }\n";
+    }
+
+    out << "        default:\n";
+    // If has base class, delegate to base
+    if (c.base.has_value()) {
+        out << "            " << c.base.value() << "Base::prop_get(prop_id, resp);\n";
+        out << "            break;\n";
+    } else {
+        out << "            throw std::runtime_error(\"Unknown property ID: \" + std::to_string(prop_id));\n";
+    }
+    out << "    }\n";
+    out << "}\n\n";
+
+    // prop_set implementation
+    out << "inline void " << c.name << "Base::prop_set(u16 prop_id, Buffer& req, Buffer& resp) {\n";
+    out << "    switch (prop_id) {\n";
+
+    for (const auto& p : c.properties) {
+        if (!p.readonly) {
+            out << "        case kProp_" << c.name << "_" << p.name << ": {\n";
+
+            // Decode the new value
+            std::string decode = decode_call(p.type);
+            size_t pos = decode.find("buf");
+            if (pos != std::string::npos) {
+                decode.replace(pos, 3, "req");
+            }
+            out << "            auto value = " << decode << ";\n";
+            out << "            set_" << p.name << "(value);\n";
+
+            // Encode the stored value back
+            std::string encode = encode_call(p.type, "get_" + p.name + "()");
+            pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "resp");
+            }
+            out << "            " << encode << ";\n";
+            out << "            break;\n";
+            out << "        }\n";
+        }
+    }
+
+    out << "        default:\n";
+    if (c.base.has_value()) {
+        out << "            " << c.base.value() << "Base::prop_set(prop_id, req, resp);\n";
+        out << "            break;\n";
+    } else {
+        out << "            throw std::runtime_error(\"Unknown or readonly property ID: \" + std::to_string(prop_id));\n";
+    }
+    out << "    }\n";
+    out << "}\n\n";
+
+    // dispatch implementation
+    out << "inline void " << c.name << "Base::dispatch(u16 method_id, Buffer& req, Buffer& resp) {\n";
+    out << "    switch (method_id) {\n";
+
+    for (const auto& m : c.methods) {
+        out << "        case kMethod_" << c.name << "_" << m.name << ": {\n";
+
+        // Decode parameters
+        for (const auto& p : m.params) {
+            std::string decode = decode_call(p.type);
+            size_t pos = decode.find("buf");
+            if (pos != std::string::npos) {
+                decode.replace(pos, 3, "req");
+            }
+            out << "            " << type_to_cpp(p.type) << " " << p.name
+                << " = " << decode << ";\n";
+        }
+
+        // Call implementation
+        bool is_void = is_primitive(m.return_type) &&
+                       get_primitive(m.return_type) == PrimitiveType::void_;
+
+        out << "            ";
+        if (!is_void) {
+            out << "auto result = ";
+        }
+        out << m.name << "(";
+        for (size_t i = 0; i < m.params.size(); ++i) {
+            if (i > 0) out << ", ";
+            out << m.params[i].name;
+        }
+        out << ");\n";
+
+        // Encode response
+        if (!is_void) {
+            std::string encode = encode_call(m.return_type, "result");
+            size_t pos = encode.find("buf");
+            if (pos != std::string::npos) {
+                encode.replace(pos, 3, "resp");
+            }
+            out << "            " << encode << ";\n";
+        }
+
+        out << "            break;\n";
+        out << "        }\n";
+    }
+
+    out << "        default:\n";
+    if (c.base.has_value()) {
+        out << "            " << c.base.value() << "Base::dispatch(method_id, req, resp);\n";
+        out << "            break;\n";
+    } else {
+        out << "            throw std::runtime_error(\"Unknown method ID: \" + std::to_string(method_id));\n";
+    }
+    out << "    }\n";
+    out << "}\n";
+
+    return out.str();
+}
+
+// =============================================================================
 // Header Generation
 // =============================================================================
 
@@ -496,11 +923,25 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
         out << generate_service_ids(ns);
     }
 
-    // Forward declarations
+    // Class/property/method IDs
+    if (!ns.classes.empty()) {
+        out << generate_class_ids(ns);
+    }
+
+    // Forward declarations for structs
     for (const auto& s : ns.structs) {
         out << "struct " << s.name << ";\n";
     }
     if (!ns.structs.empty()) {
+        out << "\n";
+    }
+
+    // Forward declarations for classes
+    for (const auto& c : ns.classes) {
+        out << "class " << c.name << "Proxy;\n";
+        out << "class " << c.name << "Base;\n";
+    }
+    if (!ns.classes.empty()) {
         out << "\n";
     }
 
@@ -549,6 +990,21 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
     // Service dispatchers (server side)
     for (const auto& s : ns.services) {
         out << generate_service_dispatcher(s) << "\n";
+    }
+
+    // Class proxies (client side)
+    for (const auto& c : ns.classes) {
+        out << generate_class_proxy(c) << "\n";
+    }
+
+    // Class skeletons (server side)
+    for (const auto& c : ns.classes) {
+        out << generate_class_skeleton(c) << "\n";
+    }
+
+    // Class dispatchers (server side)
+    for (const auto& c : ns.classes) {
+        out << generate_class_dispatcher(c) << "\n";
     }
 
     out << "} // namespace song::" << ns.name << "\n";

@@ -44,6 +44,12 @@ private:
     std::string generate_service_interface(const ServiceDef& s);
     std::string generate_service_dispatcher(const ServiceDef& s);
 
+    // Class generation
+    std::string generate_class_ids(const Namespace& ns);
+    std::string generate_class_proxy(const ClassDef& c);
+    std::string generate_class_skeleton(const ClassDef& c);
+    std::string generate_class_dispatcher(const ClassDef& c);
+
     // Method helpers
     std::string generate_method_signature(const Method& m, bool is_interface);
     std::string generate_method_params(const std::vector<Param>& params);
