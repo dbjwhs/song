@@ -327,17 +327,18 @@ ctest -R sing_
 - **Object Methods**: Method dispatch on object instances
 - **ServiceConnection**: `create_object()`, `release_object()`, `get_property()`, `set_property()`, `call_object()`
 - **ServiceRuntime**: Handles all object message types with factory registration
+- **Class Code Generation**: Proxy classes (client), skeleton base classes (server) with DAG-style macro pattern
 
 ### Test Coverage
-- **275 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, lexer, parser, resolver, codegen
+- **360 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, lexer, parser, resolver, codegen
 - **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 351 tests**
+- **Total: 436 tests**
 
 ### Coming Soon
 - Streaming support (bidirectional message streams)
 - Property change notifications
 - Linux Avahi support for mDNS discovery
-- Codegen updates for class proxy generation
+- Network integration tests (TCP, mDNS discovery)
 
 ## Project Structure
 
