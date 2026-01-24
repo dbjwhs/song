@@ -21,9 +21,9 @@ protected:
 
     void SetUp() override {
         // Find the service executable
-        std::string path = "./sing_datacopy_service";
+        std::string path = "./sing_ipc_datacopy_service";
         if (access(path.c_str(), X_OK) != 0) {
-            path = "./sing/datacopy/sing_datacopy_service";
+            path = "./sing/ipc/datacopy/sing_ipc_datacopy_service";
         }
 
         proc_ = ServiceProcess::spawn(path.c_str());

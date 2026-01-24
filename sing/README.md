@@ -2,9 +2,31 @@
 
 Sing is the integration test suite for the Song high-performance service framework. Each project is a standalone application that demonstrates Song's capabilities and validates correctness through real process-to-process communication.
 
-## Projects
+## Directory Structure
 
-### 1. Calculator (`calculator/`)
+```
+sing/
+├── ipc/                    # Local pipe-based communication tests
+│   ├── calculator/         # Basic arithmetic RPC
+│   ├── stockticker/        # Complex types and arrays
+│   ├── chat/               # Stateful server interactions
+│   └── datacopy/           # Binary data and file transfer
+│
+├── network/                # TCP and network communication tests
+│   ├── tcp_calculator/     # Calculator over TCP (explicit host:port)
+│   ├── discovery/          # mDNS zero-config service discovery
+│   └── secure/             # HMAC-SHA256 authenticated communication
+│
+└── README.md
+```
+
+---
+
+## IPC Tests (`ipc/`)
+
+These tests use local pipe-based communication via `ServiceProcess::spawn()`.
+
+### 1. Calculator (`ipc/calculator/`)
 
 A basic arithmetic service demonstrating fundamental Song RPC patterns.
 
@@ -23,7 +45,7 @@ A basic arithmetic service demonstrating fundamental Song RPC patterns.
 
 ---
 
-### 2. Stock Ticker (`stockticker/`)
+### 2. Stock Ticker (`ipc/stockticker/`)
 
 A financial data service demonstrating request/response patterns for market data.
 
@@ -42,7 +64,7 @@ A financial data service demonstrating request/response patterns for market data
 
 ---
 
-### 3. Chat (`chat/`)
+### 3. Chat (`ipc/chat/`)
 
 A simple messaging service demonstrating stateful server interactions.
 
@@ -61,7 +83,7 @@ A simple messaging service demonstrating stateful server interactions.
 
 ---
 
-### 4. Data Copy (`datacopy/`)
+### 4. Data Copy (`ipc/datacopy/`)
 
 A file transfer service demonstrating binary data handling.
 
@@ -81,9 +103,63 @@ A file transfer service demonstrating binary data handling.
 
 ---
 
-## Building
+## Network Tests (`network/`)
 
-Each project can be built standalone or as part of the main Song build:
+These tests use TCP communication for remote service access.
+
+### 1. TCP Calculator (`network/tcp_calculator/`)
+
+Same calculator service as IPC, but communicating over TCP.
+
+**Features:**
+- `register_remote_service()` for explicit TCP endpoints
+- `run_tcp(port)` for TCP service listening
+- Connection and RPC over TCP sockets
+
+**What Is Covered:**
+- TCP transport functionality
+- ServiceManager remote service registration
+- Network-based RPC calls
+- Connection stability over multiple calls
+
+---
+
+### 2. Discovery (`network/discovery/`)
+
+mDNS-based zero-config service discovery.
+
+**Features:**
+- `run_tcp_discoverable()` for mDNS service registration
+- `register_discoverable_service()` for automatic discovery
+- Service type format: `_<type>._song._tcp`
+
+**What Is Covered:**
+- mDNS service registration (macOS Bonjour)
+- Service discovery and resolution
+- Automatic connection to discovered services
+
+**Note:** These tests are skipped on non-macOS platforms and may require mDNS to be available.
+
+---
+
+### 3. Secure (`network/secure/`)
+
+HMAC-SHA256 authenticated communication.
+
+**Features:**
+- `SecureTransport` wrapper for any transport
+- Shared secret authentication
+- Message integrity verification
+
+**What Is Covered:**
+- HMAC tag computation and verification
+- Authentication with matching keys
+- Rejection with mismatched keys
+- Secure RPC over TCP
+
+---
+
+## Building
 
 ```bash
 # Build all sing projects
@@ -91,38 +167,46 @@ cd song/build
 cmake ..
 make sing_all
 
+# Or build categories
+make sing_ipc_all       # All IPC tests
+make sing_network_all   # All network tests
+
 # Or build individual projects
-make sing_calculator
-make sing_stockticker
-make sing_chat
-make sing_datacopy
+make sing_ipc_calculator
+make sing_network_tcp_calculator
+make sing_network_secure
 ```
 
 ## Running Tests
 
 ```bash
 # Run all sing tests
-ctest -R sing_
+ctest -R "Calculator\|Chat\|DataCopy\|Stock\|TcpCalculator\|Discovery\|Secure"
 
-# Or run individual test suites
-./sing/calculator/calculator_test
-./sing/stockticker/stockticker_test
-./sing/chat/chat_test
-./sing/datacopy/datacopy_test
+# Run IPC tests only
+ctest -R "^(Calculator|Chat|DataCopy|StockTicker)Test\."
+
+# Run network tests only
+ctest -R "^(TcpCalculator|Discovery|SecureTransport)Test\."
+
+# Run individual test suites
+./sing/ipc/calculator/sing_ipc_calculator_test
+./sing/network/tcp_calculator/sing_network_tcp_calculator_test
+./sing/network/secure/sing_network_secure_test
 ```
 
-## Project Structure
+## Test Counts
 
-Each project follows the same structure:
-
-```
-<project>/
-├── <project>.song      # IDL definition
-├── <project>.hpp       # Generated header (by songc)
-├── <project>_service.cpp   # Server implementation
-├── <project>_test.cpp      # Integration tests
-└── CMakeLists.txt      # Build configuration
-```
+| Category | Tests |
+|----------|-------|
+| IPC Calculator | 13 |
+| IPC StockTicker | 15 |
+| IPC Chat | 23 |
+| IPC DataCopy | 25 |
+| Network TCP Calculator | 9 |
+| Network Discovery | 4 |
+| Network Secure | 5 |
+| **Total** | **94** |
 
 ## Requirements
 
@@ -130,3 +214,4 @@ Each project follows the same structure:
 - Song compiler (songc)
 - GoogleTest (fetched automatically)
 - C++20 compiler
+- macOS for mDNS discovery tests (others skipped on Linux)

@@ -15,9 +15,8 @@ static std::string get_service_path() {
 
     // Try a few common locations relative to build directory
     std::vector<std::filesystem::path> candidates = {
-        base / "sing" / "calculator" / "sing_calculator_service",
-        base / "sing_calculator_service",
-        base / ".." / "sing" / "calculator" / "sing_calculator_service"
+        base / "sing" / "ipc" / "calculator" / "sing_ipc_calculator_service",
+        base / "sing_ipc_calculator_service",
     };
 
     for (const auto& p : candidates) {
@@ -27,7 +26,7 @@ static std::string get_service_path() {
     }
 
     // Fall back to assuming we're in build directory
-    return (base / "sing" / "calculator" / "sing_calculator_service").string();
+    return (base / "sing" / "ipc" / "calculator" / "sing_ipc_calculator_service").string();
 }
 
 class CalculatorTest : public ::testing::Test {

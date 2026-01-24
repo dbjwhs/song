@@ -15,9 +15,8 @@ static std::string get_service_path() {
     std::filesystem::path base = std::filesystem::current_path();
 
     std::vector<std::filesystem::path> candidates = {
-        base / "sing" / "stockticker" / "sing_stockticker_service",
-        base / "sing_stockticker_service",
-        base / ".." / "sing" / "stockticker" / "sing_stockticker_service"
+        base / "sing" / "ipc" / "stockticker" / "sing_ipc_stockticker_service",
+        base / "sing_ipc_stockticker_service",
     };
 
     for (const auto& p : candidates) {
@@ -26,7 +25,7 @@ static std::string get_service_path() {
         }
     }
 
-    return (base / "sing" / "stockticker" / "sing_stockticker_service").string();
+    return (base / "sing" / "ipc" / "stockticker" / "sing_ipc_stockticker_service").string();
 }
 
 class StockTickerTest : public ::testing::Test {
