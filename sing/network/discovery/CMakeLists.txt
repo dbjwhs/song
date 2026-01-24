@@ -34,7 +34,17 @@ gtest_discover_tests(sing_network_discovery_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+# Client executable
+add_executable(sing_network_discovery_client
+    discovery_client.cpp
+)
+target_link_libraries(sing_network_discovery_client song)
+target_include_directories(sing_network_discovery_client PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+)
+
 # Convenience target
 add_custom_target(sing_network_discovery
-    DEPENDS sing_network_discovery_service sing_network_discovery_test
+    DEPENDS sing_network_discovery_service sing_network_discovery_test sing_network_discovery_client
 )
