@@ -82,10 +82,12 @@ int main(int argc, char* argv[]) {
     runtime.register_method(kService_Calculator, kMethod_Calculator_factorial);
     runtime.register_method(kService_Calculator, kMethod_Calculator_sum);
 
-    Log::debug("Calculator service ready");
+    Log::debug("Calculator service ready: " +
+               std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service on TCP (not pipes)
-    Log::info("Listening for connections...");
+    Log::info("Listening on port " + std::to_string(port));
     runtime.run_tcp(port);
 
     return 0;

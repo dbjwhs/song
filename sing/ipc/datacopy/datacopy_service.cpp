@@ -5,10 +5,11 @@
 // In-memory file storage with chunked transfer support
 
 #include <song/song.hpp>
+#include <song/logging.hpp>
 #include "datacopy.hpp"
-#include <iostream>
 #include <unordered_map>
 #include <algorithm>
+#include <string>
 
 using namespace song;
 using namespace song::datacopy;
@@ -128,7 +129,7 @@ void datacopy_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 }
 
 int main() {
-    std::cerr << "[datacopy_service] Starting...\n";
+    Log::info("IPC DataCopy service starting");
 
     ServiceRuntime runtime;
 
@@ -144,6 +145,9 @@ int main() {
     runtime.register_method(kService_DataCopy, kMethod_DataCopy_clear_all);
     runtime.register_method(kService_DataCopy, kMethod_DataCopy_file_exists);
     runtime.register_method(kService_DataCopy, kMethod_DataCopy_get_storage_used);
+
+    Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service
     runtime.run();

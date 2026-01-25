@@ -2,7 +2,8 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "calculator.hpp"
-#include <iostream>
+#include <song/logging.hpp>
+#include <string>
 
 using namespace song;
 using namespace song::calculator;
@@ -58,7 +59,7 @@ void calculator_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 }
 
 int main() {
-    std::cerr << "[calculator_service] Starting...\n";
+    Log::info("IPC Calculator service starting");
 
     ServiceRuntime runtime;
 
@@ -72,6 +73,9 @@ int main() {
     runtime.register_method(kService_Calculator, kMethod_Calculator_divide);
     runtime.register_method(kService_Calculator, kMethod_Calculator_factorial);
     runtime.register_method(kService_Calculator, kMethod_Calculator_sum);
+
+    Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service
     runtime.run();

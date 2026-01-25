@@ -61,6 +61,44 @@ void ServiceRuntime::register_factory(u32 type_id, ObjectFactory factory) {
     object_registry_.register_factory(type_id, std::move(factory));
 }
 
+// =============================================================================
+// Introspection
+// =============================================================================
+
+size_t ServiceRuntime::service_count() const {
+    return dispatchers_.size();
+}
+
+size_t ServiceRuntime::method_count() const {
+    return methods_.size();
+}
+
+std::vector<u16> ServiceRuntime::get_service_ids() const {
+    std::vector<u16> ids;
+    ids.reserve(dispatchers_.size());
+    for (const auto& [id, _] : dispatchers_) {
+        ids.push_back(id);
+    }
+    return ids;
+}
+
+const std::vector<wire::MethodDescriptor>& ServiceRuntime::get_methods() const {
+    return methods_;
+}
+
+bool ServiceRuntime::has_service(u16 service_id) const {
+    return dispatchers_.find(service_id) != dispatchers_.end();
+}
+
+bool ServiceRuntime::has_method(u16 service_id, u16 method_id) const {
+    for (const auto& m : methods_) {
+        if (m.service_id == service_id && m.method_id == method_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ServiceRuntime::send_init_confirmation_fd(int fd) {
     // Send init message with method list
     Buffer init_msg = wire::create_init_message(

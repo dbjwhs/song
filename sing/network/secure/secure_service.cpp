@@ -4,8 +4,9 @@
 #include "calculator.hpp"
 #include <song/transport.hpp>
 #include <song/security.hpp>
-#include <iostream>
+#include <song/logging.hpp>
 #include <cstdlib>
+#include <string>
 
 using namespace song;
 using namespace song::calculator;
@@ -50,7 +51,7 @@ void handle_secure_client(std::unique_ptr<Transport> tcp_transport) {
     SecurityConfig security(kSharedKey);
     SecureTransport transport(std::move(tcp_transport), security);
 
-    std::cerr << "[secure_service] Client connected with HMAC auth\n";
+    Log::info("Client connected with HMAC auth");
 
     // Simple message loop
     Buffer msg;
@@ -84,7 +85,7 @@ void handle_secure_client(std::unique_ptr<Transport> tcp_transport) {
         msg = Buffer{};  // Reset for next message
     }
 
-    std::cerr << "[secure_service] Client disconnected\n";
+    Log::info("Client disconnected");
 }
 
 int main(int argc, char* argv[]) {
@@ -93,11 +94,11 @@ int main(int argc, char* argv[]) {
         port = static_cast<u16>(std::atoi(argv[1]));
     }
 
-    std::cerr << "[secure_service] Starting on port " << port << " with HMAC auth...\n";
+    Log::info("Secure service starting on port " + std::to_string(port) + " with HMAC auth");
 
     TcpListener listener;
     listener.listen(port);
-    std::cerr << "[secure_service] Listening...\n";
+    Log::info("Listening for connections");
 
     // Accept and handle clients
     while (true) {

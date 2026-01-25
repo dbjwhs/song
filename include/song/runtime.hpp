@@ -49,6 +49,28 @@ public:
     /// Get the object registry (for advanced use cases)
     ObjectRegistry& objects() { return object_registry_; }
 
+    // -------------------------------------------------------------------------
+    // Introspection
+    // -------------------------------------------------------------------------
+
+    /// Get number of registered services (dispatchers)
+    size_t service_count() const;
+
+    /// Get total number of registered methods
+    size_t method_count() const;
+
+    /// Get list of registered service IDs
+    std::vector<u16> get_service_ids() const;
+
+    /// Get list of registered methods (service_id, method_id pairs)
+    const std::vector<wire::MethodDescriptor>& get_methods() const;
+
+    /// Check if a specific service is registered
+    bool has_service(u16 service_id) const;
+
+    /// Check if a specific method is registered
+    bool has_method(u16 service_id, u16 method_id) const;
+
     /// Main service loop - reads from stdin, writes to stdout (pipe mode)
     /// Never returns (until shutdown message received)
     [[noreturn]] void run();

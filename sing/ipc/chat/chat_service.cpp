@@ -5,11 +5,12 @@
 // Stateful chat service with message history
 
 #include <song/song.hpp>
+#include <song/logging.hpp>
 #include "chat.hpp"
-#include <iostream>
 #include <vector>
 #include <chrono>
 #include <algorithm>
+#include <string>
 
 using namespace song;
 using namespace song::chat;
@@ -120,7 +121,7 @@ void chat_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 }
 
 int main() {
-    std::cerr << "[chat_service] Starting...\n";
+    Log::info("IPC Chat service starting");
 
     ServiceRuntime runtime;
 
@@ -134,6 +135,9 @@ int main() {
     runtime.register_method(kService_Chat, kMethod_Chat_clear_history);
     runtime.register_method(kService_Chat, kMethod_Chat_get_message_count);
     runtime.register_method(kService_Chat, kMethod_Chat_message_exists);
+
+    Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service
     runtime.run();

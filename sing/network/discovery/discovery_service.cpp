@@ -2,8 +2,9 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "calculator.hpp"
-#include <iostream>
+#include <song/logging.hpp>
 #include <cstdlib>
+#include <string>
 
 using namespace song;
 using namespace song::calculator;
@@ -65,7 +66,7 @@ int main(int argc, char* argv[]) {
         instance_name = argv[1];
     }
 
-    std::cerr << "[discovery_service] Starting with mDNS registration: " << instance_name << "\n";
+    Log::info("Discovery service starting with mDNS registration: " + instance_name);
 
     ServiceRuntime runtime;
 
@@ -79,6 +80,9 @@ int main(int argc, char* argv[]) {
     runtime.register_method(kService_Calculator, kMethod_Calculator_divide);
     runtime.register_method(kService_Calculator, kMethod_Calculator_factorial);
     runtime.register_method(kService_Calculator, kMethod_Calculator_sum);
+
+    Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service with mDNS discovery registration
     // Port 0 = let OS assign an ephemeral port

@@ -2,10 +2,11 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "stockticker.hpp"
-#include <iostream>
+#include <song/logging.hpp>
 #include <unordered_map>
 #include <chrono>
 #include <cmath>
+#include <string>
 
 using namespace song;
 using namespace song::stockticker;
@@ -132,7 +133,7 @@ void stockticker_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 }
 
 int main() {
-    std::cerr << "[stockticker_service] Starting...\n";
+    Log::info("IPC StockTicker service starting");
 
     ServiceRuntime runtime;
 
@@ -146,6 +147,9 @@ int main() {
     runtime.register_method(kService_StockTicker, kMethod_StockTicker_get_market_status);
     runtime.register_method(kService_StockTicker, kMethod_StockTicker_symbol_exists);
     runtime.register_method(kService_StockTicker, kMethod_StockTicker_list_symbols);
+
+    Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
+               std::to_string(runtime.method_count()) + " method(s)");
 
     // Run the service
     runtime.run();
