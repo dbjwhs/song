@@ -31,6 +31,7 @@ add_executable(song_tests
     registry_test.cpp
     object_test.cpp
     logging_test.cpp
+    runtime_test.cpp
     lexer_test.cpp
     parser_test.cpp
     resolver_test.cpp
@@ -52,4 +53,7 @@ target_include_directories(song_tests PRIVATE
 )
 
 # Discover tests for CTest
-gtest_discover_tests(song_tests)
+# RESOURCE_LOCK prevents parallel execution of tests that use network ports
+gtest_discover_tests(song_tests
+    PROPERTIES RESOURCE_LOCK network_ports
+)

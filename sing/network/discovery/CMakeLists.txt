@@ -30,8 +30,10 @@ target_include_directories(sing_network_discovery_test PRIVATE
 add_dependencies(sing_network_discovery_test sing_network_discovery_service)
 
 # Register tests with CTest
+# RESOURCE_LOCK prevents parallel execution with other network tests
 gtest_discover_tests(sing_network_discovery_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    PROPERTIES RESOURCE_LOCK network_ports
 )
 
 # Client executable
