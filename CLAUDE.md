@@ -34,8 +34,8 @@ cd examples
 Build targets:
 - `libsong` - Static library with core runtime
 - `songc` - IDL compiler for .song files
-- `song_tests` - Unit test suite (216+ tests)
-- `sing_*` - Integration test services and tests (76 tests)
+- `song_tests` - Unit test suite (396 tests)
+- `sing_*` - Integration test services and tests (94 tests)
 
 ## Code Style
 
@@ -104,13 +104,18 @@ Buffer resp = conn.call(service_id, method_id, request);
 - Semantic resolver with type checking
 - Code generator producing C++ headers (proxy, interface, dispatcher)
 
-**Integration Test Suite** (`sing/`): 4 standalone projects demonstrating Song:
-- Calculator - basic RPC, primitives, struct returns
-- Stock Ticker - complex types, arrays of structs
-- Chat - stateful services, message history, pagination
-- Data Copy - binary data, chunked file transfer
+**Integration Test Suite** (`sing/`): 7 projects demonstrating Song:
+- IPC: Calculator, Stock Ticker, Chat, Data Copy (pipe-based)
+- Network: TCP Calculator, Discovery, Secure (TCP-based)
 
-**Test coverage**: 292 tests (216 unit + 76 integration)
+**Logging System**: Pluggable handler-based logging with:
+- Log levels: debug, info, warn, error, fatal
+- Built-in handlers: colored console, null, callback
+- Source location capture (file/line/function)
+
+**Runtime Introspection**: service_count(), method_count(), get_service_ids(), has_service()
+
+**Test coverage**: 490 tests (396 unit + 94 integration)
 
 Not yet implemented:
 - Streaming support, property support

@@ -12,6 +12,7 @@
 - **Minimal Footprint**: Suitable for embedded Linux, IoT devices, resource-constrained systems
 - **Clean Architecture**: Modern C++20, no external dependencies beyond POSIX
 - **Full IDL Compiler**: Complete pipeline from `.song` files to C++ code
+- **Pluggable Logging**: Handler-based logging system with colored console output
 
 ## Architecture
 
@@ -48,7 +49,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (351 tests)
+# Run all tests (490 tests)
 ctest --output-on-failure
 ```
 
@@ -259,18 +260,26 @@ while (running) {
 
 ## Integration Test Suite (Sing)
 
-The `sing/` folder contains four complete example projects demonstrating Song's capabilities. Each project includes a `.song` IDL file, generated code, server implementation, and comprehensive integration tests.
+The `sing/` folder contains complete example projects demonstrating Song's capabilities. Each project includes a `.song` IDL file, generated code, server implementation, and comprehensive integration tests.
 
 See [sing/README.md](sing/README.md) for detailed documentation.
 
-### Projects
+### IPC Tests (Local Pipes)
 
 | Project | Tests | Description |
 |---------|-------|-------------|
-| [Calculator](sing/calculator/) | 13 | Basic arithmetic RPC, struct returns, error handling |
-| [Stock Ticker](sing/stockticker/) | 15 | Complex structs, arrays of structs, batch queries |
-| [Chat](sing/chat/) | 23 | Stateful server, message history, pagination |
-| [Data Copy](sing/datacopy/) | 25 | Binary data, chunked file transfer, CRUD operations |
+| [Calculator](sing/ipc/calculator/) | 13 | Basic arithmetic RPC, struct returns, error handling |
+| [Stock Ticker](sing/ipc/stockticker/) | 15 | Complex structs, arrays of structs, batch queries |
+| [Chat](sing/ipc/chat/) | 23 | Stateful server, message history, pagination |
+| [Data Copy](sing/ipc/datacopy/) | 25 | Binary data, chunked file transfer, CRUD operations |
+
+### Network Tests (TCP)
+
+| Project | Tests | Description |
+|---------|-------|-------------|
+| [TCP Calculator](sing/network/tcp_calculator/) | 9 | Calculator service over TCP sockets |
+| [Discovery](sing/network/discovery/) | 4 | mDNS zero-config service discovery |
+| [Secure](sing/network/secure/) | 5 | HMAC-SHA256 authenticated communication |
 
 ### Running Integration Tests
 
@@ -281,10 +290,8 @@ cd build
 ctest -R sing_
 
 # Run individual test suites
-./sing/calculator/sing_calculator_test
-./sing/stockticker/sing_stockticker_test
-./sing/chat/sing_chat_test
-./sing/datacopy/sing_datacopy_test
+./sing/ipc/calculator/sing_ipc_calculator_test
+./sing/network/tcp_calculator/sing_network_tcp_calculator_test
 ```
 
 ## Current Status
@@ -329,16 +336,21 @@ ctest -R sing_
 - **ServiceRuntime**: Handles all object message types with factory registration
 - **Class Code Generation**: Proxy classes (client), skeleton base classes (server) with DAG-style macro pattern
 
+### Phase 5: Logging and Introspection [COMPLETE]
+- **Pluggable Logging**: Handler-based system with Log::debug/info/warn/error/fatal
+- **Built-in Handlers**: Colored console, null, callback
+- **Source Location**: Automatic file/line/function capture
+- **Runtime Introspection**: service_count(), method_count(), get_service_ids(), has_service()
+
 ### Test Coverage
-- **360 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, lexer, parser, resolver, codegen
-- **76 integration tests**: calculator, stockticker, chat, datacopy
-- **Total: 436 tests**
+- **396 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, logging, runtime, lexer, parser, resolver, codegen
+- **94 integration tests**: IPC (calculator, stockticker, chat, datacopy) + Network (tcp_calculator, discovery, secure)
+- **Total: 490 tests**
 
 ### Coming Soon
 - Streaming support (bidirectional message streams)
 - Property change notifications
 - Linux Avahi support for mDNS discovery
-- Network integration tests (TCP, mDNS discovery)
 
 ## Project Structure
 
@@ -357,6 +369,7 @@ song/
 │   ├── security.hpp      # HMAC authentication
 │   ├── registry.hpp      # Cross-subnet registry
 │   ├── object.hpp        # Object base class and registry
+│   ├── logging.hpp       # Pluggable logging system
 │   ├── error.hpp         # Error types
 │   └── song.hpp          # Main include
 ├── src/
@@ -370,7 +383,8 @@ song/
 │   ├── discovery.cpp     # mDNS implementation (macOS Bonjour)
 │   ├── security.cpp      # HMAC (CommonCrypto/OpenSSL)
 │   ├── registry.cpp      # Registry client/server
-│   └── object.cpp        # ObjectRegistry implementation
+│   ├── object.cpp        # ObjectRegistry implementation
+│   └── logging.cpp       # Logging implementation
 ├── compiler/
 │   ├── ast.hpp           # AST node definitions
 │   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
@@ -378,18 +392,23 @@ song/
 │   ├── resolver.hpp/cpp  # Semantic analysis
 │   ├── codegen.hpp/cpp   # C++ code generation
 │   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (275 tests)
+├── test/                 # Unit tests (396 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example
 │   ├── crash/            # Auto-restart test
 │   └── registry/         # Registry service
-└── sing/                 # Integration test suite (76 tests)
+└── sing/                 # Integration test suite (94 tests)
     ├── README.md         # Sing documentation
-    ├── calculator/       # Basic RPC patterns
-    ├── stockticker/      # Complex types, arrays
-    ├── chat/             # Stateful services
-    └── datacopy/         # Binary data handling
+    ├── ipc/              # Local pipe-based tests
+    │   ├── calculator/   # Basic RPC patterns
+    │   ├── stockticker/  # Complex types, arrays
+    │   ├── chat/         # Stateful services
+    │   └── datacopy/     # Binary data handling
+    └── network/          # TCP network tests
+        ├── tcp_calculator/  # TCP transport
+        ├── discovery/       # mDNS discovery
+        └── secure/          # HMAC authentication
 ```
 
 ## Code Quality
