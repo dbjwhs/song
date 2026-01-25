@@ -29,6 +29,7 @@ add_library(song STATIC
     src/security.cpp
     src/registry.cpp
     src/object.cpp
+    src/logging.cpp
 )
 target_include_directories(song PUBLIC include)
 

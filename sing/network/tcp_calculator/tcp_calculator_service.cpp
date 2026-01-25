@@ -2,8 +2,9 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "calculator.hpp"
-#include <iostream>
+#include <song/logging.hpp>
 #include <cstdlib>
+#include <string>
 
 using namespace song;
 using namespace song::calculator;
@@ -55,6 +56,7 @@ static CalculatorImpl g_calculator;
 
 // Dispatcher wrapper for ServiceRuntime
 void calculator_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
+    Log::debug("Dispatching method " + std::to_string(method_id));
     dispatch_Calculator(g_calculator, method_id, request, response);
 }
 
@@ -65,7 +67,7 @@ int main(int argc, char* argv[]) {
         port = static_cast<u16>(std::atoi(argv[1]));
     }
 
-    std::cerr << "[tcp_calculator_service] Starting on port " << port << "...\n";
+    Log::info("Starting TCP Calculator service on port " + std::to_string(port));
 
     ServiceRuntime runtime;
 
@@ -80,7 +82,10 @@ int main(int argc, char* argv[]) {
     runtime.register_method(kService_Calculator, kMethod_Calculator_factorial);
     runtime.register_method(kService_Calculator, kMethod_Calculator_sum);
 
+    Log::debug("Calculator service ready");
+
     // Run the service on TCP (not pipes)
+    Log::info("Listening for connections...");
     runtime.run_tcp(port);
 
     return 0;
