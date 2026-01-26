@@ -1,8 +1,7 @@
 // MIT License
 // Copyright (c) 2026 dbjwhs
 
-#ifndef SONG_LOGGING_HPP
-#define SONG_LOGGING_HPP
+#pragma once
 
 #include <functional>
 #include <string>
@@ -166,5 +165,3 @@ LogHandler make_callback_handler(SimpleCallback callback);
 void init_logging();
 
 } // namespace song
-
-#endif // SONG_LOGGING_HPP

@@ -132,12 +132,18 @@ void encode_f64(Buffer& buf, f64 val) {
 }
 
 void encode_string(Buffer& buf, std::string_view val) {
+    if (val.size() > kMaxStringSize) {
+        throw std::runtime_error("String too large to encode");
+    }
     u32 len = static_cast<u32>(val.size());
     encode_u32(buf, len);
     buf.write(val.data(), len);
 }
 
 void encode_bytes(Buffer& buf, std::span<const std::byte> val) {
+    if (val.size() > kMaxBytesSize) {
+        throw std::runtime_error("Byte array too large to encode");
+    }
     u32 len = static_cast<u32>(val.size());
     encode_u32(buf, len);
     buf.write(val.data(), len);

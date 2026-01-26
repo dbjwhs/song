@@ -31,6 +31,12 @@ enum class ErrorCode : u16 {
     service_timeout = 202,
     spawn_failed = 203,
 
+    // Object errors (300-399)
+    object_not_found = 300,
+    object_creation_failed = 301,
+    property_error = 302,
+    invalid_object_type = 303,
+
     // Application errors (1000+)
     // Reserved for service-specific errors
 };

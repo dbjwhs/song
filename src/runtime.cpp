@@ -184,7 +184,7 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::object_creation_failed,
                 e.what()
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
@@ -202,7 +202,13 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         try {
             Object* obj = object_registry_.get(prop_hdr.object_id);
             if (!obj) {
-                throw ServiceError("Object not found");
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                write_all(write_fd, error_msg.data(), error_msg.size());
+                return;
             }
 
             obj->prop_get(prop_hdr.property_id, response);
@@ -212,7 +218,7 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::property_error,
                 e.what()
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
@@ -225,7 +231,13 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         try {
             Object* obj = object_registry_.get(prop_hdr.object_id);
             if (!obj) {
-                throw ServiceError("Object not found");
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                write_all(write_fd, error_msg.data(), error_msg.size());
+                return;
             }
 
             obj->prop_set(prop_hdr.property_id, payload, response);
@@ -235,7 +247,7 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::property_error,
                 e.what()
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
@@ -298,7 +310,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::object_creation_failed,
                 e.what()
             );
             transport.send(error_msg);
@@ -316,7 +328,13 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         try {
             Object* obj = object_registry_.get(prop_hdr.object_id);
             if (!obj) {
-                throw ServiceError("Object not found");
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                transport.send(error_msg);
+                return;
             }
 
             obj->prop_get(prop_hdr.property_id, response);
@@ -326,7 +344,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::property_error,
                 e.what()
             );
             transport.send(error_msg);
@@ -339,7 +357,13 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         try {
             Object* obj = object_registry_.get(prop_hdr.object_id);
             if (!obj) {
-                throw ServiceError("Object not found");
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                transport.send(error_msg);
+                return;
             }
 
             obj->prop_set(prop_hdr.property_id, payload, response);
@@ -349,7 +373,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         } catch (const std::exception& e) {
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
-                ErrorCode::unknown_service,
+                ErrorCode::property_error,
                 e.what()
             );
             transport.send(error_msg);

@@ -223,10 +223,7 @@ ServiceConnection ServiceManager::connect(std::string_view name) {
 
         // If mDNS failed or unavailable, try registry
         if (port == 0 && has_registry()) {
-            // Temporarily release lock to avoid deadlock with registry_client()
-            mutex_.unlock();
-            auto* client = registry_client();
-            mutex_.lock();
+            auto* client = registry_client_unlocked();
 
             if (client && client->is_connected()) {
                 auto info = client->discover(std::string(name));
@@ -475,6 +472,11 @@ void ServiceManager::set_registry(std::string_view host, u16 port) {
 
 RegistryClient* ServiceManager::registry_client() {
     std::lock_guard lock(mutex_);
+    return registry_client_unlocked();
+}
+
+RegistryClient* ServiceManager::registry_client_unlocked() {
+    // Caller must hold mutex_
 
     if (!has_registry()) {
         return nullptr;

@@ -150,6 +150,9 @@ private:
     const ServiceEntry* find_service(std::string_view name) const;
 
     void monitor_loop();
+
+    // Internal: get registry client without locking (caller must hold mutex_)
+    RegistryClient* registry_client_unlocked();
 };
 
 } // namespace song
