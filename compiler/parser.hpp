@@ -1,8 +1,7 @@
 // MIT License
 // Copyright (c) 2026 dbjwhs
 
-#ifndef SONG_PARSER_HPP
-#define SONG_PARSER_HPP
+#pragma once
 
 #include "lexer.hpp"
 #include "ast.hpp"
@@ -70,5 +69,3 @@ private:
 };
 
 } // namespace song
-
-#endif // SONG_PARSER_HPP

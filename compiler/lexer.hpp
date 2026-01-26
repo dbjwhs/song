@@ -1,8 +1,7 @@
 // MIT License
 // Copyright (c) 2026 dbjwhs
 
-#ifndef SONG_LEXER_HPP
-#define SONG_LEXER_HPP
+#pragma once
 
 #include <string>
 #include <string_view>
@@ -135,5 +134,3 @@ private:
 };
 
 } // namespace song
-
-#endif // SONG_LEXER_HPP

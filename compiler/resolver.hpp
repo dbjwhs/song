@@ -1,8 +1,7 @@
 // MIT License
 // Copyright (c) 2026 dbjwhs
 
-#ifndef SONG_RESOLVER_HPP
-#define SONG_RESOLVER_HPP
+#pragma once
 
 #include "ast.hpp"
 #include <string>
@@ -132,5 +131,3 @@ private:
 const char* type_kind_to_string(TypeKind kind);
 
 } // namespace song
-
-#endif // SONG_RESOLVER_HPP

@@ -55,8 +55,17 @@ protected:
             _exit(1);
         }
 
-        // Wait for server to start
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // Wait for server to start - retry connection to verify it's ready
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
+            try {
+                TcpTransport tcp;
+                tcp.connect("127.0.0.1", kTestPort, 1000);
+                return;  // Server is ready
+            } catch (const std::exception&) {
+                // Server not ready yet, retry
+            }
+        }
     }
 
     void TearDown() override {

@@ -4,6 +4,7 @@
 #include "codegen.hpp"
 #include <sstream>
 #include <cstdint>
+#include <cctype>
 
 namespace song::compiler {
 
@@ -702,7 +703,7 @@ std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
     std::ostringstream out;
     std::string upper_name;
     for (char ch : c.name) {
-        upper_name += static_cast<char>(toupper(ch));
+        upper_name += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
     }
 
     if (!c.doc.empty()) {

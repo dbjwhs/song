@@ -51,11 +51,21 @@ protected:
             _exit(1);  // exec failed
         }
 
-        // Parent: wait for server to start listening
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        // Register the remote service and connect
+        // Parent: wait for server to start listening with retry
         mgr_.register_remote_service("tcp_calc", "127.0.0.1", kTestPort, 1);
+
+        // Retry connection up to 10 times with exponential backoff
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
+            try {
+                conn_ = std::make_unique<ServiceConnection>(mgr_.connect("tcp_calc"));
+                return;  // Success
+            } catch (const std::exception&) {
+                // Server not ready yet, retry
+            }
+        }
+
+        // Last attempt - let it throw if it fails
         conn_ = std::make_unique<ServiceConnection>(mgr_.connect("tcp_calc"));
     }
 
