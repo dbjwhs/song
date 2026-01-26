@@ -87,6 +87,66 @@ TEST(CodegenTest, StructWithOptionalField) {
     EXPECT_NE(code.find("std::optional<std::string> nickname;"), std::string::npos);
 }
 
+TEST(CodegenTest, StructWith2DArray) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Matrix {
+            f64[][] data;
+        }
+    )");
+
+    // Type should be nested vector
+    EXPECT_NE(code.find("std::vector<std::vector<f64>> data;"), std::string::npos);
+    // Encode should use nested vector template
+    EXPECT_NE(code.find("encode_array<std::vector<f64>>"), std::string::npos);
+    // Decode should use nested vector template
+    EXPECT_NE(code.find("decode_array<std::vector<f64>>"), std::string::npos);
+}
+
+TEST(CodegenTest, StructWith3DArray) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Tensor {
+            i32[][][] values;
+        }
+    )");
+
+    // Type should be triple-nested vector
+    EXPECT_NE(code.find("std::vector<std::vector<std::vector<i32>>> values;"), std::string::npos);
+    // Encode should use double-nested vector template
+    EXPECT_NE(code.find("encode_array<std::vector<std::vector<i32>>>"), std::string::npos);
+    // Decode should use double-nested vector template
+    EXPECT_NE(code.find("decode_array<std::vector<std::vector<i32>>>"), std::string::npos);
+}
+
+TEST(CodegenTest, ServiceWith2DArrayParam) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        service Calculator {
+            sum_matrix(f64[][] matrix) -> f64;
+        }
+    )");
+
+    // Parameter type
+    EXPECT_NE(code.find("const std::vector<std::vector<f64>>& matrix"), std::string::npos);
+    // Encode call in proxy
+    EXPECT_NE(code.find("encode_array<std::vector<f64>>"), std::string::npos);
+}
+
+TEST(CodegenTest, ServiceWith2DArrayReturn) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        service Grid {
+            get_data() -> i32[][];
+        }
+    )");
+
+    // Return type
+    EXPECT_NE(code.find("std::vector<std::vector<i32>> get_data()"), std::string::npos);
+    // Decode call in proxy
+    EXPECT_NE(code.find("decode_array<std::vector<i32>>"), std::string::npos);
+}
+
 // =============================================================================
 // Enum Generation
 // =============================================================================

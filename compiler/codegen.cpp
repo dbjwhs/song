@@ -45,13 +45,16 @@ std::string CodeGenerator::type_to_cpp(const Type& t) {
 std::string CodeGenerator::type_to_param(const Type& t, const std::string& name) {
     std::string cpp_type = type_to_cpp(t);
 
-    // Pass by const ref for complex types
+    // Pass by const ref for complex types (arrays, optionals, strings, bytes, user types)
     bool by_ref = t.is_array || t.is_optional;
-    if (is_primitive(t)) {
-        auto p = get_primitive(t);
-        by_ref = (p == PrimitiveType::string || p == PrimitiveType::bytes);
-    } else {
-        by_ref = true;  // User-defined types always by ref
+    if (!by_ref) {
+        // Only check primitive rules if not already by_ref
+        if (is_primitive(t)) {
+            auto p = get_primitive(t);
+            by_ref = (p == PrimitiveType::string || p == PrimitiveType::bytes);
+        } else {
+            by_ref = true;  // User-defined types always by ref
+        }
     }
 
     if (by_ref) {
@@ -63,15 +66,19 @@ std::string CodeGenerator::type_to_param(const Type& t, const std::string& name)
 // Generate encode call for a type
 std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
     if (t.is_array) {
+        // Peel off one array dimension to get element type
         Type elem = t;
-        elem.is_array = false;
-        elem.array_dimensions = 0;
+        int dims = elem.array_dimensions > 0 ? elem.array_dimensions : 1;
+        elem.array_dimensions = dims - 1;
+        elem.is_array = (elem.array_dimensions > 0);
 
-        if (is_primitive(elem)) {
-            return "encode_array<" + std::string(primitive_to_cpp(get_primitive(elem))) +
-                   ">(buf, " + expr + ")";
-        } else {
+        // For user-defined types (structs), use generated helpers
+        // For primitives and nested arrays, use template
+        if (!elem.is_array && !is_primitive(elem)) {
             return "encode_array_" + get_user_type(elem) + "(buf, " + expr + ")";
+        } else {
+            // Use template with element type (handles primitives and nested vectors)
+            return "encode_array<" + type_to_cpp(elem) + ">(buf, " + expr + ")";
         }
     }
 
@@ -109,14 +116,19 @@ std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
 // Generate decode call for a type
 std::string CodeGenerator::decode_call(const Type& t) {
     if (t.is_array) {
+        // Peel off one array dimension to get element type
         Type elem = t;
-        elem.is_array = false;
-        elem.array_dimensions = 0;
+        int dims = elem.array_dimensions > 0 ? elem.array_dimensions : 1;
+        elem.array_dimensions = dims - 1;
+        elem.is_array = (elem.array_dimensions > 0);
 
-        if (is_primitive(elem)) {
-            return "decode_array<" + std::string(primitive_to_cpp(get_primitive(elem))) + ">(buf)";
-        } else {
+        // For user-defined types (structs), use generated helpers
+        // For primitives and nested arrays, use template
+        if (!elem.is_array && !is_primitive(elem)) {
             return "decode_array_" + get_user_type(elem) + "(buf)";
+        } else {
+            // Use template with element type (handles primitives and nested vectors)
+            return "decode_array<" + type_to_cpp(elem) + ">(buf)";
         }
     }
 

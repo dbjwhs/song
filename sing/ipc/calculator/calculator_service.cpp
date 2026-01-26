@@ -41,10 +41,55 @@ public:
         return result;
     }
 
-    i64 sum(std::vector<i32> values) override {
+    i64 sum(const std::vector<i32>& values) override {
         i64 result = 0;
         for (auto v : values) {
             result += v;
+        }
+        return result;
+    }
+
+    f64 sum_matrix(const std::vector<std::vector<f64>>& matrix) override {
+        f64 result = 0.0;
+        for (const auto& row : matrix) {
+            for (auto val : row) {
+                result += val;
+            }
+        }
+        return result;
+    }
+
+    std::vector<std::vector<i32>> transpose(const std::vector<std::vector<i32>>& matrix) override {
+        if (matrix.empty()) return {};
+
+        // Handle jagged arrays - find max row length
+        size_t max_cols = 0;
+        for (const auto& row : matrix) {
+            max_cols = std::max(max_cols, row.size());
+        }
+
+        if (max_cols == 0) return {};
+
+        std::vector<std::vector<i32>> result(max_cols);
+        for (size_t i = 0; i < matrix.size(); ++i) {
+            for (size_t j = 0; j < matrix[i].size(); ++j) {
+                if (result[j].size() <= i) {
+                    result[j].resize(i + 1, 0);
+                }
+                result[j][i] = matrix[i][j];
+            }
+        }
+        return result;
+    }
+
+    std::vector<i32> flatten_3d(const std::vector<std::vector<std::vector<i32>>>& cube) override {
+        std::vector<i32> result;
+        for (const auto& plane : cube) {
+            for (const auto& row : plane) {
+                for (auto val : row) {
+                    result.push_back(val);
+                }
+            }
         }
         return result;
     }
@@ -73,6 +118,9 @@ int main() {
     runtime.register_method(kService_Calculator, kMethod_Calculator_divide);
     runtime.register_method(kService_Calculator, kMethod_Calculator_factorial);
     runtime.register_method(kService_Calculator, kMethod_Calculator_sum);
+    runtime.register_method(kService_Calculator, kMethod_Calculator_sum_matrix);
+    runtime.register_method(kService_Calculator, kMethod_Calculator_transpose);
+    runtime.register_method(kService_Calculator, kMethod_Calculator_flatten_3d);
 
     Log::debug("Service ready: " + std::to_string(runtime.service_count()) + " service(s), " +
                std::to_string(runtime.method_count()) + " method(s)");

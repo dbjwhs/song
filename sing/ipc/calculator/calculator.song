@@ -30,4 +30,13 @@ service Calculator {
 
     /// Sum an array of numbers
     sum(i32[] values) -> i64;
+
+    /// Sum all elements in a 2D matrix
+    sum_matrix(f64[][] matrix) -> f64;
+
+    /// Transpose a 2D matrix (swap rows and columns)
+    transpose(i32[][] matrix) -> i32[][];
+
+    /// Flatten a 3D array to 1D
+    flatten_3d(i32[][][] cube) -> i32[];
 }

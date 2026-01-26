@@ -207,3 +207,179 @@ TEST_F(CalculatorTest, NegativeNumbers) {
     EXPECT_EQ(calc.subtract(-100, -200), 100);
     EXPECT_EQ(calc.multiply(-100, -200), 20000);
 }
+
+// =============================================================================
+// 2D Array Tests (Matrix Operations)
+// =============================================================================
+
+TEST_F(CalculatorTest, SumMatrixEmpty) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<f64>> empty;
+    EXPECT_DOUBLE_EQ(calc.sum_matrix(empty), 0.0);
+}
+
+TEST_F(CalculatorTest, SumMatrixSingleElement) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<f64>> matrix = {{42.5}};
+    EXPECT_DOUBLE_EQ(calc.sum_matrix(matrix), 42.5);
+}
+
+TEST_F(CalculatorTest, SumMatrixRegular) {
+    CalculatorProxy calc(*conn_);
+
+    // 2x3 matrix
+    std::vector<std::vector<f64>> matrix = {
+        {1.0, 2.0, 3.0},
+        {4.0, 5.0, 6.0}
+    };
+    // Sum = 1+2+3+4+5+6 = 21
+    EXPECT_DOUBLE_EQ(calc.sum_matrix(matrix), 21.0);
+}
+
+TEST_F(CalculatorTest, SumMatrixJagged) {
+    CalculatorProxy calc(*conn_);
+
+    // Jagged array (different row lengths)
+    std::vector<std::vector<f64>> matrix = {
+        {1.0, 2.0},
+        {3.0},
+        {4.0, 5.0, 6.0}
+    };
+    // Sum = 1+2+3+4+5+6 = 21
+    EXPECT_DOUBLE_EQ(calc.sum_matrix(matrix), 21.0);
+}
+
+TEST_F(CalculatorTest, SumMatrixWithEmptyRows) {
+    CalculatorProxy calc(*conn_);
+
+    // Sparse array with empty rows
+    std::vector<std::vector<f64>> matrix = {
+        {1.0, 2.0},
+        {},
+        {3.0}
+    };
+    // Sum = 1+2+3 = 6
+    EXPECT_DOUBLE_EQ(calc.sum_matrix(matrix), 6.0);
+}
+
+TEST_F(CalculatorTest, TransposeEmpty) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<i32>> empty;
+    auto result = calc.transpose(empty);
+    EXPECT_TRUE(result.empty());
+}
+
+TEST_F(CalculatorTest, TransposeRegular) {
+    CalculatorProxy calc(*conn_);
+
+    // 2x3 matrix
+    std::vector<std::vector<i32>> matrix = {
+        {1, 2, 3},
+        {4, 5, 6}
+    };
+
+    auto result = calc.transpose(matrix);
+
+    // Should be 3x2 matrix
+    ASSERT_EQ(result.size(), 3);
+    ASSERT_EQ(result[0].size(), 2);
+    ASSERT_EQ(result[1].size(), 2);
+    ASSERT_EQ(result[2].size(), 2);
+
+    EXPECT_EQ(result[0][0], 1);
+    EXPECT_EQ(result[0][1], 4);
+    EXPECT_EQ(result[1][0], 2);
+    EXPECT_EQ(result[1][1], 5);
+    EXPECT_EQ(result[2][0], 3);
+    EXPECT_EQ(result[2][1], 6);
+}
+
+TEST_F(CalculatorTest, TransposeSingleRow) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<i32>> matrix = {{1, 2, 3, 4}};
+
+    auto result = calc.transpose(matrix);
+
+    // Should be 4x1 matrix
+    ASSERT_EQ(result.size(), 4);
+    for (size_t i = 0; i < 4; ++i) {
+        ASSERT_GE(result[i].size(), 1);
+        EXPECT_EQ(result[i][0], static_cast<i32>(i + 1));
+    }
+}
+
+// =============================================================================
+// 3D Array Tests
+// =============================================================================
+
+TEST_F(CalculatorTest, Flatten3DEmpty) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<std::vector<i32>>> empty;
+    auto result = calc.flatten_3d(empty);
+    EXPECT_TRUE(result.empty());
+}
+
+TEST_F(CalculatorTest, Flatten3DSingleElement) {
+    CalculatorProxy calc(*conn_);
+
+    std::vector<std::vector<std::vector<i32>>> cube = {{{42}}};
+    auto result = calc.flatten_3d(cube);
+
+    ASSERT_EQ(result.size(), 1);
+    EXPECT_EQ(result[0], 42);
+}
+
+TEST_F(CalculatorTest, Flatten3DRegular) {
+    CalculatorProxy calc(*conn_);
+
+    // 2x2x2 cube
+    std::vector<std::vector<std::vector<i32>>> cube = {
+        {{1, 2}, {3, 4}},
+        {{5, 6}, {7, 8}}
+    };
+
+    auto result = calc.flatten_3d(cube);
+
+    // Should be [1,2,3,4,5,6,7,8]
+    std::vector<i32> expected = {1, 2, 3, 4, 5, 6, 7, 8};
+    EXPECT_EQ(result, expected);
+}
+
+TEST_F(CalculatorTest, Flatten3DJagged) {
+    CalculatorProxy calc(*conn_);
+
+    // Jagged 3D array
+    std::vector<std::vector<std::vector<i32>>> cube = {
+        {{1, 2}, {3}},       // First plane: 2 rows with 2 and 1 elements
+        {{4, 5, 6}},         // Second plane: 1 row with 3 elements
+        {{7}, {8, 9}, {10}}  // Third plane: 3 rows with 1, 2, and 1 elements
+    };
+
+    auto result = calc.flatten_3d(cube);
+
+    // Should be [1,2,3,4,5,6,7,8,9,10]
+    std::vector<i32> expected = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    EXPECT_EQ(result, expected);
+}
+
+TEST_F(CalculatorTest, Flatten3DWithEmptyLayers) {
+    CalculatorProxy calc(*conn_);
+
+    // Sparse 3D array with empty planes and rows
+    std::vector<std::vector<std::vector<i32>>> cube = {
+        {{1, 2}},
+        {},           // Empty plane
+        {{}, {3, 4}}  // Plane with empty row followed by populated row
+    };
+
+    auto result = calc.flatten_3d(cube);
+
+    // Should be [1,2,3,4]
+    std::vector<i32> expected = {1, 2, 3, 4};
+    EXPECT_EQ(result, expected);
+}

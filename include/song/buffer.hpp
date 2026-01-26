@@ -14,6 +14,11 @@
 
 namespace song {
 
+// Type trait to detect std::vector for nested array support
+template<typename T> struct is_std_vector : std::false_type {};
+template<typename T, typename A> struct is_std_vector<std::vector<T, A>> : std::true_type {};
+template<typename T> constexpr bool is_std_vector_v = is_std_vector<T>::value;
+
 /// Fixed-size buffer with small-buffer optimization
 /// Uses inline storage for small allocations (< 4KB)
 class Buffer {
@@ -142,6 +147,9 @@ void encode_array(Buffer& buf, std::span<const T> vals) {
             encode_f64(buf, val);
         } else if constexpr (std::is_same_v<T, std::string>) {
             encode_string(buf, val);
+        } else if constexpr (is_std_vector_v<T>) {
+            // Recursive case: T is std::vector<U>, encode as nested array
+            encode_array<typename T::value_type>(buf, val);
         } else {
             static_assert(sizeof(T) == 0, "Unsupported array element type");
         }
@@ -183,6 +191,9 @@ std::vector<T> decode_array(Buffer& buf) {
             result.push_back(decode_f64(buf));
         } else if constexpr (std::is_same_v<T, std::string>) {
             result.push_back(decode_string(buf));
+        } else if constexpr (is_std_vector_v<T>) {
+            // Recursive case: T is std::vector<U>, decode as nested array
+            result.push_back(decode_array<typename T::value_type>(buf));
         } else {
             static_assert(sizeof(T) == 0, "Unsupported array element type");
         }

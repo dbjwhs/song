@@ -319,6 +319,111 @@ TEST(BufferTest, F64ArrayRoundtrip) {
 }
 
 // =============================================================================
+// Multi-dimensional Arrays
+// =============================================================================
+
+TEST(BufferTest, TwoDimensionalI32ArrayRoundtrip) {
+    Buffer buf;
+    std::vector<std::vector<i32>> data = {
+        {1, 2, 3},
+        {4, 5},
+        {6, 7, 8, 9}
+    };
+    encode_array<std::vector<i32>>(buf, data);
+
+    auto result = decode_array<std::vector<i32>>(buf);
+    ASSERT_EQ(result.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result[i], data[i]);
+    }
+}
+
+TEST(BufferTest, TwoDimensionalF64ArrayRoundtrip) {
+    Buffer buf;
+    std::vector<std::vector<f64>> data = {
+        {1.1, 2.2},
+        {3.3, 4.4, 5.5}
+    };
+    encode_array<std::vector<f64>>(buf, data);
+
+    auto result = decode_array<std::vector<f64>>(buf);
+    ASSERT_EQ(result.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        ASSERT_EQ(result[i].size(), data[i].size());
+        for (size_t j = 0; j < data[i].size(); ++j) {
+            EXPECT_DOUBLE_EQ(result[i][j], data[i][j]);
+        }
+    }
+}
+
+TEST(BufferTest, TwoDimensionalStringArrayRoundtrip) {
+    Buffer buf;
+    std::vector<std::vector<std::string>> data = {
+        {"hello", "world"},
+        {"foo"},
+        {"bar", "baz", "qux"}
+    };
+    encode_array<std::vector<std::string>>(buf, data);
+
+    auto result = decode_array<std::vector<std::string>>(buf);
+    ASSERT_EQ(result.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result[i], data[i]);
+    }
+}
+
+TEST(BufferTest, ThreeDimensionalI32ArrayRoundtrip) {
+    Buffer buf;
+    std::vector<std::vector<std::vector<i32>>> data = {
+        {{1, 2}, {3}},
+        {{4, 5, 6}},
+        {{7}, {8, 9}, {10, 11, 12}}
+    };
+    encode_array<std::vector<std::vector<i32>>>(buf, data);
+
+    auto result = decode_array<std::vector<std::vector<i32>>>(buf);
+    ASSERT_EQ(result.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        ASSERT_EQ(result[i].size(), data[i].size());
+        for (size_t j = 0; j < data[i].size(); ++j) {
+            EXPECT_EQ(result[i][j], data[i][j]);
+        }
+    }
+}
+
+TEST(BufferTest, EmptyNestedArrayRoundtrip) {
+    Buffer buf;
+    std::vector<std::vector<i32>> data = {
+        {},
+        {1, 2},
+        {}
+    };
+    encode_array<std::vector<i32>>(buf, data);
+
+    auto result = decode_array<std::vector<i32>>(buf);
+    ASSERT_EQ(result.size(), data.size());
+    EXPECT_TRUE(result[0].empty());
+    EXPECT_EQ(result[1], (std::vector<i32>{1, 2}));
+    EXPECT_TRUE(result[2].empty());
+}
+
+TEST(BufferTest, SparseJaggedArrayRoundtrip) {
+    // Simulates sparse matrix: only some rows have data
+    Buffer buf;
+    std::vector<std::vector<i32>> data = {
+        {100},           // row 0: one element
+        {},              // row 1: empty (sparse)
+        {},              // row 2: empty (sparse)
+        {200, 300, 400}, // row 3: three elements
+        {}               // row 4: empty (sparse)
+    };
+    encode_array<std::vector<i32>>(buf, data);
+
+    auto result = decode_array<std::vector<i32>>(buf);
+    EXPECT_EQ(result, data);
+}
+
+// =============================================================================
 // Error Handling
 // =============================================================================
 
