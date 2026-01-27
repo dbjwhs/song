@@ -5,6 +5,7 @@
 #include "resolver.hpp"
 #include "codegen.hpp"
 #include "python_codegen.hpp"
+#include "scaffold.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -42,11 +43,14 @@ static void print_usage(const char* program) {
     std::cerr << "  --lang <lang>       Output language: cpp (default), python\n";
     std::cerr << "  --single            Generate single header file (default, C++ only)\n";
     std::cerr << "  --split             Generate separate files (C++ only)\n";
+    std::cerr << "  --scaffold          Generate implementation skeleton (C++ only)\n";
+    std::cerr << "                      Creates new file or appends sync report to existing\n";
     std::cerr << "  -h, --help          Show this help\n";
     std::cerr << "\nC++ Output:\n";
     std::cerr << "  Single mode: <name>.hpp (all-in-one header)\n";
     std::cerr << "  Split mode:  <name>_types.hpp, <name>_wire.cpp,\n";
     std::cerr << "               <name>_client.hpp, <name>_server.hpp\n";
+    std::cerr << "  Scaffold:    <name>_impl.cpp (implementation skeleton)\n";
     std::cerr << "\nPython Output:\n";
     std::cerr << "  <name>.py (client proxies and type definitions)\n";
 }
@@ -56,6 +60,7 @@ int main(int argc, char** argv) {
     std::string output_dir = ".";
     std::string lang = "cpp";
     bool split_mode = false;
+    bool scaffold_mode = false;
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -95,6 +100,11 @@ int main(int argc, char** argv) {
 
         if (arg == "--split") {
             split_mode = true;
+            continue;
+        }
+
+        if (arg == "--scaffold") {
+            scaffold_mode = true;
             continue;
         }
 
@@ -165,6 +175,41 @@ int main(int argc, char** argv) {
             std::string output_path = output_dir + "/" + base_name + ".py";
             write_file(output_path, pygen.generate_module(ns));
             std::cout << "Generated: " << output_path << "\n";
+        } else if (scaffold_mode) {
+            // C++ scaffold generation
+            ScaffoldGenerator scaffold;
+
+            // Check if header file exists (for struct/enum comparison)
+            std::string header_path = output_dir + "/" + base_name + ".hpp";
+            std::optional<std::string> existing_header;
+            if (fs::exists(header_path)) {
+                existing_header = read_file(header_path);
+            }
+
+            for (const auto& service : ns.services) {
+                std::string impl_path = output_dir + "/" + base_name + "_" +
+                                        service.name + "_impl.cpp";
+
+                // Check if impl file exists
+                std::optional<std::string> existing_impl;
+                if (fs::exists(impl_path)) {
+                    existing_impl = read_file(impl_path);
+                }
+
+                // Generate skeleton or sync report
+                std::string content = scaffold.generate(ns, service, existing_impl, existing_header);
+                write_file(impl_path, content);
+
+                if (existing_impl.has_value()) {
+                    std::cout << "Updated: " << impl_path << " (sync report appended)\n";
+                } else {
+                    std::cout << "Generated: " << impl_path << " (new skeleton)\n";
+                }
+            }
+
+            if (ns.services.empty()) {
+                std::cerr << "Warning: No services found in " << input_path << "\n";
+            }
         } else {
             // C++ code generation
             CodeGenerator gen;

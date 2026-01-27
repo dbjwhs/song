@@ -36,10 +36,12 @@ add_executable(song_tests
     parser_test.cpp
     resolver_test.cpp
     codegen_test.cpp
+    scaffold_test.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp
     ${CMAKE_SOURCE_DIR}/compiler/codegen.cpp
+    ${CMAKE_SOURCE_DIR}/compiler/scaffold.cpp
 )
 
 target_link_libraries(song_tests
