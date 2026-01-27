@@ -46,3 +46,11 @@ cmake-build-*/
 
 # IDE cache
 .cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
