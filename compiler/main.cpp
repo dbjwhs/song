@@ -4,6 +4,7 @@
 #include "parser.hpp"
 #include "resolver.hpp"
 #include "codegen.hpp"
+#include "python_codegen.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -38,18 +39,22 @@ static void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " [options] <input.song>\n";
     std::cerr << "\nOptions:\n";
     std::cerr << "  -o, --output <dir>  Output directory (default: current)\n";
-    std::cerr << "  --single            Generate single header file (default)\n";
-    std::cerr << "  --split             Generate separate files\n";
+    std::cerr << "  --lang <lang>       Output language: cpp (default), python\n";
+    std::cerr << "  --single            Generate single header file (default, C++ only)\n";
+    std::cerr << "  --split             Generate separate files (C++ only)\n";
     std::cerr << "  -h, --help          Show this help\n";
-    std::cerr << "\nOutput:\n";
+    std::cerr << "\nC++ Output:\n";
     std::cerr << "  Single mode: <name>.hpp (all-in-one header)\n";
     std::cerr << "  Split mode:  <name>_types.hpp, <name>_wire.cpp,\n";
     std::cerr << "               <name>_client.hpp, <name>_server.hpp\n";
+    std::cerr << "\nPython Output:\n";
+    std::cerr << "  <name>.py (client proxies and type definitions)\n";
 }
 
 int main(int argc, char** argv) {
     std::string input_path;
     std::string output_dir = ".";
+    std::string lang = "cpp";
     bool split_mode = false;
 
     // Parse arguments
@@ -67,6 +72,19 @@ int main(int argc, char** argv) {
                 return 1;
             }
             output_dir = argv[++i];
+            continue;
+        }
+
+        if (arg == "--lang") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --lang requires an argument (cpp or python)\n";
+                return 1;
+            }
+            lang = argv[++i];
+            if (lang != "cpp" && lang != "python") {
+                std::cerr << "Error: Unknown language: " << lang << " (use cpp or python)\n";
+                return 1;
+            }
             continue;
         }
 
@@ -132,7 +150,6 @@ int main(int argc, char** argv) {
 
     // Generate code
     const Namespace& ns = ast.namespaces.front();
-    CodeGenerator gen;
 
     // Create output directory if needed
     if (!fs::exists(output_dir)) {
@@ -142,27 +159,38 @@ int main(int argc, char** argv) {
     std::string base_name = ns.name;
 
     try {
-        if (split_mode) {
-            // Split mode: separate files
-            write_file(output_dir + "/" + base_name + "_types.hpp",
-                       gen.generate_types_header(ns));
-            write_file(output_dir + "/" + base_name + "_wire.cpp",
-                       gen.generate_wire_impl(ns));
-            write_file(output_dir + "/" + base_name + "_client.hpp",
-                       gen.generate_client_header(ns));
-            write_file(output_dir + "/" + base_name + "_server.hpp",
-                       gen.generate_server_header(ns));
-
-            std::cout << "Generated:\n";
-            std::cout << "  " << output_dir << "/" << base_name << "_types.hpp\n";
-            std::cout << "  " << output_dir << "/" << base_name << "_wire.cpp\n";
-            std::cout << "  " << output_dir << "/" << base_name << "_client.hpp\n";
-            std::cout << "  " << output_dir << "/" << base_name << "_server.hpp\n";
-        } else {
-            // Single mode: all-in-one header
-            std::string output_path = output_dir + "/" + base_name + ".hpp";
-            write_file(output_path, gen.generate_header(ns));
+        if (lang == "python") {
+            // Python code generation
+            PythonCodeGenerator pygen;
+            std::string output_path = output_dir + "/" + base_name + ".py";
+            write_file(output_path, pygen.generate_module(ns));
             std::cout << "Generated: " << output_path << "\n";
+        } else {
+            // C++ code generation
+            CodeGenerator gen;
+
+            if (split_mode) {
+                // Split mode: separate files
+                write_file(output_dir + "/" + base_name + "_types.hpp",
+                           gen.generate_types_header(ns));
+                write_file(output_dir + "/" + base_name + "_wire.cpp",
+                           gen.generate_wire_impl(ns));
+                write_file(output_dir + "/" + base_name + "_client.hpp",
+                           gen.generate_client_header(ns));
+                write_file(output_dir + "/" + base_name + "_server.hpp",
+                           gen.generate_server_header(ns));
+
+                std::cout << "Generated:\n";
+                std::cout << "  " << output_dir << "/" << base_name << "_types.hpp\n";
+                std::cout << "  " << output_dir << "/" << base_name << "_wire.cpp\n";
+                std::cout << "  " << output_dir << "/" << base_name << "_client.hpp\n";
+                std::cout << "  " << output_dir << "/" << base_name << "_server.hpp\n";
+            } else {
+                // Single mode: all-in-one header
+                std::string output_path = output_dir + "/" + base_name + ".hpp";
+                write_file(output_path, gen.generate_header(ns));
+                std::cout << "Generated: " << output_path << "\n";
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Error writing output: " << e.what() << "\n";
