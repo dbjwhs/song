@@ -38,7 +38,7 @@
 
 | Component | Purpose |
 |-----------|---------|
-| **songc** | IDL compiler: `.song` files → C++ headers with proxy, interface, and dispatcher |
+| **songc** | IDL compiler: `.song` files → C++ headers, Python clients, implementation scaffolds |
 | **libsong** | Runtime library: wire protocol, serialization, process management, TCP transport, security |
 | **ServiceManager** | Service lifecycle: fork/exec, auto-restart, TCP connections, mDNS discovery |
 
@@ -49,7 +49,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (490 tests)
+# Run all tests (551 tests)
 ctest --output-on-failure
 ```
 
@@ -76,11 +76,35 @@ service Calculator {
 ### 2. Generate C++ Code
 
 ```bash
-./songc calculator.song
-# Generates: calculator.hpp
+./songc calculator.song -o output/
+# Generates: output/calculator.hpp (single header with everything)
+
+# Or split into separate files:
+./songc --split calculator.song -o output/
+# Generates: calculator_types.hpp, calculator_wire.cpp,
+#            calculator_client.hpp, calculator_server.hpp
+
+# Generate implementation skeleton:
+./songc --scaffold calculator.song -o output/
+# Generates: calculator_Calculator_impl.cpp (stub implementation)
+# Re-running appends sync report showing new/removed/modified methods
 ```
 
-### 3. Implement the Service
+### 3. Generate Python Client (Optional)
+
+```bash
+./songc --lang python calculator.song -o python/
+# Generates: python/calculator.py (client proxy with type hints)
+```
+
+```python
+from calculator import CalculatorProxy
+
+proxy = CalculatorProxy(connection)
+result = proxy.add(5, 3)  # Type-safe RPC call
+```
+
+### 4. Implement the Service
 
 ```cpp
 #include "calculator.hpp"
@@ -110,7 +134,7 @@ int main() {
 }
 ```
 
-### 4. Write a Client
+### 5. Write a Client
 
 ```cpp
 #include "calculator.hpp"
@@ -268,7 +292,7 @@ See [sing/README.md](sing/README.md) for detailed documentation.
 
 | Project | Tests | Description |
 |---------|-------|-------------|
-| [Calculator](sing/ipc/calculator/) | 13 | Basic arithmetic RPC, struct returns, error handling |
+| [Calculator](sing/ipc/calculator/) | 26 | Basic arithmetic RPC, struct returns, error handling |
 | [Stock Ticker](sing/ipc/stockticker/) | 15 | Complex structs, arrays of structs, batch queries |
 | [Chat](sing/ipc/chat/) | 23 | Stateful server, message history, pagination |
 | [Data Copy](sing/ipc/datacopy/) | 25 | Binary data, chunked file transfer, CRUD operations |
@@ -311,7 +335,9 @@ ctest -R sing_
 - Lexer for Song IDL (all token types, doc comments)
 - Recursive descent parser (structs, enums, services, classes)
 - Semantic resolver (type checking, symbol tables)
-- Code generator (proxy classes, interfaces, dispatchers)
+- C++ code generator (proxy classes, interfaces, dispatchers)
+- Python code generator (client proxies with type hints)
+- Scaffold generator (implementation skeletons with sync reports)
 
 ### Phase 3: Network Distribution [COMPLETE]
 - **TCP Transport**: TcpTransport and TcpListener for socket communication
@@ -343,9 +369,9 @@ ctest -R sing_
 - **Runtime Introspection**: service_count(), method_count(), get_service_ids(), has_service()
 
 ### Test Coverage
-- **396 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, logging, runtime, lexer, parser, resolver, codegen
-- **94 integration tests**: IPC (calculator, stockticker, chat, datacopy) + Network (tcp_calculator, discovery, secure)
-- **Total: 490 tests**
+- **444 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, logging, runtime, lexer, parser, resolver, codegen, scaffold
+- **107 integration tests**: IPC (calculator, stockticker, chat, datacopy) + Network (tcp_calculator, discovery, secure)
+- **Total: 551 tests**
 
 ### Coming Soon
 - Streaming support (bidirectional message streams)
@@ -386,13 +412,15 @@ song/
 │   ├── object.cpp        # ObjectRegistry implementation
 │   └── logging.cpp       # Logging implementation
 ├── compiler/
-│   ├── ast.hpp           # AST node definitions
-│   ├── lexer.hpp/cpp     # Tokenizer for Song IDL
-│   ├── parser.hpp/cpp    # Recursive descent parser
-│   ├── resolver.hpp/cpp  # Semantic analysis
-│   ├── codegen.hpp/cpp   # C++ code generation
-│   └── main.cpp          # songc entry point
-├── test/                 # Unit tests (396 tests)
+│   ├── ast.hpp              # AST node definitions
+│   ├── lexer.hpp/cpp        # Tokenizer for Song IDL
+│   ├── parser.hpp/cpp       # Recursive descent parser
+│   ├── resolver.hpp/cpp     # Semantic analysis
+│   ├── codegen.hpp/cpp      # C++ code generation
+│   ├── python_codegen.hpp/cpp  # Python client generation
+│   ├── scaffold.hpp/cpp     # Implementation skeleton generation
+│   └── main.cpp             # songc entry point
+├── test/                    # Unit tests (444 tests)
 ├── examples/
 │   ├── echo/             # Echo service example
 │   ├── calculator/       # Generated calculator example
