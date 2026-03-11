@@ -1,20 +1,57 @@
 # Song: Services Over Native Gateways
 
-**Song** (**S**ervices **O**ver **N**ative **G**ateways) is a modern C++ framework for building high-performance, type-safe service architectures with process isolation and binary wire protocols.
+A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with HMAC-SHA256 security and zero-config mDNS discovery.
+
+**551 tests (444 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~24K lines of C++20**
+
+```song
+// calculator.song                     // Write an IDL definition...
+namespace calculator;
+service Calculator {
+    add(i32 a, i32 b) -> i32;
+    divide(i32 a, i32 b) -> DivResult;
+}
+```
+```bash
+$ songc calculator.song -o output/     # ...generate C++ proxies, interfaces, dispatchers
+$ songc --lang python calculator.song  # ...or generate Python clients with type hints
+$ songc --scaffold calculator.song     # ...or generate implementation skeletons
+```
+```cpp
+// Client code — same API for local pipes, TCP, or mDNS-discovered services
+ServiceManager mgr;
+mgr.register_service("calc", "./calculator_service", 1);  // local
+auto conn = mgr.connect("calc");
+CalculatorProxy calc(conn);
+std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
+```
 
 ## Features
 
-- **Fast**: Zero-copy where possible, minimal allocations, cache-friendly data layouts
-- **Type Safe**: Compile-time verification of message structures and service contracts
-- **Process Isolation**: Services run as separate processes, communicating via pipes
-- **Network Distribution**: TCP transport with zero-config mDNS service discovery
-- **Security**: HMAC-SHA256 authentication for shared-secret protection
-- **Minimal Footprint**: Suitable for embedded Linux, IoT devices, resource-constrained systems
-- **Clean Architecture**: Modern C++20, no external dependencies beyond POSIX
-- **Full IDL Compiler**: Complete pipeline from `.song` files to C++ code
-- **Pluggable Logging**: Handler-based logging system with colored console output
+- **Zero Dependencies**: No protobuf, no gRPC, no reflection library. Just POSIX and platform crypto.
+- **Full IDL Compiler**: Hand-written lexer, recursive descent parser, semantic resolver, multi-target code generation (C++ and Python)
+- **Binary Wire Protocol**: 16-byte fixed headers, version negotiation, capability exchange, `static_assert` on all struct sizes
+- **Process Isolation**: Services run as separate processes with crash containment, auto-restart, and hot replacement
+- **Three Transport Modes**: Local pipes, explicit TCP, or zero-config mDNS discovery — all behind a unified API
+- **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
+- **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
+- **Scaffold Sync**: Re-running the scaffold generator diffs against existing implementations, reporting new/removed/modified methods
 
 ## Architecture
+
+```mermaid
+graph LR
+    A[".song IDL"] --> B["songc compiler"]
+    B --> C["C++ proxies & interfaces"]
+    B --> D["Python client proxies"]
+    B --> E["Implementation scaffolds"]
+    C --> F["Client App"]
+    C --> G["Service Process"]
+    F <-->|"Pipes / TCP"| G
+    G --> H["ServiceRuntime"]
+    F --> I["ServiceManager"]
+    I -->|"mDNS / Registry"| G
+```
 
 ```
 +------------------+           +------------------+
@@ -73,7 +110,7 @@ service Calculator {
 }
 ```
 
-### 2. Generate C++ Code
+### 2. Generate Code
 
 ```bash
 ./songc calculator.song -o output/
