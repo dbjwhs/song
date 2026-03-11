@@ -37,6 +37,7 @@ add_executable(song_tests
     resolver_test.cpp
     codegen_test.cpp
     scaffold_test.cpp
+    stress_test.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp

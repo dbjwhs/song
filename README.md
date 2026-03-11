@@ -476,13 +476,13 @@ Measured on Apple M4 (macOS, Release build with `-O3 -march=native -flto`):
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Wire header encode/decode | < 1 us | 16-byte fixed header, all primitives |
-| Buffer encode/decode (primitives) | < 1 us | i32, i64, f64, string |
-| Pipe round-trip (RPC call + response) | ~50 us | 100 sequential calls to fork'd service process |
+| Buffer encode/decode (i32 + i64 + f64 + string) | 0.012 us | 12 nanoseconds per complete roundtrip |
+| Wire header encode/decode | < 0.1 us | 16-byte fixed header |
+| Pipe RPC round-trip (call + response) | ~6 us | 1000 sequential calls to fork'd service, measured via `StressTest.PipeRPCLatency` |
 | Process startup (fork/exec + init handshake) | ~100 ms | One-time cost per service, amortized over all calls |
 | TCP round-trip (localhost) | ~100-200 us | Includes kernel socket overhead |
 
-**Note**: The pipe round-trip figure (~50 us) includes serialization, kernel pipe I/O, deserialization, dispatch, and return — the full path through the framework. Process startup is a one-time cost; subsequent calls on an established connection are fast.
+**Note**: The pipe round-trip figure (~6 us) includes serialization, kernel pipe I/O, deserialization, dispatch, and return — the full path through the framework. Process startup is a one-time cost; subsequent calls on an established connection are fast. Measured by `test/stress_test.cpp`.
 
 ## Design Philosophy: Why Build This Instead of Using gRPC?
 
