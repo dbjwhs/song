@@ -355,65 +355,48 @@ ctest -R sing_
 ./sing/network/tcp_calculator/sing_network_tcp_calculator_test
 ```
 
-## Current Status
+## Scaffold Sync
 
-### Phase 1: Core Runtime [COMPLETE]
-- Buffer class with 4KB small-buffer optimization
-- Primitive type encoders/decoders (i8-i64, u8-u64, f32, f64, string, bytes)
-- Array encoders/decoders with nested support
-- Wire protocol (16-byte fixed headers)
-- ServiceProcess (fork/exec, pipes, init handshake)
-- ServiceManager (lifecycle, auto-restart, pooling)
-- ServiceRuntime (service-side main loop)
-- ServiceConnection (client-side RPC with sequence matching)
-- Version negotiation and capability exchange
+One of Song's most practical features: when you modify your `.song` IDL and re-run the scaffold generator, it parses your existing implementation file, diffs it against the current IDL, and appends a structured sync report:
 
-### Phase 2: IDL Compiler [COMPLETE]
-- Lexer for Song IDL (all token types, doc comments)
-- Recursive descent parser (structs, enums, services, classes)
-- Semantic resolver (type checking, symbol tables)
-- C++ code generator (proxy classes, interfaces, dispatchers)
-- Python code generator (client proxies with type hints)
-- Scaffold generator (implementation skeletons with sync reports)
+```bash
+$ songc --scaffold calculator.song -o output/
+# First run: generates calculator_Calculator_impl.cpp with method stubs
 
-### Phase 3: Network Distribution [COMPLETE]
-- **TCP Transport**: TcpTransport and TcpListener for socket communication
-- **Transport Abstraction**: Unified Transport interface for pipes and TCP
-- **Remote Services**: `register_remote_service()` for explicit TCP endpoints
-- **mDNS Discovery**: Zero-config service discovery using native Bonjour API (macOS)
-- **Discoverable Services**: `register_discoverable_service()` for mDNS lookup
-- **Service Type Format**: `_<type>._song._tcp` (e.g., `_calculator._song._tcp`)
-- **HMAC Security**: SecureTransport wrapper with HMAC-SHA256 authentication
-- **Platform Crypto**: CommonCrypto (macOS), OpenSSL (Linux)
-- **Registry Service**: Cross-subnet service discovery via central registry
-- **Registry Fallback**: ServiceManager tries mDNS first, then registry
+# Later, after adding new methods to calculator.song:
+$ songc --scaffold calculator.song -o output/
+# Appends sync report to existing file:
+```
 
-### Phase 4: Class Support [COMPLETE]
-- **Object Base Class**: Reference-counted objects with identity (negative IDs like DAG)
-- **ObjectRegistry**: Server-side object lifecycle management
-- **Object Creation**: `MSG_CREATE` message type with constructor dispatch
-- **Object Release**: `MSG_RELEASE` for reference count decrement (fire-and-forget)
-- **Property Access**: `MSG_PROP_GET` and `MSG_PROP_SET` for remote property access
-- **Object Methods**: Method dispatch on object instances
-- **ServiceConnection**: `create_object()`, `release_object()`, `get_property()`, `set_property()`, `call_object()`
-- **ServiceRuntime**: Handles all object message types with factory registration
-- **Class Code Generation**: Proxy classes (client), skeleton base classes (server) with DAG-style macro pattern
+```
+// SCAFFOLD SYNC REPORT - calculator.song
+// ========================================
+// NEW METHODS (add these to your implementation):
+//   i64 factorial(i32 n)
+//   i64 sum(i32[] values)
+//
+// REMOVED METHODS (safe to delete):
+//   void deprecated_method()
+//
+// MODIFIED SIGNATURES (update your implementation):
+//   divide: return type changed from i32 to DivResult
+```
 
-### Phase 5: Logging and Introspection [COMPLETE]
-- **Pluggable Logging**: Handler-based system with Log::debug/info/warn/error/fatal
-- **Built-in Handlers**: Colored console, null, callback
-- **Source Location**: Automatic file/line/function capture
-- **Runtime Introspection**: service_count(), method_count(), get_service_ids(), has_service()
+This means you never lose work when evolving your IDL. The compiler tells you exactly what changed and what you need to update.
 
-### Test Coverage
-- **444 unit tests**: buffer, wire, pipe, process, manager, transport, discovery, security, registry, object, logging, runtime, lexer, parser, resolver, codegen, scaffold
-- **107 integration tests**: IPC (calculator, stockticker, chat, datacopy) + Network (tcp_calculator, discovery, secure)
-- **Total: 551 tests**
+## Status
 
-### Coming Soon
-- Streaming support (bidirectional message streams)
-- Property change notifications
-- Linux Avahi support for mDNS discovery
+All core features are complete and tested:
+
+| Component | Status | Key Details |
+|-----------|--------|-------------|
+| **Runtime** | Complete | Buffer (4KB SBO), wire protocol, process management, auto-restart |
+| **IDL Compiler** | Complete | Lexer, parser, resolver, C++ codegen, Python codegen, scaffold sync |
+| **Networking** | Complete | TCP transport, mDNS discovery (macOS), registry fallback |
+| **Security** | Complete | HMAC-SHA256, constant-time verification, platform crypto |
+| **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
+| **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
+| **Tests** | 551 total | 444 unit tests + 107 integration tests across 7 projects |
 
 ## Project Structure
 
