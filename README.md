@@ -489,35 +489,64 @@ song/
 - **Zero-copy**: Large buffers can be passed by reference
 - **Latency**: Sub-microsecond for simple messages on localhost
 
-## Design Principles
+## Design Philosophy: Why Build This Instead of Using gRPC?
 
-### Why Pipes?
-- Simpler than sockets (no address management)
-- Faster for local communication
-- Debugger-friendly (can attach to service process)
+Song isn't "better than gRPC." It makes different tradeoffs, built from scratch to understand the problem space deeply:
 
-### Why TCP + mDNS?
-- Transparent API (same code for local and remote)
-- Zero configuration (mDNS "just works" on LAN)
-- No heavy dependencies (native OS APIs only)
+- **Zero external dependencies**: No protobuf, no gRPC, no reflection library. Song compiles with just a C++20 compiler and POSIX. This matters for embedded Linux, IoT, and resource-constrained environments where pulling in gRPC's dependency tree is impractical.
+- **Process isolation as a first-class concept**: gRPC treats transport as a networking concern. Song treats it as a process management concern. Services are fork/exec'd child processes with automatic restart, crash containment, and hot replacement built into the framework, not bolted on.
+- **Integrated lifecycle management**: The ServiceManager handles the full service lifecycle — spawning, monitoring, auto-restart with configurable limits, and graceful shutdown. With gRPC, you need separate tooling (systemd, Kubernetes) for this.
+- **Hand-written compiler for the IDL**: No parser generators, no protoc plugins. The Song compiler is a complete pipeline (lexer → parser → resolver → codegen) that generates C++ *and* Python with scaffold sync. Understanding what protobuf does well enough to build it yourself is the point.
+- **Learning the fundamentals**: This project exists to demonstrate deep understanding of wire protocols, serialization, process management, and compiler construction — not to compete with production RPC frameworks.
 
-### Why Process Isolation?
-- Crash containment (service crash doesn't kill host)
-- Hot replacement (swap service binary without restart)
-- Security (services can run with reduced privileges)
-- Memory isolation (service memory leaks don't affect host)
+### Design Decisions
 
-### Why Native Endianness?
-- Speed (no byte swapping)
-- Target clarity (embedded Linux is little-endian)
-- Simplicity (removes entire class of bugs)
+| Decision | Rationale |
+|----------|-----------|
+| **Pipes for local** | Simpler than sockets, faster, debugger-friendly (attach to service process) |
+| **TCP + mDNS for remote** | Unified API across local/remote, zero-config on LAN, native OS APIs only |
+| **Process isolation** | Crash containment, hot replacement, privilege separation, memory isolation |
+| **Native endianness** | No byte swapping overhead; target clarity (embedded Linux is little-endian) |
+| **16-byte fixed headers** | Predictable parsing, `static_assert` on all struct sizes, no variadic headers |
+
+## Cross-Language Wire Compatibility
+
+Song's wire protocol is language-independent. The Python client library implements byte-exact compatibility with the C++ runtime:
+
+```python
+# Python client talking to a C++ service over TCP
+from song.connection import ServiceConnection
+from song.generated.calculator import CalculatorProxy
+
+conn = ServiceConnection.connect_tcp("localhost", 12345)
+calc = CalculatorProxy(conn)
+
+result = calc.add(5, 3)        # Python encodes → wire → C++ decodes → C++ encodes → wire → Python decodes
+div = calc.divide(17, 5)       # Returns DivResult(quotient=3, remainder=2)
+```
+
+The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. Both languages serialize to the same byte layout, verified by cross-language integration tests.
+
+## Platform Support & Limitations
+
+| Feature | macOS | Linux |
+|---------|-------|-------|
+| Core runtime (pipes, TCP) | Full | Full |
+| HMAC-SHA256 security | CommonCrypto | OpenSSL |
+| mDNS service discovery | Bonjour (dns_sd) | Planned (Avahi) |
+
+**Known limitations:**
+- **mDNS discovery is macOS-only** — Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
+- **Streaming** — Wire protocol defines stream message types (`0x05`, `0x06`) but the runtime API doesn't expose them yet.
+- **Property change notifications** — Planned but not yet implemented.
+- **Native endianness only** — Cross-architecture communication (e.g., ARM ↔ x86) is not supported. Both endpoints must share endianness.
 
 ## References
 
-- Design document: `../new-world/SONG_DESIGN.md`
-- Wire protocol: `include/song/wire.hpp`
-- IDL grammar: `compiler/parser.cpp`
-- Integration tests: `sing/README.md`
+- Wire protocol specification: [`include/song/wire.hpp`](include/song/wire.hpp)
+- IDL grammar: [`compiler/parser.cpp`](compiler/parser.cpp)
+- Integration test suite: [`sing/README.md`](sing/README.md)
+- Python client library: [`python/`](python/)
 
 ## License
 
