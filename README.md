@@ -470,7 +470,19 @@ song/
 - **Message overhead**: 16 bytes per message (fixed header)
 - **Small buffer optimization**: First 4KB inline (no heap allocation)
 - **Zero-copy**: Large buffers can be passed by reference
-- **Latency**: Sub-microsecond for simple messages on localhost
+- **Wire encode/decode**: Sub-microsecond for header and primitive types (below GoogleTest measurement threshold)
+
+Measured on Apple M4 (macOS, Release build with `-O3 -march=native -flto`):
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Wire header encode/decode | < 1 us | 16-byte fixed header, all primitives |
+| Buffer encode/decode (primitives) | < 1 us | i32, i64, f64, string |
+| Pipe round-trip (RPC call + response) | ~50 us | 100 sequential calls to fork'd service process |
+| Process startup (fork/exec + init handshake) | ~100 ms | One-time cost per service, amortized over all calls |
+| TCP round-trip (localhost) | ~100-200 us | Includes kernel socket overhead |
+
+**Note**: The pipe round-trip figure (~50 us) includes serialization, kernel pipe I/O, deserialization, dispatch, and return — the full path through the framework. Process startup is a one-time cost; subsequent calls on an established connection are fast.
 
 ## Design Philosophy: Why Build This Instead of Using gRPC?
 
