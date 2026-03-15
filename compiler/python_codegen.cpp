@@ -201,11 +201,11 @@ std::string PythonCodeGenerator::generate_struct_def(const StructDef& s) {
     for (const auto& f : s.fields) {
         // Build encode call with buf.encode_X
         std::string encode = encode_call(f.type, "val." + f.name);
-        // Replace req with buf
+        // Replace all occurrences of "req" with "buf" (method calls and function args)
         size_t pos = 0;
-        while ((pos = encode.find("req.", pos)) != std::string::npos) {
-            encode.replace(pos, 4, "buf.");
-            pos += 4;
+        while ((pos = encode.find("req", pos)) != std::string::npos) {
+            encode.replace(pos, 3, "buf");
+            pos += 3;
         }
         out << "    " << encode << "\n";
     }
@@ -218,11 +218,11 @@ std::string PythonCodeGenerator::generate_struct_def(const StructDef& s) {
     for (size_t i = 0; i < s.fields.size(); ++i) {
         const auto& f = s.fields[i];
         std::string decode = decode_call(f.type);
-        // Replace resp with buf
+        // Replace all occurrences of "resp" with "buf" (method calls and function args)
         size_t pos = 0;
-        while ((pos = decode.find("resp.", pos)) != std::string::npos) {
-            decode.replace(pos, 5, "buf.");
-            pos += 4;
+        while ((pos = decode.find("resp", pos)) != std::string::npos) {
+            decode.replace(pos, 4, "buf");
+            pos += 3;
         }
         out << "        " << f.name << "=" << decode;
         if (i < s.fields.size() - 1) {
