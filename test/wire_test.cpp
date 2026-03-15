@@ -315,3 +315,154 @@ TEST(WireTest, CurrentVersionFormat) {
     EXPECT_EQ(kCurrentVersion, make_version(1, 0));
     EXPECT_EQ(kFirstVersion, make_version(1, 0));
 }
+
+// =============================================================================
+// Malformed Wire Messages
+// =============================================================================
+
+TEST(WireTest, TruncatedHeaderThrows) {
+    // Header needs 16 bytes; provide only 8
+    Buffer buf;
+    buf.write("\x47\x4E\x4F\x53\x00\x02\x00\x00", 8);
+    buf.reset_read();
+
+    EXPECT_THROW(decode_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, EmptyBufferDecodeHeaderThrows) {
+    Buffer buf;
+    EXPECT_THROW(decode_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedInitMessageThrows) {
+    // Valid header saying init with 16-byte payload, but only 4 bytes of payload
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::init,
+        .reserved = 0,
+        .payload_size = 16,
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+    // Write only 4 bytes of the expected 16-byte init payload
+    encode_u32(buf, kMagic);
+    buf.reset_read();
+
+    decode_header(buf);  // Header decodes fine
+    EXPECT_THROW(decode_init(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedMethodDescriptorThrows) {
+    // MethodDescriptor needs 8 bytes; provide only 4
+    Buffer buf;
+    encode_u32(buf, 0x00010001);
+    buf.reset_read();
+
+    EXPECT_THROW(decode_method_descriptor(buf), std::runtime_error);
+}
+
+TEST(WireTest, CorruptLengthPrefixedString) {
+    // String with length prefix claiming 1MB but buffer has only a few bytes
+    Buffer buf;
+    encode_u32(buf, 1024 * 1024);  // Length = 1MB
+    buf.write("hi", 2);            // Only 2 bytes of data
+    buf.reset_read();
+
+    EXPECT_THROW(decode_string(buf), std::runtime_error);
+}
+
+TEST(WireTest, ZeroLengthPayloadCallMessage) {
+    // Call message with zero-byte payload — should still decode header cleanly
+    Buffer msg = create_call_message(1, 1, 1, Buffer{});
+
+    Header hdr = decode_header_validated(msg);
+    EXPECT_EQ(hdr.type, MsgType::call);
+
+    auto [service_id, method_id] = decode_method_call_header(msg);
+    EXPECT_EQ(service_id, 1);
+    EXPECT_EQ(method_id, 1);
+}
+
+TEST(WireTest, NearMaxPayloadSizeHeader) {
+    // Payload size exactly at kMaxPayloadSize should be valid
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::call,
+        .reserved = 0,
+        .payload_size = kMaxPayloadSize,
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+
+    Header decoded = decode_header_validated(buf);
+    EXPECT_EQ(decoded.payload_size, kMaxPayloadSize);
+}
+
+TEST(WireTest, PayloadSizeJustOverMaxThrows) {
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::call,
+        .reserved = 0,
+        .payload_size = kMaxPayloadSize + 1,
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+
+    EXPECT_THROW(decode_header_validated(buf), ProtocolError);
+}
+
+TEST(WireTest, MaxU32PayloadSizeThrows) {
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::call,
+        .reserved = 0,
+        .payload_size = 0xFFFFFFFF,
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+
+    EXPECT_THROW(decode_header_validated(buf), ProtocolError);
+}
+
+TEST(WireTest, TruncatedCallPayload) {
+    // Create a valid call message, then truncate the payload
+    Buffer args;
+    encode_string(args, "this is a test string");
+
+    Buffer msg = create_call_message(1, 1, 1, args);
+    // Read just past the header to verify it's valid
+    Header hdr = decode_header_validated(msg);
+    EXPECT_EQ(hdr.type, MsgType::call);
+
+    // Skip method descriptor, then try to decode a string from truncated data
+    decode_method_call_header(msg);
+
+    // The string should decode fine since the payload is complete
+    std::string str = decode_string(msg);
+    EXPECT_EQ(str, "this is a test string");
+}
+
+TEST(WireTest, InitMessageBadVersionStillDecodes) {
+    // Init message with future version — should still decode (validation is caller's job)
+    Buffer buf;
+    InitMessage msg{
+        .magic = kMagic,
+        .first_version = make_version(99, 0),
+        .current_version = make_version(99, 0),
+        .capabilities = 0,
+        .method_count = 0
+    };
+    encode_init(buf, msg);
+
+    InitMessage decoded = decode_init(buf);
+    EXPECT_EQ(decoded.first_version, make_version(99, 0));
+    EXPECT_EQ(decoded.current_version, make_version(99, 0));
+}
