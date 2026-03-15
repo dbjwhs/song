@@ -265,6 +265,16 @@ SecureTransport secure_client(std::move(client_tcp), security);
 - Constant-time comparison prevents timing attacks
 - Mismatched keys throw `SecurityError`
 
+### HMAC Tag Size
+
+Song uses a truncated 8-byte (64-bit) HMAC tag rather than the full 32-byte SHA-256 output. This is a deliberate tradeoff:
+
+- **Per-message overhead**: 8 bytes vs 32 bytes. At high message rates (100K+ msg/sec in IPC), the 24-byte savings per message is meaningful.
+- **Security margin**: 64-bit tags provide 2^64 brute-force resistance, which is sufficient for integrity verification in a same-host or local-network IPC context where the attacker cannot observe enough messages to mount a birthday attack.
+- **Not a substitute for TLS**: Song's HMAC layer provides message authentication (tamper detection), not confidentiality. For cross-network deployment, wrap transport in TLS and use Song's HMAC as defense-in-depth.
+
+This follows NIST SP 800-107 guidance that HMAC truncation to t bits provides t/2 bits of collision resistance, yielding 32-bit collision resistance — acceptable for the threat model (authenticated local/LAN IPC, not internet-facing).
+
 ### Platform Support
 
 | Platform | Crypto Library |
