@@ -9,6 +9,7 @@
 #include <string>
 #include <array>
 #include <memory>
+#include <cstring>
 
 namespace song {
 
@@ -66,6 +67,20 @@ public:
     explicit SecurityConfig(std::string key)
         : key_(std::move(key))
         , level_(SecurityLevel::shared_secret) {}
+
+    /// Destructor zeroes key material before deallocation
+    ~SecurityConfig() {
+        if (!key_.empty()) {
+            volatile char* p = key_.data();
+            std::memset(const_cast<char*>(static_cast<const volatile char*>(p)), 0, key_.size());
+        }
+    }
+
+    // Allow moves (source is zeroed by std::string move semantics)
+    SecurityConfig(SecurityConfig&&) noexcept = default;
+    SecurityConfig& operator=(SecurityConfig&&) noexcept = default;
+    SecurityConfig(const SecurityConfig&) = default;
+    SecurityConfig& operator=(const SecurityConfig&) = default;
 
     /// Check if security is enabled
     bool is_enabled() const { return level_ != SecurityLevel::none; }
