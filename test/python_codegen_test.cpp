@@ -387,4 +387,28 @@ TEST(PythonCodegenTest, ArrayTypeHints) {
     )");
 
     EXPECT_NE(code.find("data: list[list[float]]"), std::string::npos);
+    // Multi-dimensional primitive arrays emit NotImplementedError (honest limitation)
+    EXPECT_NE(code.find("NotImplementedError"), std::string::npos);
+}
+
+TEST(PythonCodegenTest, UserTypeArray) {
+    std::string code = parse_and_generate_python(R"(
+        namespace test;
+        struct Point {
+            i32 x;
+            i32 y;
+        }
+        struct Polygon {
+            Point[] vertices;
+        }
+    )");
+
+    EXPECT_NE(code.find("vertices: list[Point]"), std::string::npos);
+    // User-type arrays should generate proper encode/decode loops
+    EXPECT_NE(code.find("encode_Point"), std::string::npos);
+    EXPECT_NE(code.find("decode_Point"), std::string::npos);
+    // Should NOT have NotImplementedError for user-type arrays
+    auto polygon_pos = code.find("def encode_Polygon");
+    auto not_impl_pos = code.find("NotImplementedError", polygon_pos);
+    EXPECT_EQ(not_impl_pos, std::string::npos);
 }

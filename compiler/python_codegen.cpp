@@ -80,8 +80,15 @@ std::string PythonCodeGenerator::encode_call(const Type& t, const std::string& e
                 default: break;
             }
         }
-        // For other types, generate a loop
-        return "# TODO: encode array of " + type_to_python(elem);
+        // For compound array types (multi-dim or user-type arrays), generate encode loop
+        if (!is_primitive(elem) && !elem.is_array) {
+            // User-defined type array: encode each element via its encode function
+            return "req.encode_u32(len(" + expr + "))\n"
+                   "        for _item in " + expr + ":\n"
+                   "            encode_" + get_user_type(elem) + "(req, _item)";
+        }
+        // Multi-dimensional or other unsupported array: emit runtime error
+        return "raise NotImplementedError('encode for " + type_to_python(t) + " not yet supported')";
     }
 
     if (t.is_optional) {
@@ -132,8 +139,13 @@ std::string PythonCodeGenerator::decode_call(const Type& t) {
                 default: break;
             }
         }
-        // For other types, generate a loop
-        return "# TODO: decode array of " + type_to_python(elem);
+        // For compound array types (multi-dim or user-type arrays), generate decode loop
+        if (!is_primitive(elem) && !elem.is_array) {
+            // User-defined type array: decode each element via its decode function
+            return "[decode_" + get_user_type(elem) + "(resp) for _ in range(resp.decode_u32())]";
+        }
+        // Multi-dimensional or other unsupported array: emit runtime error
+        return "raise NotImplementedError('decode for " + type_to_python(t) + " not yet supported')";
     }
 
     if (t.is_optional) {
