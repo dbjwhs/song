@@ -97,6 +97,11 @@ void SecureTransport::send(const Buffer& msg) {
     temp_buf.reset_read();
     auto hdr = wire::decode_header(temp_buf);
 
+    // Validate payload_size won't overflow when adding HMAC tag
+    if (hdr.payload_size > wire::kMaxPayloadSize - kHmacTagSize) {
+        throw SecurityError("payload too large for HMAC authentication");
+    }
+
     // Create new message with modified payload_size to include HMAC tag
     Buffer secure_msg;
     wire::Header new_hdr = hdr;
