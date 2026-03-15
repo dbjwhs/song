@@ -10,60 +10,6 @@ namespace song::compiler {
 
 using u16 = std::uint16_t;
 
-// Convert Type to C++ type string
-std::string CodeGenerator::type_to_cpp(const Type& t) {
-    std::string base_type;
-
-    if (is_primitive(t)) {
-        base_type = primitive_to_cpp(get_primitive(t));
-    } else {
-        base_type = get_user_type(t);
-    }
-
-    // Handle arrays
-    if (t.is_array) {
-        int dims = t.array_dimensions > 0 ? t.array_dimensions : 1;
-        std::string result;
-        for (int i = 0; i < dims; ++i) {
-            result += "std::vector<";
-        }
-        result += base_type;
-        for (int i = 0; i < dims; ++i) {
-            result += ">";
-        }
-        return result;
-    }
-
-    // Handle optional
-    if (t.is_optional) {
-        return "std::optional<" + base_type + ">";
-    }
-
-    return base_type;
-}
-
-// Convert Type to function parameter (const ref for complex types)
-std::string CodeGenerator::type_to_param(const Type& t, const std::string& name) {
-    std::string cpp_type = type_to_cpp(t);
-
-    // Pass by const ref for complex types (arrays, optionals, strings, bytes, user types)
-    bool by_ref = t.is_array || t.is_optional;
-    if (!by_ref) {
-        // Only check primitive rules if not already by_ref
-        if (is_primitive(t)) {
-            auto p = get_primitive(t);
-            by_ref = (p == PrimitiveType::string || p == PrimitiveType::bytes);
-        } else {
-            by_ref = true;  // User-defined types always by ref
-        }
-    }
-
-    if (by_ref) {
-        return "const " + cpp_type + "& " + name;
-    }
-    return cpp_type + " " + name;
-}
-
 // Generate encode call for a type
 std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
     if (t.is_array) {

@@ -122,9 +122,7 @@ public:
                          const std::optional<std::string>& existing_header_content = std::nullopt);
 
 private:
-    // Type conversion helpers (same as CodeGenerator)
-    std::string type_to_cpp(const Type& t);
-    std::string type_to_param(const Type& t, const std::string& name);
+    // Helper functions (type_to_cpp/type_to_param are free functions in ast.hpp)
     std::string params_to_string(const std::vector<Param>& params);
     std::string fields_to_string(const std::vector<Field>& fields);
 

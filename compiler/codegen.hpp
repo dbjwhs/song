@@ -5,7 +5,6 @@
 
 #include "ast.hpp"
 #include <string>
-#include <sstream>
 
 namespace song::compiler {
 
@@ -56,9 +55,7 @@ private:
     std::string generate_encode_params(const std::vector<Param>& params);
     std::string generate_decode_params(const std::vector<Param>& params);
 
-    // Type conversion helpers
-    std::string type_to_cpp(const Type& t);
-    std::string type_to_param(const Type& t, const std::string& name);
+    // Type-specific helpers (type_to_cpp/type_to_param are free functions in ast.hpp)
     std::string encode_call(const Type& t, const std::string& expr);
     std::string decode_call(const Type& t);
 };
