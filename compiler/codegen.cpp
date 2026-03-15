@@ -11,7 +11,8 @@ namespace song::compiler {
 using u16 = std::uint16_t;
 
 // Generate encode call for a type
-std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
+std::string CodeGenerator::encode_call(const Type& t, const std::string& expr,
+                                       const std::string& buf_name) {
     if (t.is_array) {
         // Peel off one array dimension to get element type
         Type elem = t;
@@ -22,46 +23,46 @@ std::string CodeGenerator::encode_call(const Type& t, const std::string& expr) {
         // For user-defined types (structs), use generated helpers
         // For primitives and nested arrays, use template
         if (!elem.is_array && !is_primitive(elem)) {
-            return "encode_array_" + get_user_type(elem) + "(buf, " + expr + ")";
+            return "encode_array_" + get_user_type(elem) + "(" + buf_name + ", " + expr + ")";
         } else {
             // Use template with element type (handles primitives and nested vectors)
-            return "encode_array<" + type_to_cpp(elem) + ">(buf, " + expr + ")";
+            return "encode_array<" + type_to_cpp(elem) + ">(" + buf_name + ", " + expr + ")";
         }
     }
 
     if (t.is_optional) {
         Type inner = t;
         inner.is_optional = false;
-        return "encode_optional(buf, " + expr + ", [&](const auto& v) { " +
-               encode_call(inner, "v") + "; })";
+        return "encode_optional(" + buf_name + ", " + expr + ", [&](const auto& v) { " +
+               encode_call(inner, "v", buf_name) + "; })";
     }
 
     if (is_primitive(t)) {
         auto p = get_primitive(t);
         switch (p) {
-            case PrimitiveType::bool_: return "encode_bool(buf, " + expr + ")";
-            case PrimitiveType::i8: return "encode_i8(buf, " + expr + ")";
-            case PrimitiveType::i16: return "encode_i16(buf, " + expr + ")";
-            case PrimitiveType::i32: return "encode_i32(buf, " + expr + ")";
-            case PrimitiveType::i64: return "encode_i64(buf, " + expr + ")";
-            case PrimitiveType::u8: return "encode_u8(buf, " + expr + ")";
-            case PrimitiveType::u16: return "encode_u16(buf, " + expr + ")";
-            case PrimitiveType::u32: return "encode_u32(buf, " + expr + ")";
-            case PrimitiveType::u64: return "encode_u64(buf, " + expr + ")";
-            case PrimitiveType::f32: return "encode_f32(buf, " + expr + ")";
-            case PrimitiveType::f64: return "encode_f64(buf, " + expr + ")";
-            case PrimitiveType::string: return "encode_string(buf, " + expr + ")";
-            case PrimitiveType::bytes: return "encode_bytes(buf, " + expr + ")";
+            case PrimitiveType::bool_: return "encode_bool(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::i8: return "encode_i8(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::i16: return "encode_i16(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::i32: return "encode_i32(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::i64: return "encode_i64(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::u8: return "encode_u8(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::u16: return "encode_u16(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::u32: return "encode_u32(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::u64: return "encode_u64(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::f32: return "encode_f32(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::f64: return "encode_f64(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::string: return "encode_string(" + buf_name + ", " + expr + ")";
+            case PrimitiveType::bytes: return "encode_bytes(" + buf_name + ", " + expr + ")";
             case PrimitiveType::void_: return "";
         }
     }
 
     // User-defined type
-    return "encode_" + get_user_type(t) + "(buf, " + expr + ")";
+    return "encode_" + get_user_type(t) + "(" + buf_name + ", " + expr + ")";
 }
 
 // Generate decode call for a type
-std::string CodeGenerator::decode_call(const Type& t) {
+std::string CodeGenerator::decode_call(const Type& t, const std::string& buf_name) {
     if (t.is_array) {
         // Peel off one array dimension to get element type
         Type elem = t;
@@ -72,42 +73,42 @@ std::string CodeGenerator::decode_call(const Type& t) {
         // For user-defined types (structs), use generated helpers
         // For primitives and nested arrays, use template
         if (!elem.is_array && !is_primitive(elem)) {
-            return "decode_array_" + get_user_type(elem) + "(buf)";
+            return "decode_array_" + get_user_type(elem) + "(" + buf_name + ")";
         } else {
             // Use template with element type (handles primitives and nested vectors)
-            return "decode_array<" + type_to_cpp(elem) + ">(buf)";
+            return "decode_array<" + type_to_cpp(elem) + ">(" + buf_name + ")";
         }
     }
 
     if (t.is_optional) {
         Type inner = t;
         inner.is_optional = false;
-        return "decode_optional<" + type_to_cpp(inner) + ">(buf, [&]() { return " +
-               decode_call(inner) + "; })";
+        return "decode_optional<" + type_to_cpp(inner) + ">(" + buf_name + ", [&]() { return " +
+               decode_call(inner, buf_name) + "; })";
     }
 
     if (is_primitive(t)) {
         auto p = get_primitive(t);
         switch (p) {
-            case PrimitiveType::bool_: return "decode_bool(buf)";
-            case PrimitiveType::i8: return "decode_i8(buf)";
-            case PrimitiveType::i16: return "decode_i16(buf)";
-            case PrimitiveType::i32: return "decode_i32(buf)";
-            case PrimitiveType::i64: return "decode_i64(buf)";
-            case PrimitiveType::u8: return "decode_u8(buf)";
-            case PrimitiveType::u16: return "decode_u16(buf)";
-            case PrimitiveType::u32: return "decode_u32(buf)";
-            case PrimitiveType::u64: return "decode_u64(buf)";
-            case PrimitiveType::f32: return "decode_f32(buf)";
-            case PrimitiveType::f64: return "decode_f64(buf)";
-            case PrimitiveType::string: return "decode_string(buf)";
-            case PrimitiveType::bytes: return "decode_bytes(buf)";
+            case PrimitiveType::bool_: return "decode_bool(" + buf_name + ")";
+            case PrimitiveType::i8: return "decode_i8(" + buf_name + ")";
+            case PrimitiveType::i16: return "decode_i16(" + buf_name + ")";
+            case PrimitiveType::i32: return "decode_i32(" + buf_name + ")";
+            case PrimitiveType::i64: return "decode_i64(" + buf_name + ")";
+            case PrimitiveType::u8: return "decode_u8(" + buf_name + ")";
+            case PrimitiveType::u16: return "decode_u16(" + buf_name + ")";
+            case PrimitiveType::u32: return "decode_u32(" + buf_name + ")";
+            case PrimitiveType::u64: return "decode_u64(" + buf_name + ")";
+            case PrimitiveType::f32: return "decode_f32(" + buf_name + ")";
+            case PrimitiveType::f64: return "decode_f64(" + buf_name + ")";
+            case PrimitiveType::string: return "decode_string(" + buf_name + ")";
+            case PrimitiveType::bytes: return "decode_bytes(" + buf_name + ")";
             case PrimitiveType::void_: return "";
         }
     }
 
     // User-defined type
-    return "decode_" + get_user_type(t) + "(buf)";
+    return "decode_" + get_user_type(t) + "(" + buf_name + ")";
 }
 
 // =============================================================================
@@ -305,13 +306,7 @@ std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
         // Encode request
         out << "        Buffer req;\n";
         for (const auto& p : m.params) {
-            std::string encode = encode_call(p.type, p.name);
-            // Replace buf with req
-            size_t pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "req");
-            }
-            out << "        " << encode << ";\n";
+            out << "        " << encode_call(p.type, p.name, "req") << ";\n";
         }
 
         // Call
@@ -320,14 +315,7 @@ std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
 
         // Decode response
         if (!is_void) {
-            // Generate decode call using resp buffer
-            std::string decode = decode_call(m.return_type);
-            // Replace buf with resp in the decode call
-            size_t pos = decode.find("buf");
-            if (pos != std::string::npos) {
-                decode.replace(pos, 3, "resp");
-            }
-            out << "        return " << decode << ";\n";
+            out << "        return " << decode_call(m.return_type, "resp") << ";\n";
         }
 
         out << "    }\n\n";
@@ -383,14 +371,8 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
 
         // Decode parameters from request buffer
         for (const auto& p : m.params) {
-            std::string decode = decode_call(p.type);
-            // Replace buf with request
-            size_t pos = decode.find("buf");
-            if (pos != std::string::npos) {
-                decode.replace(pos, 3, "request");
-            }
             out << "            " << type_to_cpp(p.type) << " " << p.name
-                << " = " << decode << ";\n";
+                << " = " << decode_call(p.type, "request") << ";\n";
         }
 
         // Call implementation
@@ -410,13 +392,7 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
 
         // Encode response to response buffer
         if (!is_void) {
-            std::string encode = encode_call(m.return_type, "result");
-            // Replace buf with response
-            size_t pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "response");
-            }
-            out << "            " << encode << ";\n";
+            out << "            " << encode_call(m.return_type, "result", "response") << ";\n";
         }
 
         out << "            break;\n";
@@ -543,24 +519,14 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
         out << "    " << cpp_type << " " << p.name << "() const {\n";
         out << "        Buffer resp = m_conn.get_property(m_type_id, m_object_id, kProp_"
             << c.name << "_" << p.name << ");\n";
-        std::string decode = decode_call(p.type);
-        size_t pos = decode.find("buf");
-        if (pos != std::string::npos) {
-            decode.replace(pos, 3, "resp");
-        }
-        out << "        return " << decode << ";\n";
+        out << "        return " << decode_call(p.type, "resp") << ";\n";
         out << "    }\n";
 
         // Setter (if not readonly)
         if (!p.readonly) {
             out << "    void set_" << p.name << "(" << type_to_param(p.type, "value") << ") {\n";
             out << "        Buffer val;\n";
-            std::string encode = encode_call(p.type, "value");
-            pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "val");
-            }
-            out << "        " << encode << ";\n";
+            out << "        " << encode_call(p.type, "value", "val") << ";\n";
             out << "        m_conn.set_property(m_type_id, m_object_id, kProp_"
                 << c.name << "_" << p.name << ", val);\n";
             out << "    }\n";
@@ -585,12 +551,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
         // Encode arguments
         out << "        Buffer args;\n";
         for (const auto& p : m.params) {
-            std::string encode = encode_call(p.type, p.name);
-            size_t pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "args");
-            }
-            out << "        " << encode << ";\n";
+            out << "        " << encode_call(p.type, p.name, "args") << ";\n";
         }
 
         // Call object method
@@ -599,12 +560,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
 
         // Decode response
         if (!is_void) {
-            std::string decode = decode_call(m.return_type);
-            size_t pos = decode.find("buf");
-            if (pos != std::string::npos) {
-                decode.replace(pos, 3, "resp");
-            }
-            out << "        return " << decode << ";\n";
+            out << "        return " << decode_call(m.return_type, "resp") << ";\n";
         }
 
         out << "    }\n\n";
@@ -625,12 +581,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
 
         out << "    Buffer args;\n";
         for (const auto& p : ctor.params) {
-            std::string encode = encode_call(p.type, p.name);
-            size_t pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "args");
-            }
-            out << "    " << encode << ";\n";
+            out << "    " << encode_call(p.type, p.name, "args") << ";\n";
         }
 
         out << "    auto ref = conn.create_object(kType_" << c.name << ", " << i << ", args);\n";
@@ -738,12 +689,7 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
 
     for (const auto& p : c.properties) {
         out << "        case kProp_" << c.name << "_" << p.name << ": {\n";
-        std::string encode = encode_call(p.type, "get_" + p.name + "()");
-        size_t pos = encode.find("buf");
-        if (pos != std::string::npos) {
-            encode.replace(pos, 3, "resp");
-        }
-        out << "            " << encode << ";\n";
+        out << "            " << encode_call(p.type, "get_" + p.name + "()", "resp") << ";\n";
         out << "            break;\n";
         out << "        }\n";
     }
@@ -766,23 +712,9 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
     for (const auto& p : c.properties) {
         if (!p.readonly) {
             out << "        case kProp_" << c.name << "_" << p.name << ": {\n";
-
-            // Decode the new value
-            std::string decode = decode_call(p.type);
-            size_t pos = decode.find("buf");
-            if (pos != std::string::npos) {
-                decode.replace(pos, 3, "req");
-            }
-            out << "            auto value = " << decode << ";\n";
+            out << "            auto value = " << decode_call(p.type, "req") << ";\n";
             out << "            set_" << p.name << "(value);\n";
-
-            // Encode the stored value back
-            std::string encode = encode_call(p.type, "get_" + p.name + "()");
-            pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "resp");
-            }
-            out << "            " << encode << ";\n";
+            out << "            " << encode_call(p.type, "get_" + p.name + "()", "resp") << ";\n";
             out << "            break;\n";
             out << "        }\n";
         }
@@ -807,13 +739,8 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
 
         // Decode parameters
         for (const auto& p : m.params) {
-            std::string decode = decode_call(p.type);
-            size_t pos = decode.find("buf");
-            if (pos != std::string::npos) {
-                decode.replace(pos, 3, "req");
-            }
             out << "            " << type_to_cpp(p.type) << " " << p.name
-                << " = " << decode << ";\n";
+                << " = " << decode_call(p.type, "req") << ";\n";
         }
 
         // Call implementation
@@ -833,12 +760,7 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
 
         // Encode response
         if (!is_void) {
-            std::string encode = encode_call(m.return_type, "result");
-            size_t pos = encode.find("buf");
-            if (pos != std::string::npos) {
-                encode.replace(pos, 3, "resp");
-            }
-            out << "            " << encode << ";\n";
+            out << "            " << encode_call(m.return_type, "result", "resp") << ";\n";
         }
 
         out << "            break;\n";

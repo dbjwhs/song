@@ -56,8 +56,10 @@ private:
     std::string generate_decode_params(const std::vector<Param>& params);
 
     // Type-specific helpers (type_to_cpp/type_to_param are free functions in ast.hpp)
-    std::string encode_call(const Type& t, const std::string& expr);
-    std::string decode_call(const Type& t);
+    std::string encode_call(const Type& t, const std::string& expr,
+                            const std::string& buf_name = "buf");
+    std::string decode_call(const Type& t,
+                            const std::string& buf_name = "buf");
 };
 
 } // namespace song::compiler
