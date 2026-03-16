@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <song/manager.hpp>
+#include <song/registry.hpp>
 #include <song/transport.hpp>
 #include <song/wire.hpp>
 #include <song/buffer.hpp>
@@ -162,6 +163,102 @@ TEST(StressTest, ManagerConcurrentRegistration) {
 
     // All unique names should have registered successfully
     EXPECT_EQ(success_count.load(), kThreads * kServicesPerThread);
+}
+
+TEST(StressTest, ManagerConcurrentStartStop) {
+    // Multiple threads starting, stopping, and querying the same service
+    std::string echo_path = get_test_service_path("echo_service");
+    if (!std::filesystem::exists(echo_path)) {
+        GTEST_SKIP() << "echo_service not found at " << echo_path;
+    }
+
+    ServiceManager mgr;
+    mgr.register_service("echo", echo_path, 1);
+
+    constexpr int kThreads = 4;
+    constexpr int kOpsPerThread = 20;
+    std::atomic<int> start_count{0};
+    std::atomic<int> stop_count{0};
+    std::atomic<int> connect_count{0};
+    std::atomic<int> errors{0};
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t]() {
+            for (int i = 0; i < kOpsPerThread; ++i) {
+                try {
+                    int op = (t * kOpsPerThread + i) % 3;
+                    if (op == 0) {
+                        mgr.start("echo");
+                        ++start_count;
+                    } else if (op == 1) {
+                        mgr.stop("echo");
+                        ++stop_count;
+                    } else {
+                        try {
+                            auto conn = mgr.connect("echo");
+                            ++connect_count;
+                        } catch (const ServiceError&) {
+                            // Service may not be running; that's fine
+                        }
+                    }
+                } catch (const std::exception&) {
+                    ++errors;
+                }
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // No crashes or deadlocks is the primary assertion.
+    // Some errors are expected (stopping already-stopped, etc.)
+    EXPECT_EQ(start_count.load() + stop_count.load() + connect_count.load() + errors.load(),
+              kThreads * kOpsPerThread);
+
+    // Clean up
+    try { mgr.stop("echo"); } catch (...) {}
+}
+
+TEST(StressTest, RegistryConcurrentOps) {
+    // Concurrent register/unregister/discover on MemoryRegistry
+    MemoryRegistry registry;
+    constexpr int kThreads = 8;
+    constexpr int kOpsPerThread = 200;
+    std::atomic<int> registered{0};
+    std::atomic<int> discovered{0};
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t]() {
+            for (int i = 0; i < kOpsPerThread; ++i) {
+                std::string name = "svc_" + std::to_string(t) + "_" + std::to_string(i);
+                int op = i % 3;
+                if (op == 0) {
+                    ServiceInfo info{name, "localhost", static_cast<u16>(8000 + t * 1000 + i)};
+                    if (registry.register_service(info)) {
+                        ++registered;
+                    }
+                } else if (op == 1) {
+                    registry.unregister_service(name);
+                } else {
+                    auto info = registry.discover(name);
+                    if (info.is_valid()) {
+                        ++discovered;
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // No crashes or data corruption
+    EXPECT_GT(registered.load(), 0);
 }
 
 // =============================================================================
