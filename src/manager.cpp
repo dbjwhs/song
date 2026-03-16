@@ -84,31 +84,42 @@ bool ServiceManager::is_discoverable(std::string_view name) const {
 }
 
 ServiceProcess* ServiceManager::start(std::string_view name) {
+    std::string executable;
+    {
+        std::lock_guard lock(mutex_);
+        auto* entry = find_service(name);
+        if (!entry) {
+            throw ServiceError("Service not found: " + std::string(name));
+        }
+
+        if (entry->is_remote) {
+            throw ServiceError("Cannot start remote service: " + std::string(name) +
+                              " (use connect() instead)");
+        }
+
+        if (entry->is_discoverable) {
+            throw ServiceError("Cannot start discoverable service: " + std::string(name) +
+                              " (use connect() instead)");
+        }
+
+        if (entry->process && entry->process->alive()) {
+            return entry->process.get();
+        }
+
+        executable = entry->executable;
+    }
+
+    // Spawn outside the lock -- fork/exec + init handshake can block up to 5s
+    auto process = std::make_unique<ServiceProcess>(
+        ServiceProcess::spawn(executable.c_str())
+    );
+
     std::lock_guard lock(mutex_);
     auto* entry = find_service(name);
     if (!entry) {
-        throw ServiceError("Service not found: " + std::string(name));
+        throw ServiceError("Service removed during start: " + std::string(name));
     }
-
-    if (entry->is_remote) {
-        throw ServiceError("Cannot start remote service: " + std::string(name) +
-                          " (use connect() instead)");
-    }
-
-    if (entry->is_discoverable) {
-        throw ServiceError("Cannot start discoverable service: " + std::string(name) +
-                          " (use connect() instead)");
-    }
-
-    if (entry->process && entry->process->alive()) {
-        return entry->process.get();
-    }
-
-    // Spawn new process
-    entry->process = std::make_unique<ServiceProcess>(
-        ServiceProcess::spawn(entry->executable.c_str())
-    );
-
+    entry->process = std::move(process);
     return entry->process.get();
 }
 
@@ -385,55 +396,53 @@ void ServiceManager::set_restart_callback(
 }
 
 void ServiceManager::check_and_restart() {
-    std::lock_guard lock(mutex_);
+    // Collect services needing restart under the lock, then spawn outside it.
+    // This avoids blocking all ServiceManager operations during fork/exec + handshake.
+    struct RestartInfo {
+        std::string name;
+        std::string executable;
+        int restart_count;
+    };
+    std::vector<RestartInfo> to_restart;
 
-    for (auto& entry : services_) {
-        // Skip remote services (can't restart them)
-        if (entry.is_remote) {
-            continue;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& entry : services_) {
+            if (entry.is_remote || entry.is_discoverable || !entry.auto_restart) {
+                continue;
+            }
+            if (!entry.process || entry.process->alive()) {
+                continue;
+            }
+            if (entry.max_restarts > 0 && entry.restart_count >= entry.max_restarts) {
+                continue;
+            }
+            entry.restart_count++;
+            to_restart.push_back({entry.name, entry.executable, entry.restart_count});
         }
+    }
 
-        // Skip discoverable services (can't restart them)
-        if (entry.is_discoverable) {
-            continue;
-        }
-
-        // Skip services without auto-restart
-        if (!entry.auto_restart) {
-            continue;
-        }
-
-        // Skip if no process was ever started
-        if (!entry.process) {
-            continue;
-        }
-
-        // Check if still alive
-        if (entry.process->alive()) {
-            continue;
-        }
-
-        // Check if we've exceeded max restarts
-        if (entry.max_restarts > 0 && entry.restart_count >= entry.max_restarts) {
-            // Already at max restarts, don't restart again
-            continue;
-        }
-
-        // Service died - restart it
-        entry.restart_count++;
-
+    // Spawn processes outside the lock
+    for (auto& info : to_restart) {
         try {
-            entry.process = std::make_unique<ServiceProcess>(
-                ServiceProcess::spawn(entry.executable.c_str())
+            auto process = std::make_unique<ServiceProcess>(
+                ServiceProcess::spawn(info.executable.c_str())
             );
 
-            // Call restart callback if set
-            if (on_restart_) {
-                on_restart_(entry.name, entry.restart_count);
+            std::lock_guard lock(mutex_);
+            auto* entry = find_service(info.name);
+            if (entry) {
+                entry->process = std::move(process);
+                if (on_restart_) {
+                    on_restart_(entry->name, entry->restart_count);
+                }
             }
         } catch (const std::exception&) {
-            // Failed to restart - will try again on next check
-            entry.process.reset();
+            std::lock_guard lock(mutex_);
+            auto* entry = find_service(info.name);
+            if (entry) {
+                entry->process.reset();
+            }
         }
     }
 }
