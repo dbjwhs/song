@@ -25,6 +25,9 @@ void ServiceManager::register_service(std::string_view name,
                                      std::string_view executable,
                                      u32 version) {
     std::lock_guard lock(mutex_);
+    if (find_service(name)) {
+        throw ServiceError("Service '" + std::string(name) + "' is already registered");
+    }
     ServiceEntry entry;
     entry.name = name;
     entry.executable = executable;
@@ -38,6 +41,9 @@ void ServiceManager::register_remote_service(std::string_view name,
                                             u16 port,
                                             u32 version) {
     std::lock_guard lock(mutex_);
+    if (find_service(name)) {
+        throw ServiceError("Service '" + std::string(name) + "' is already registered");
+    }
     ServiceEntry entry;
     entry.name = name;
     entry.host = host;

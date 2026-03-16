@@ -256,6 +256,10 @@ bool MemoryRegistry::register_service(const ServiceInfo& info) {
 
     std::lock_guard<std::mutex> lock(mutex_);
 
+    if (services_.count(info.name) > 0) {
+        return false;  // Already registered
+    }
+
     Entry entry;
     entry.info = info;
     entry.last_heartbeat = std::chrono::steady_clock::now();

@@ -41,6 +41,18 @@ TEST(ManagerTest, RegisterService) {
     // Registration should succeed without throwing
 }
 
+TEST(ManagerTest, DuplicateRegistrationThrows) {
+    ServiceManager mgr;
+    mgr.register_service("echo", "/path/to/echo", 1);
+    EXPECT_THROW(mgr.register_service("echo", "/other/path", 2), ServiceError);
+}
+
+TEST(ManagerTest, DuplicateRemoteRegistrationThrows) {
+    ServiceManager mgr;
+    mgr.register_remote_service("remote", "host1", 9000, 1);
+    EXPECT_THROW(mgr.register_remote_service("remote", "host2", 9001, 2), ServiceError);
+}
+
 TEST(ManagerTest, StartAndStop) {
     std::string echo_path = get_test_service_path("echo_service");
     if (!std::filesystem::exists(echo_path)) {

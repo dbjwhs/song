@@ -159,16 +159,32 @@ TEST(MemoryRegistryTest, ListAll) {
     EXPECT_TRUE(names.count("service3"));
 }
 
-TEST(MemoryRegistryTest, OverwriteExisting) {
+TEST(MemoryRegistryTest, DuplicateRegistrationRejected) {
     MemoryRegistry registry;
 
     ServiceInfo info1 = {"test", "host1", 1000};
     ServiceInfo info2 = {"test", "host2", 2000};
 
-    registry.register_service(info1);
-    registry.register_service(info2);
+    EXPECT_TRUE(registry.register_service(info1));
+    EXPECT_FALSE(registry.register_service(info2));
 
     EXPECT_EQ(registry.size(), 1u);
+
+    // Original registration is preserved
+    ServiceInfo found = registry.discover("test");
+    EXPECT_EQ(found.host, "host1");
+    EXPECT_EQ(found.port, 1000u);
+}
+
+TEST(MemoryRegistryTest, ReregisterAfterUnregister) {
+    MemoryRegistry registry;
+
+    ServiceInfo info1 = {"test", "host1", 1000};
+    ServiceInfo info2 = {"test", "host2", 2000};
+
+    EXPECT_TRUE(registry.register_service(info1));
+    EXPECT_TRUE(registry.unregister_service("test"));
+    EXPECT_TRUE(registry.register_service(info2));
 
     ServiceInfo found = registry.discover("test");
     EXPECT_EQ(found.host, "host2");
