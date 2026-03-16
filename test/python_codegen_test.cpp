@@ -411,4 +411,12 @@ TEST(PythonCodegenTest, UserTypeArray) {
     auto polygon_pos = code.find("def encode_Polygon");
     auto not_impl_pos = code.find("NotImplementedError", polygon_pos);
     EXPECT_EQ(not_impl_pos, std::string::npos);
+
+    // Verify struct encode has correct 4-space indentation for the for loop
+    // (not 8-space which would be a Python IndentationError)
+    EXPECT_NE(code.find("    for _item in"), std::string::npos)
+        << "Struct encode should use 4-space indent for loop body";
+    // The loop body should be indented one more level (8 spaces)
+    EXPECT_NE(code.find("        encode_Point"), std::string::npos)
+        << "Loop body should use 8-space indent";
 }

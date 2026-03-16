@@ -23,7 +23,8 @@ private:
     // Type conversion helpers
     std::string type_to_python(const Type& t);
     std::string type_to_type_hint(const Type& t);
-    std::string encode_call(const Type& t, const std::string& expr);
+    std::string encode_call(const Type& t, const std::string& expr,
+                            const std::string& indent = "        ");
     std::string decode_call(const Type& t);
 
     // Struct generation

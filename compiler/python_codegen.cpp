@@ -63,7 +63,8 @@ std::string PythonCodeGenerator::type_to_type_hint(const Type& t) {
 }
 
 // Generate encode call for a type
-std::string PythonCodeGenerator::encode_call(const Type& t, const std::string& expr) {
+std::string PythonCodeGenerator::encode_call(const Type& t, const std::string& expr,
+                                             const std::string& indent) {
     if (t.is_array) {
         // Peel off one array dimension to get element type
         Type elem = t;
@@ -84,8 +85,8 @@ std::string PythonCodeGenerator::encode_call(const Type& t, const std::string& e
         if (!is_primitive(elem) && !elem.is_array) {
             // User-defined type array: encode each element via its encode function
             return "req.encode_u32(len(" + expr + "))\n"
-                   "        for _item in " + expr + ":\n"
-                   "            encode_" + get_user_type(elem) + "(req, _item)";
+                   + indent + "for _item in " + expr + ":\n"
+                   + indent + "    encode_" + get_user_type(elem) + "(req, _item)";
         }
         // Multi-dimensional or other unsupported array: emit runtime error
         return "raise NotImplementedError('encode for " + type_to_python(t) + " not yet supported')";
@@ -212,7 +213,7 @@ std::string PythonCodeGenerator::generate_struct_def(const StructDef& s) {
     out << "    \"\"\"Encode " << s.name << " to buffer.\"\"\"\n";
     for (const auto& f : s.fields) {
         // Build encode call with buf.encode_X
-        std::string encode = encode_call(f.type, "val." + f.name);
+        std::string encode = encode_call(f.type, "val." + f.name, "    ");
         // Replace all occurrences of "req" with "buf" (method calls and function args)
         size_t pos = 0;
         while ((pos = encode.find("req", pos)) != std::string::npos) {
