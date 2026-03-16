@@ -12,6 +12,12 @@
 #include <cstring>
 #include <cerrno>
 
+// MSG_NOSIGNAL prevents SIGPIPE on broken connections (Linux).
+// macOS uses the SO_NOSIGPIPE socket option instead.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 namespace song {
 
 // =============================================================================
@@ -239,6 +245,12 @@ void TcpTransport::connect(const std::string& host, u16 port, int timeout_ms) {
     // Disable Nagle's algorithm for lower latency
     int nodelay = 1;
     setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+#ifdef SO_NOSIGPIPE
+    // macOS: prevent SIGPIPE on broken connections (Linux uses MSG_NOSIGNAL per-send)
+    int nosigpipe = 1;
+    setsockopt(sock_, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
 
     peer_addr_ = host;
     peer_port_ = port;
@@ -469,6 +481,11 @@ std::unique_ptr<TcpTransport> TcpListener::accept(int timeout_ms) {
     // Disable Nagle's algorithm for lower latency
     int nodelay = 1;
     setsockopt(client_sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+#ifdef SO_NOSIGPIPE
+    int nosigpipe = 1;
+    setsockopt(client_sock, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
 
     // Get peer address for logging
     char addr_buf[INET_ADDRSTRLEN];
