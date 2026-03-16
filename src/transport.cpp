@@ -46,6 +46,7 @@ void PipeTransport::send(const Buffer& msg) {
             msg.size() - offset
         );
         if (written < 0) {
+            if (errno == EINTR) continue;
             throw ServiceError("PipeTransport: write failed: " + std::string(strerror(errno)));
         }
         offset += static_cast<size_t>(written);
@@ -97,8 +98,12 @@ bool PipeTransport::receive(Buffer& msg, int timeout_ms) {
                 payload_buf.data() + offset,
                 hdr.payload_size - offset
             );
-            if (n <= 0) {
+            if (n < 0) {
+                if (errno == EINTR) continue;
                 throw ServiceError("PipeTransport: failed to read payload");
+            }
+            if (n == 0) {
+                throw ServiceError("PipeTransport: pipe closed during payload read");
             }
             offset += static_cast<size_t>(n);
         }
@@ -195,7 +200,11 @@ void TcpTransport::connect(const std::string& host, u16 port, int timeout_ms) {
             pfd.fd = sock_;
             pfd.events = POLLOUT;
 
-            int poll_result = poll(&pfd, 1, timeout_ms);
+            int poll_result;
+            do {
+                poll_result = poll(&pfd, 1, timeout_ms);
+            } while (poll_result < 0 && errno == EINTR);
+
             if (poll_result == 0) {
                 close();
                 throw ServiceError("TcpTransport: connection timeout to " + host + ":" +
@@ -248,6 +257,7 @@ void TcpTransport::send(const Buffer& msg) {
             MSG_NOSIGNAL
         );
         if (written < 0) {
+            if (errno == EINTR) continue;
             throw ServiceError("TcpTransport: send failed: " + std::string(strerror(errno)));
         }
         if (written == 0) {
@@ -268,7 +278,11 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
         pfd.fd = sock_;
         pfd.events = POLLIN;
 
-        int poll_result = poll(&pfd, 1, timeout_ms);
+        int poll_result;
+        do {
+            poll_result = poll(&pfd, 1, timeout_ms);
+        } while (poll_result < 0 && errno == EINTR);
+
         if (poll_result == 0) {
             throw ServiceError("TcpTransport: read timeout");
         }
@@ -295,6 +309,7 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
             return false;  // Connection closed
         }
         if (n < 0) {
+            if (errno == EINTR) continue;
             throw ServiceError("TcpTransport: recv failed: " + std::string(strerror(errno)));
         }
         header_offset += static_cast<size_t>(n);
@@ -317,8 +332,12 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
         while (offset < hdr.payload_size) {
             ssize_t n = recv(sock_, payload_buf.data() + offset,
                            hdr.payload_size - offset, 0);
-            if (n <= 0) {
+            if (n < 0) {
+                if (errno == EINTR) continue;
                 throw ServiceError("TcpTransport: failed to read payload");
+            }
+            if (n == 0) {
+                throw ServiceError("TcpTransport: connection closed during payload read");
             }
             offset += static_cast<size_t>(n);
         }
@@ -423,7 +442,11 @@ std::unique_ptr<TcpTransport> TcpListener::accept(int timeout_ms) {
         pfd.fd = sock_;
         pfd.events = POLLIN;
 
-        int poll_result = poll(&pfd, 1, timeout_ms);
+        int poll_result;
+        do {
+            poll_result = poll(&pfd, 1, timeout_ms);
+        } while (poll_result < 0 && errno == EINTR);
+
         if (poll_result == 0) {
             return nullptr;  // Timeout, no connection
         }

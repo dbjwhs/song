@@ -49,7 +49,11 @@ ssize_t Pipe::read(void* buf, size_t len) {
         errno = EBADF;
         return -1;
     }
-    return ::read(read_fd_, buf, len);
+    ssize_t n;
+    do {
+        n = ::read(read_fd_, buf, len);
+    } while (n < 0 && errno == EINTR);
+    return n;
 }
 
 ssize_t Pipe::write(const void* buf, size_t len) {
@@ -57,7 +61,11 @@ ssize_t Pipe::write(const void* buf, size_t len) {
         errno = EBADF;
         return -1;
     }
-    return ::write(write_fd_, buf, len);
+    ssize_t n;
+    do {
+        n = ::write(write_fd_, buf, len);
+    } while (n < 0 && errno == EINTR);
+    return n;
 }
 
 ssize_t Pipe::read_timeout(void* buf, size_t len, int timeout_ms) {
@@ -71,7 +79,11 @@ ssize_t Pipe::read_timeout(void* buf, size_t len, int timeout_ms) {
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    int ret = poll(&pfd, 1, timeout_ms);
+    int ret;
+    do {
+        ret = poll(&pfd, 1, timeout_ms);
+    } while (ret < 0 && errno == EINTR);
+
     if (ret < 0) {
         return -1;  // Error
     } else if (ret == 0) {
@@ -79,7 +91,11 @@ ssize_t Pipe::read_timeout(void* buf, size_t len, int timeout_ms) {
         return -1;  // Timeout
     }
 
-    return ::read(read_fd_, buf, len);
+    ssize_t n;
+    do {
+        n = ::read(read_fd_, buf, len);
+    } while (n < 0 && errno == EINTR);
+    return n;
 }
 
 void Pipe::close() {
