@@ -3,6 +3,13 @@
 
 #include "song/buffer.hpp"
 #include <stdexcept>
+#include <bit>
+
+// Song specifies a little-endian wire format. All numeric types are serialized
+// via memcpy without byte swapping, so both endpoints must be little-endian.
+// This covers x86, ARM (LE mode), and RISC-V — effectively all modern targets.
+static_assert(std::endian::native == std::endian::little,
+              "Song wire protocol requires a little-endian architecture");
 
 namespace song {
 
