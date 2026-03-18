@@ -2,7 +2,7 @@
 
 A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with HMAC-SHA256 security and zero-config mDNS discovery.
 
-**556 tests (449 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~24K lines of C++20**
+**596 tests (489 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~26K lines of C++20**
 
 ```song
 // calculator.song                     // Write an IDL definition...
@@ -86,7 +86,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 
-# Run all tests (551 tests)
+# Run all tests
 ctest --output-on-failure
 ```
 
@@ -406,68 +406,7 @@ All core features are complete and tested:
 | **Security** | Complete | HMAC-SHA256, constant-time verification, platform crypto |
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
-| **Tests** | 556 total | 449 unit tests (incl. 8 stress/perf) + 107 integration tests across 7 projects |
-
-## Project Structure
-
-```
-song/
-├── CMakeLists.txt
-├── include/song/
-│   ├── buffer.hpp        # Buffer with small-buffer optimization
-│   ├── pipe.hpp          # POSIX pipe wrapper
-│   ├── wire.hpp          # Wire protocol definitions
-│   ├── process.hpp       # Service process management
-│   ├── manager.hpp       # Service lifecycle manager
-│   ├── runtime.hpp       # Service-side runtime
-│   ├── transport.hpp     # Transport interface (pipes, TCP)
-│   ├── discovery.hpp     # mDNS service discovery
-│   ├── security.hpp      # HMAC authentication
-│   ├── registry.hpp      # Cross-subnet registry
-│   ├── object.hpp        # Object base class and registry
-│   ├── logging.hpp       # Pluggable logging system
-│   ├── error.hpp         # Error types
-│   └── song.hpp          # Main include
-├── src/
-│   ├── buffer.cpp
-│   ├── pipe.cpp
-│   ├── wire.cpp
-│   ├── process.cpp
-│   ├── manager.cpp
-│   ├── runtime.cpp
-│   ├── transport.cpp     # TCP/pipe transport implementations
-│   ├── discovery.cpp     # mDNS implementation (macOS Bonjour)
-│   ├── security.cpp      # HMAC (CommonCrypto/OpenSSL)
-│   ├── registry.cpp      # Registry client/server
-│   ├── object.cpp        # ObjectRegistry implementation
-│   └── logging.cpp       # Logging implementation
-├── compiler/
-│   ├── ast.hpp              # AST node definitions
-│   ├── lexer.hpp/cpp        # Tokenizer for Song IDL
-│   ├── parser.hpp/cpp       # Recursive descent parser
-│   ├── resolver.hpp/cpp     # Semantic analysis
-│   ├── codegen.hpp/cpp      # C++ code generation
-│   ├── python_codegen.hpp/cpp  # Python client generation
-│   ├── scaffold.hpp/cpp     # Implementation skeleton generation
-│   └── main.cpp             # songc entry point
-├── test/                    # Unit tests (444 tests)
-├── examples/
-│   ├── echo/             # Echo service example
-│   ├── calculator/       # Generated calculator example
-│   ├── crash/            # Auto-restart test
-│   └── registry/         # Registry service
-└── sing/                 # Integration test suite (94 tests)
-    ├── README.md         # Sing documentation
-    ├── ipc/              # Local pipe-based tests
-    │   ├── calculator/   # Basic RPC patterns
-    │   ├── stockticker/  # Complex types, arrays
-    │   ├── chat/         # Stateful services
-    │   └── datacopy/     # Binary data handling
-    └── network/          # TCP network tests
-        ├── tcp_calculator/  # TCP transport
-        ├── discovery/       # mDNS discovery
-        └── secure/          # HMAC authentication
-```
+| **Tests** | 596 total | 489 unit tests (incl. 8 stress/perf) + 107 integration tests across 7 projects |
 
 ## Code Quality
 
@@ -475,12 +414,7 @@ song/
 - MIT License headers on all source files (enforced by pre-commit hook)
 - Trailing newlines enforced (pre-commit hook)
 
-## Performance Characteristics
-
-- **Message overhead**: 16 bytes per message (fixed header)
-- **Small buffer optimization**: First 4KB inline (no heap allocation)
-- **Zero-copy**: Large buffers can be passed by reference
-- **Wire encode/decode**: Sub-microsecond for header and primitive types (below GoogleTest measurement threshold)
+## Performance
 
 Measured on Apple M4 (macOS, Release build with `-O3 -march=native -flto`):
 
@@ -488,31 +422,39 @@ Measured on Apple M4 (macOS, Release build with `-O3 -march=native -flto`):
 |-----------|---------|-------|
 | Buffer encode/decode (i32 + i64 + f64 + string) | 0.012 us | 12 nanoseconds per complete roundtrip |
 | Wire header encode/decode | < 0.1 us | 16-byte fixed header |
-| Pipe RPC round-trip (call + response) | ~6 us | 1000 sequential calls to fork'd service, measured via `StressTest.PipeRPCLatency` |
-| Process startup (fork/exec + init handshake) | ~100 ms | One-time cost per service, amortized over all calls |
+| Pipe RPC round-trip (call + response) | ~6 us | Full path: serialize → kernel pipe I/O → deserialize → dispatch → return |
 | TCP round-trip (localhost) | ~100-200 us | Includes kernel socket overhead |
+| Process startup (fork/exec + init handshake) | ~100 ms | One-time cost per service, amortized over all calls |
 
-**Note**: The pipe round-trip figure (~6 us) includes serialization, kernel pipe I/O, deserialization, dispatch, and return — the full path through the framework. Process startup is a one-time cost; subsequent calls on an established connection are fast. Measured by `test/stress_test.cpp`.
+- **Message overhead**: 16 bytes per message (fixed header)
+- **Small buffer optimization**: First 4KB inline (no heap allocation)
+- **Zero-copy**: Large buffers can be passed by reference
 
-## Design Philosophy: Why Build This Instead of Using gRPC?
+Pipe RPC latency measured by `test/stress_test.cpp` over 1000 sequential calls to a forked service process.
 
-Song isn't "better than gRPC." It makes different tradeoffs, built from scratch to understand the problem space deeply:
-
-- **Zero external dependencies**: No protobuf, no gRPC, no reflection library. Song compiles with just a C++20 compiler and POSIX. This matters for embedded Linux, IoT, and resource-constrained environments where pulling in gRPC's dependency tree is impractical.
-- **Process isolation as a first-class concept**: gRPC treats transport as a networking concern. Song treats it as a process management concern. Services are fork/exec'd child processes with automatic restart, crash containment, and hot replacement built into the framework, not bolted on.
-- **Integrated lifecycle management**: The ServiceManager handles the full service lifecycle — spawning, monitoring, auto-restart with configurable limits, and graceful shutdown. With gRPC, you need separate tooling (systemd, Kubernetes) for this.
-- **Hand-written compiler for the IDL**: No parser generators, no protoc plugins. The Song compiler is a complete pipeline (lexer → parser → resolver → codegen) that generates C++ *and* Python with scaffold sync. Understanding what protobuf does well enough to build it yourself is the point.
-- **Learning the fundamentals**: This project exists to demonstrate deep understanding of wire protocols, serialization, process management, and compiler construction — not to compete with production RPC frameworks.
-
-### Design Decisions
+## Wire Protocol Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| **Pipes for local** | Simpler than sockets, faster, debugger-friendly (attach to service process) |
-| **TCP + mDNS for remote** | Unified API across local/remote, zero-config on LAN, native OS APIs only |
+| **Little-endian wire format** | Compile-time enforced via `static_assert(std::endian::native == std::endian::little)`. This is the same choice made by protobuf, FlatBuffers, and Cap'n Proto. Covers x86, ARM (LE mode), RISC-V — effectively all modern targets. Eliminates byte-swapping overhead entirely. |
+| **Pipes for local IPC** | Simpler than sockets, faster, debugger-friendly (attach to service process directly) |
+| **TCP + mDNS for remote** | Unified API across local/remote, zero-config on LAN, native OS APIs only (no dependencies) |
 | **Process isolation** | Crash containment, hot replacement, privilege separation, memory isolation |
-| **Native endianness** | No byte swapping overhead; target clarity (embedded Linux is little-endian) |
 | **16-byte fixed headers** | Predictable parsing, `static_assert` on all struct sizes, no variadic headers |
+| **8-byte HMAC tags** | NIST SP 800-107 compliant truncation; 24 bytes saved per message at 100K+ msg/sec (see [Security](#hmac-tag-size)) |
+
+## Design Philosophy
+
+Song occupies a specific niche: zero-dependency process-isolated IPC for environments where gRPC's dependency tree is impractical. Embedded Linux, IoT gateways, and resource-constrained systems that need structured RPC but can't afford to pull in protobuf, gRPC, and their transitive dependencies.
+
+The framework is built from scratch — not because reinventing the wheel is the goal, but because the requirements demanded it:
+
+- **Zero external dependencies**: Song compiles with just a C++20 compiler and POSIX. No protobuf, no gRPC, no reflection library.
+- **Process isolation as a first-class concept**: gRPC treats transport as a networking concern. Song treats it as a process management concern. Services are fork/exec'd child processes with automatic restart, crash containment, and hot replacement built into the framework.
+- **Integrated lifecycle management**: ServiceManager handles spawning, health monitoring, auto-restart with configurable limits, and graceful shutdown. With gRPC, you need separate tooling (systemd, Kubernetes) for this.
+- **Hand-written compiler**: The Song compiler is a complete pipeline (lexer → parser → resolver → codegen) that generates C++ and Python from a single IDL, with scaffold sync to track implementation drift. No parser generators, no protoc plugins.
+
+For internet-facing services with broad language support, use gRPC. For same-host or LAN-scoped IPC where you control both endpoints and need minimal footprint, Song delivers the full stack in a single statically-linked library.
 
 ## Cross-Language Wire Compatibility
 
@@ -544,7 +486,6 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 - **mDNS discovery is macOS-only** — Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
 - **Streaming** — Wire protocol defines stream message types (`0x05`, `0x06`) but the runtime API doesn't expose them yet.
 - **Property change notifications** — Planned but not yet implemented.
-- **Native endianness only** — Cross-architecture communication (e.g., ARM ↔ x86) is not supported. Both endpoints must share endianness.
 
 ## References
 
