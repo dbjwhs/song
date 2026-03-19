@@ -5,6 +5,10 @@
 #include "parser.hpp"
 #include "resolver.hpp"
 #include "python_codegen.hpp"
+#include <song/buffer.hpp>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 
 using namespace song;
 using namespace song::compiler;
@@ -420,4 +424,164 @@ TEST(PythonCodegenTest, UserTypeArray) {
     // The loop body should be indented one more level (8 spaces)
     EXPECT_NE(code.find("        encode_Point"), std::string::npos)
         << "Loop body should use 8-space indent";
+}
+
+// =============================================================================
+// Python-C++ Wire Round-Trip
+// =============================================================================
+
+TEST(PythonCodegenTest, WireRoundTrip) {
+    // Encode known values in Python using struct module (matching Song wire
+    // format: little-endian, u32-length-prefixed strings), write to a binary
+    // file, then decode in C++ with Buffer and verify values match.
+
+    // Check python3 is available
+    if (std::system("python3 --version >/dev/null 2>&1") != 0) {
+        GTEST_SKIP() << "python3 not available";
+    }
+
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto py_path = tmp_dir / "song_wire_roundtrip.py";
+    auto bin_path = tmp_dir / "song_wire_roundtrip.bin";
+
+    // Write a Python script that encodes values using Song's wire format:
+    //   i32: 42
+    //   i64: 123456789
+    //   f64: 3.14159
+    //   string: "Hello, Song!"
+    //   i32: -1
+    {
+        std::ofstream pf(py_path);
+        ASSERT_TRUE(pf.is_open());
+        pf << R"PY(
+import struct, sys
+
+buf = bytearray()
+
+# i32: little-endian signed 32-bit
+buf += struct.pack('<i', 42)
+
+# i64: little-endian signed 64-bit
+buf += struct.pack('<q', 123456789)
+
+# f64: little-endian double
+buf += struct.pack('<d', 3.14159)
+
+# string: u32 length prefix + raw bytes
+s = b'Hello, Song!'
+buf += struct.pack('<I', len(s))
+buf += s
+
+# i32: -1 (two's complement boundary)
+buf += struct.pack('<i', -1)
+
+with open(sys.argv[1], 'wb') as f:
+    f.write(buf)
+)PY";
+    }
+
+    // Run Python to generate binary
+    std::string cmd = "python3 " + py_path.string() + " " + bin_path.string() + " 2>&1";
+    int ret = std::system(cmd.c_str());
+    ASSERT_EQ(ret, 0) << "Python script failed";
+
+    // Read binary into Buffer
+    std::ifstream bf(bin_path, std::ios::binary);
+    ASSERT_TRUE(bf.is_open());
+    std::vector<char> data((std::istreambuf_iterator<char>(bf)),
+                            std::istreambuf_iterator<char>());
+    bf.close();
+
+    Buffer buf;
+    buf.write(data.data(), data.size());
+    buf.reset_read();
+
+    // Decode and verify each value matches what Python encoded
+    EXPECT_EQ(decode_i32(buf), 42);
+    EXPECT_EQ(decode_i64(buf), 123456789LL);
+    EXPECT_NEAR(decode_f64(buf), 3.14159, 1e-10);
+    EXPECT_EQ(decode_string(buf), "Hello, Song!");
+    EXPECT_EQ(decode_i32(buf), -1);
+
+    // Clean up
+    std::filesystem::remove(py_path);
+    std::filesystem::remove(bin_path);
+}
+
+TEST(PythonCodegenTest, WireRoundTripReverse) {
+    // Encode values in C++, write to binary file, decode in Python, verify match.
+
+    if (std::system("python3 --version >/dev/null 2>&1") != 0) {
+        GTEST_SKIP() << "python3 not available";
+    }
+
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto bin_path = tmp_dir / "song_wire_reverse.bin";
+    auto py_path = tmp_dir / "song_wire_reverse.py";
+
+    // Encode in C++
+    Buffer buf;
+    encode_i32(buf, 99);
+    encode_i64(buf, -987654321LL);
+    encode_f64(buf, 2.71828);
+    encode_string(buf, "Song RPC");
+    encode_i32(buf, 0);
+
+    // Write buffer to file
+    {
+        std::ofstream of(bin_path, std::ios::binary);
+        ASSERT_TRUE(of.is_open());
+        of.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    }
+
+    // Write Python script that decodes and verifies
+    {
+        std::ofstream pf(py_path);
+        ASSERT_TRUE(pf.is_open());
+        pf << R"PY(
+import struct, sys
+
+with open(sys.argv[1], 'rb') as f:
+    data = f.read()
+
+offset = 0
+
+def read(fmt):
+    global offset
+    size = struct.calcsize(fmt)
+    val = struct.unpack_from(fmt, data, offset)
+    offset += size
+    return val[0]
+
+# i32: 99
+assert read('<i') == 99, "i32 mismatch"
+
+# i64: -987654321
+assert read('<q') == -987654321, "i64 mismatch"
+
+# f64: 2.71828
+val = read('<d')
+assert abs(val - 2.71828) < 1e-10, f"f64 mismatch: {val}"
+
+# string: "Song RPC"
+slen = read('<I')
+s = data[offset:offset+slen].decode('utf-8')
+offset += slen
+assert s == "Song RPC", f"string mismatch: {s}"
+
+# i32: 0
+assert read('<i') == 0, "i32 zero mismatch"
+
+print("OK")
+)PY";
+    }
+
+    std::string cmd = "python3 " + py_path.string() + " " + bin_path.string() + " 2>&1";
+    int ret = std::system(cmd.c_str());
+
+    // Clean up
+    std::filesystem::remove(py_path);
+    std::filesystem::remove(bin_path);
+
+    EXPECT_EQ(ret, 0) << "Python decode verification failed";
 }
