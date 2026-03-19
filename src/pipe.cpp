@@ -37,6 +37,10 @@ std::pair<Pipe, Pipe> Pipe::create_pair() {
         throw std::runtime_error("Failed to create pipe");
     }
 
+    // Prevent pipe fds from leaking to grandchild processes via fork/exec
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+
     // Create read and write pipes
     Pipe read_pipe(fds[0], -1);
     Pipe write_pipe(-1, fds[1]);
