@@ -8,6 +8,7 @@
 #include "wire.hpp"
 #include "object.hpp"
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <vector>
 #include <string>
@@ -103,11 +104,17 @@ public:
                                           const std::string& type);
 
 private:
+    /// Release all objects tracked by a connection (prevents leaks on crash)
+    void release_connection_objects(std::unordered_set<i32>& tracked);
+
     void send_init_confirmation_fd(int fd);
     void send_init_confirmation_transport(Transport& transport);
     void handle_message(const wire::Header& hdr, Buffer& payload,
-                       Transport& transport);
-    void handle_message_fd(const wire::Header& hdr, Buffer& payload, int write_fd);
+                       Transport& transport,
+                       std::unordered_set<i32>& tracked_objects);
+    void handle_message_fd(const wire::Header& hdr, Buffer& payload,
+                          int write_fd,
+                          std::unordered_set<i32>& tracked_objects);
     void client_loop(Transport& transport);
 };
 

@@ -130,7 +130,16 @@ void ServiceRuntime::send_init_confirmation_transport(Transport& transport) {
     }
 }
 
-void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload, int write_fd) {
+void ServiceRuntime::release_connection_objects(std::unordered_set<i32>& tracked) {
+    for (i32 id : tracked) {
+        object_registry_.release(id);
+    }
+    tracked.clear();
+}
+
+void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
+                                       int write_fd,
+                                       std::unordered_set<i32>& tracked_objects) {
     if (hdr.type == wire::MsgType::call) {
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
@@ -175,6 +184,9 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
             i32 object_id = object_registry_.create_object(
                 create_hdr.type_id, create_hdr.constructor_id, payload);
 
+            // Track this object for cleanup on disconnect
+            tracked_objects.insert(object_id);
+
             // Send object reference as result
             wire::ObjectRef ref{create_hdr.type_id, object_id};
             wire::encode_object_ref(response, ref);
@@ -193,6 +205,7 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         // Object release (fire-and-forget)
         auto release_hdr = wire::decode_object_release_header(payload);
         object_registry_.release(release_hdr.object_id);
+        tracked_objects.erase(release_hdr.object_id);
         // No response for release
     } else if (hdr.type == wire::MsgType::prop_get) {
         // Property get
@@ -256,7 +269,8 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
 }
 
 void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
-                                   Transport& transport) {
+                                   Transport& transport,
+                                   std::unordered_set<i32>& tracked_objects) {
     if (hdr.type == wire::MsgType::call) {
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
@@ -301,6 +315,9 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
             i32 object_id = object_registry_.create_object(
                 create_hdr.type_id, create_hdr.constructor_id, payload);
 
+            // Track this object for cleanup on disconnect
+            tracked_objects.insert(object_id);
+
             // Send object reference as result
             wire::ObjectRef ref{create_hdr.type_id, object_id};
             wire::encode_object_ref(response, ref);
@@ -319,6 +336,7 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         // Object release (fire-and-forget)
         auto release_hdr = wire::decode_object_release_header(payload);
         object_registry_.release(release_hdr.object_id);
+        tracked_objects.erase(release_hdr.object_id);
         // No response for release
     } else if (hdr.type == wire::MsgType::prop_get) {
         // Property get
@@ -385,11 +403,15 @@ void ServiceRuntime::client_loop(Transport& transport) {
     // Send init confirmation to client
     send_init_confirmation_transport(transport);
 
+    // Track objects created by this connection for cleanup on disconnect
+    std::unordered_set<i32> tracked_objects;
+
     // Handle messages until client disconnects
     for (;;) {
         Buffer msg;
         if (!transport.receive(msg, -1)) {  // Blocking receive
-            // Client disconnected
+            // Client disconnected - release all tracked objects
+            release_connection_objects(tracked_objects);
             return;
         }
 
@@ -398,16 +420,18 @@ void ServiceRuntime::client_loop(Transport& transport) {
 
         // Validate
         if (hdr.magic != wire::kMagic) {
+            release_connection_objects(tracked_objects);
             return;  // Invalid client, disconnect
         }
 
         if (hdr.type == wire::MsgType::shutdown) {
             // Client requested shutdown of this connection
+            release_connection_objects(tracked_objects);
             return;
         }
 
         // Handle message
-        handle_message(hdr, msg, transport);
+        handle_message(hdr, msg, transport, tracked_objects);
     }
 }
 
@@ -415,12 +439,16 @@ void ServiceRuntime::client_loop(Transport& transport) {
     // Send init confirmation via stdout
     send_init_confirmation_fd(STDOUT_FILENO);
 
+    // Track objects created by this connection for cleanup on disconnect
+    std::unordered_set<i32> tracked_objects;
+
     // Main loop
     for (;;) {
         // Read header (16 bytes)
         std::byte header_buf[16];
         if (!read_all(STDIN_FILENO, header_buf, 16)) {
             // EOF or error - parent died or pipe broken
+            release_connection_objects(tracked_objects);
             std::exit(0);
         }
 
@@ -432,11 +460,13 @@ void ServiceRuntime::client_loop(Transport& transport) {
 
         // Validate
         if (hdr.magic != wire::kMagic) {
+            release_connection_objects(tracked_objects);
             std::exit(1);
         }
 
         if (hdr.type == wire::MsgType::shutdown) {
             // Graceful shutdown
+            release_connection_objects(tracked_objects);
             std::exit(0);
         }
 
@@ -445,6 +475,7 @@ void ServiceRuntime::client_loop(Transport& transport) {
         if (hdr.payload_size > 0) {
             std::vector<std::byte> payload_buf(hdr.payload_size);
             if (!read_all(STDIN_FILENO, payload_buf.data(), hdr.payload_size)) {
+                release_connection_objects(tracked_objects);
                 std::exit(1);
             }
             payload.write(payload_buf.data(), hdr.payload_size);
@@ -452,7 +483,7 @@ void ServiceRuntime::client_loop(Transport& transport) {
         }
 
         // Handle message
-        handle_message_fd(hdr, payload, STDOUT_FILENO);
+        handle_message_fd(hdr, payload, STDOUT_FILENO, tracked_objects);
     }
 }
 
