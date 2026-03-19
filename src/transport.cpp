@@ -224,7 +224,11 @@ void TcpTransport::connect(const std::string& host, u16 port, int timeout_ms) {
             // Check for connection error
             int error = 0;
             socklen_t error_len = sizeof(error);
-            getsockopt(sock_, SOL_SOCKET, SO_ERROR, &error, &error_len);
+            if (getsockopt(sock_, SOL_SOCKET, SO_ERROR, &error, &error_len) < 0) {
+                close();
+                throw ServiceError("TcpTransport: getsockopt failed: " +
+                                  std::string(strerror(errno)));
+            }
             if (error != 0) {
                 close();
                 throw ServiceError("TcpTransport: connection failed to " + host + ":" +
@@ -430,7 +434,11 @@ void TcpListener::listen(u16 port, int backlog) {
     // Get actual port if we bound to 0
     if (port == 0) {
         socklen_t addr_len = sizeof(addr);
-        getsockname(sock_, reinterpret_cast<struct sockaddr*>(&addr), &addr_len);
+        if (getsockname(sock_, reinterpret_cast<struct sockaddr*>(&addr), &addr_len) < 0) {
+            close();
+            throw ServiceError("TcpListener: getsockname failed: " +
+                              std::string(strerror(errno)));
+        }
         port_ = ntohs(addr.sin_port);
     } else {
         port_ = port;
