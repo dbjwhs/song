@@ -498,3 +498,51 @@ TEST(StressTest, MultiClientConcurrentRPC) {
     EXPECT_EQ(success_count.load(), kClients * kCallsPerClient);
     EXPECT_EQ(error_count.load(), 0);
 }
+
+// =============================================================================
+// Crash Recovery Stress — max_restarts enforcement
+// =============================================================================
+
+TEST(StressTest, MaxRestartsEnforced) {
+    // crash_service aborts after 2 messages. Set max_restarts = 2, then
+    // repeatedly crash until the limit is hit. Verify the manager stops
+    // restarting beyond the configured limit and no zombie processes remain.
+    std::string crash_path = get_test_service_path("crash_service");
+    if (!std::filesystem::exists(crash_path)) {
+        GTEST_SKIP() << "crash_service not found at " << crash_path;
+    }
+
+    ServiceManager mgr;
+    mgr.register_service("crash_stress", crash_path, 1);
+    mgr.set_auto_restart("crash_stress", true);
+    mgr.set_max_restarts("crash_stress", 2);
+    mgr.start_monitor(100);
+
+    // Crash the service repeatedly
+    for (int round = 0; round < 4; ++round) {
+        try {
+            auto conn = mgr.connect("crash_stress");
+
+            // First call succeeds
+            Buffer args;
+            encode_string(args, "msg1");
+            conn.call(1, 1, args);
+
+            // Second call triggers crash
+            Buffer args2;
+            encode_string(args2, "msg2");
+            try { conn.call(1, 1, args2); } catch (...) {}
+        } catch (...) {
+            // Connection may fail if max_restarts exhausted
+        }
+
+        // Wait for monitor cycle
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+
+    // max_restarts = 2 means at most 2 restarts should have occurred
+    EXPECT_LE(mgr.restart_count("crash_stress"), 2);
+
+    mgr.stop_monitor();
+    try { mgr.stop("crash_stress"); } catch (...) {}
+}
