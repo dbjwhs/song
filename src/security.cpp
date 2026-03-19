@@ -13,8 +13,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #else
-// Fallback: simple warning and no-op (for testing only)
-#warning "No HMAC implementation available - security features disabled"
+#error "No HMAC implementation available. Song requires CommonCrypto (macOS) or OpenSSL (Linux)."
 #endif
 
 namespace song {
@@ -41,13 +40,6 @@ HmacTag compute_hmac(const void* key, size_t key_len,
     // Truncate to 8 bytes
     std::memcpy(tag.data(), full_hmac, kHmacTagSize);
 
-#else
-    // No HMAC available - zero tag (INSECURE, for testing only)
-    (void)key;
-    (void)key_len;
-    (void)data;
-    (void)data_len;
-    std::memset(tag.data(), 0, kHmacTagSize);
 #endif
 
     return tag;
