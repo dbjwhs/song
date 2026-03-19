@@ -5,6 +5,9 @@
 #include "parser.hpp"
 #include "resolver.hpp"
 #include "codegen.hpp"
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 
 using namespace song;
 using namespace song::compiler;
@@ -531,4 +534,103 @@ TEST(CodegenTest, ClassForwardDeclarations) {
     // Should have forward declarations for proxy and base
     EXPECT_NE(code.find("class WidgetProxy;"), std::string::npos);
     EXPECT_NE(code.find("class WidgetBase;"), std::string::npos);
+}
+
+// =============================================================================
+// Compiled Codegen — generate C++ from IDL and compile it
+// =============================================================================
+
+TEST(CodegenTest, GeneratedHeaderCompiles) {
+    // Generate a non-trivial header from IDL and verify it compiles
+    std::string source = R"(
+        namespace calculator;
+
+        enum Operation {
+            Add,
+            Subtract,
+            Multiply,
+            Divide
+        }
+
+        struct Point {
+            i32 x;
+            i32 y;
+        }
+
+        struct Line {
+            Point start;
+            Point end;
+            f64 length;
+            i32[] tags;
+        }
+
+        service Calculator {
+            add(i32 a, i32 b) -> i32;
+            distance(Point a, Point b) -> f64;
+            batch_add(i32[] values) -> i32;
+        }
+    )";
+
+    Parser parser(source);
+    auto ast = parser.parse();
+    Resolver resolver(ast);
+    ASSERT_TRUE(resolver.resolve());
+
+    CodeGenerator gen;
+    std::string header = gen.generate_header(ast.namespaces.front());
+
+    // Write to a temp file
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto header_path = tmp_dir / "song_codegen_test.hpp";
+    auto source_path = tmp_dir / "song_codegen_test.cpp";
+
+    {
+        std::ofstream hf(header_path);
+        ASSERT_TRUE(hf.is_open());
+        hf << header;
+    }
+
+    // Write a minimal .cpp that #includes the generated header
+    {
+        std::ofstream sf(source_path);
+        ASSERT_TRUE(sf.is_open());
+        sf << "#include \"song_codegen_test.hpp\"\n"
+           << "int main() { return 0; }\n";
+    }
+
+    // Find song include directory (relative to test binary location)
+    std::filesystem::path song_include;
+    for (auto candidate : {
+        std::filesystem::current_path() / ".." / "include",
+        std::filesystem::current_path() / "include",
+        std::filesystem::current_path().parent_path() / "include",
+    }) {
+        if (std::filesystem::exists(candidate / "song" / "song.hpp")) {
+            song_include = candidate;
+            break;
+        }
+    }
+
+    if (song_include.empty()) {
+        std::filesystem::remove(header_path);
+        std::filesystem::remove(source_path);
+        GTEST_SKIP() << "Could not locate song include directory";
+    }
+
+    // Compile with syntax check only (no linking needed)
+    std::string cmd = "clang++ -std=c++20 -fsyntax-only"
+                      " -I" + song_include.string() +
+                      " -I" + tmp_dir.string() +
+                      " " + source_path.string() +
+                      " 2>&1";
+
+    int ret = std::system(cmd.c_str());
+
+    // Clean up temp files
+    std::filesystem::remove(header_path);
+    std::filesystem::remove(source_path);
+
+    EXPECT_EQ(ret, 0) << "Generated C++ header failed to compile.\n"
+                       << "Command: " << cmd << "\n"
+                       << "Generated header:\n" << header;
 }
