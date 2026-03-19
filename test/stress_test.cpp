@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <song/manager.hpp>
+#include <song/object.hpp>
 #include <song/registry.hpp>
 #include <song/transport.hpp>
 #include <song/wire.hpp>
@@ -327,4 +328,173 @@ TEST(StressTest, PipeRPCLatency) {
               << " (" << (us / static_cast<double>(kCalls)) << " us/call)" << std::endl;
 
     mgr.stop("echo");
+}
+
+// =============================================================================
+// ObjectRegistry Concurrent Lifecycle Tests
+// =============================================================================
+
+namespace {
+
+/// Minimal concrete Object subclass used as a dummy entry in stress tests.
+class DummyObject final : public song::Object {
+public:
+    void prop_get(song::u16, song::Buffer&) override {}
+    void prop_set(song::u16, song::Buffer&, song::Buffer&) override {}
+    void dispatch(song::u16, song::Buffer&, song::Buffer&) override {}
+};
+
+} // namespace
+
+TEST(StressTest, RegistryConcurrentObjectLifecycle) {
+    // 8 threads each create, verify, add_ref/release, then finally release
+    // 100 independent objects. The registry must reach size 0 at the end.
+    song::ObjectRegistry registry;
+
+    constexpr u32 kTypeId = 1;
+    registry.register_factory(kTypeId, [](song::u16, song::Buffer&) -> song::Object* {
+        return new DummyObject{};
+    });
+
+    constexpr int kThreads = 8;
+    constexpr int kItersPerThread = 100;
+    std::atomic<int> total_created{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&]() {
+            for (int i = 0; i < kItersPerThread; ++i) {
+                song::Buffer args;
+
+                // Create the object (ref_count starts at 1)
+                song::i32 id = registry.create_object(kTypeId, 0, args);
+                ++total_created;
+
+                // Verify the object exists immediately after creation
+                ASSERT_NE(registry.get(id), nullptr);
+
+                // Add an extra reference then release it — net effect: zero change
+                ASSERT_TRUE(registry.add_ref(id));
+                registry.release(id);
+
+                // Final release — should bring ref_count to 0 and remove the object
+                registry.release(id);
+            }
+        });
+    }
+
+    for (auto& th : threads) {
+        th.join();
+    }
+
+    EXPECT_EQ(total_created.load(), kThreads * kItersPerThread);
+    EXPECT_EQ(registry.size(), 0u);
+}
+
+// =============================================================================
+// Service Crash During RPC
+// =============================================================================
+
+TEST(StressTest, CrashDuringRPCRecovers) {
+    // crash_service aborts after 2 messages. Verify:
+    // 1. Client gets an error (not a hang) when service crashes
+    // 2. Auto-restart kicks in and the next call succeeds
+    std::string crash_path = get_test_service_path("crash_service");
+    if (!std::filesystem::exists(crash_path)) {
+        GTEST_SKIP() << "crash_service not found at " << crash_path;
+    }
+
+    ServiceManager mgr;
+    mgr.register_service("crash", crash_path, 1);
+    mgr.set_auto_restart("crash", true);
+    mgr.set_max_restarts("crash", 3);
+    mgr.start_monitor(200);
+
+    // First connection: send 2 messages, service crashes on 2nd
+    {
+        auto conn = mgr.connect("crash");
+
+        // First call should succeed
+        Buffer args;
+        encode_string(args, "msg1");
+        Buffer resp = conn.call(1, 1, args);
+        EXPECT_EQ(decode_string(resp), "ok");
+
+        // Second call triggers crash — client should get an error, not hang
+        Buffer args2;
+        encode_string(args2, "msg2");
+        EXPECT_THROW(conn.call(1, 1, args2), std::exception);
+    }
+
+    // Wait for monitor to detect crash and restart
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    // Service should have been restarted
+    EXPECT_GE(mgr.restart_count("crash"), 1);
+
+    // New connection after restart should work
+    {
+        auto conn = mgr.connect("crash");
+        Buffer args;
+        encode_string(args, "after_restart");
+        Buffer resp = conn.call(1, 1, args);
+        EXPECT_EQ(decode_string(resp), "ok");
+    }
+
+    mgr.stop_monitor();
+    try { mgr.stop("crash"); } catch (...) {}
+}
+
+// =============================================================================
+// Multi-Client Concurrent RPC
+// =============================================================================
+
+TEST(StressTest, MultiClientConcurrentRPC) {
+    // Each client gets its own service process (pipe IPC is single-client).
+    // Verify correct response routing and no cross-client interference.
+    std::string echo_path = get_test_service_path("echo_service");
+    if (!std::filesystem::exists(echo_path)) {
+        GTEST_SKIP() << "echo_service not found at " << echo_path;
+    }
+
+    constexpr int kClients = 4;
+    constexpr int kCallsPerClient = 50;
+    std::atomic<int> success_count{0};
+    std::atomic<int> error_count{0};
+    std::vector<std::thread> threads;
+
+    for (int c = 0; c < kClients; ++c) {
+        threads.emplace_back([&, c]() {
+            try {
+                // Each client gets its own ServiceManager and process instance
+                ServiceManager mgr;
+                std::string svc_name = "echo_" + std::to_string(c);
+                mgr.register_service(svc_name, echo_path, 1);
+                auto conn = mgr.connect(svc_name);
+
+                for (int i = 0; i < kCallsPerClient; ++i) {
+                    Buffer args;
+                    std::string payload = "client" + std::to_string(c) + "_msg" + std::to_string(i);
+                    encode_string(args, payload);
+
+                    Buffer resp = conn.call(1, 1, args);
+                    std::string result = decode_string(resp);
+                    EXPECT_EQ(result, payload);
+                    ++success_count;
+                }
+
+                mgr.stop(svc_name);
+            } catch (const std::exception&) {
+                ++error_count;
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    EXPECT_EQ(success_count.load(), kClients * kCallsPerClient);
+    EXPECT_EQ(error_count.load(), 0);
 }
