@@ -76,11 +76,11 @@ public:
         }
     }
 
-    // Allow moves (source is zeroed by std::string move semantics)
+    // Move-only: prevent key material from lingering in copied memory
     SecurityConfig(SecurityConfig&&) noexcept = default;
     SecurityConfig& operator=(SecurityConfig&&) noexcept = default;
-    SecurityConfig(const SecurityConfig&) = default;
-    SecurityConfig& operator=(const SecurityConfig&) = default;
+    SecurityConfig(const SecurityConfig&) = delete;
+    SecurityConfig& operator=(const SecurityConfig&) = delete;
 
     /// Check if security is enabled
     bool is_enabled() const { return level_ != SecurityLevel::none; }

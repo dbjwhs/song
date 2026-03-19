@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
 
         // Wrap with security layer
         SecurityConfig security(key);
-        SecureTransport transport(std::move(tcp), security);
+        SecureTransport transport(std::move(tcp), std::move(security));
 
         std::cout << "Connected with HMAC-SHA256 authentication\n";
         std::cout << "\n=== Secure Calculator Demo ===\n\n";

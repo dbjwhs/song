@@ -112,7 +112,7 @@ TEST_F(SecureTransportTest, SuccessfulAuthentication) {
     tcp->connect("127.0.0.1", kTestPort, 5000);
 
     SecurityConfig security(kCorrectKey);
-    SecureTransport transport(std::move(tcp), security);
+    SecureTransport transport(std::move(tcp), std::move(security));
 
     // Make a call
     Buffer req;
@@ -128,7 +128,7 @@ TEST_F(SecureTransportTest, MultipleCallsWithAuth) {
     tcp->connect("127.0.0.1", kTestPort, 5000);
 
     SecurityConfig security(kCorrectKey);
-    SecureTransport transport(std::move(tcp), security);
+    SecureTransport transport(std::move(tcp), std::move(security));
 
     // Multiple calls over the same secure connection
     for (int i = 0; i < 10; ++i) {
@@ -146,7 +146,7 @@ TEST_F(SecureTransportTest, StructReturnWithAuth) {
     tcp->connect("127.0.0.1", kTestPort, 5000);
 
     SecurityConfig security(kCorrectKey);
-    SecureTransport transport(std::move(tcp), security);
+    SecureTransport transport(std::move(tcp), std::move(security));
 
     Buffer req;
     encode_i32(req, 17);
@@ -164,7 +164,7 @@ TEST_F(SecureTransportTest, WrongKeyRejected) {
     tcp->connect("127.0.0.1", kTestPort, 5000);
 
     SecurityConfig security(kWrongKey);
-    SecureTransport transport(std::move(tcp), security);
+    SecureTransport transport(std::move(tcp), std::move(security));
 
     Buffer req;
     encode_i32(req, 10);
@@ -182,7 +182,7 @@ TEST_F(SecureTransportTest, ArrayWithAuth) {
     tcp->connect("127.0.0.1", kTestPort, 5000);
 
     SecurityConfig security(kCorrectKey);
-    SecureTransport transport(std::move(tcp), security);
+    SecureTransport transport(std::move(tcp), std::move(security));
 
     Buffer req;
     std::vector<i32> values = {1, 2, 3, 4, 5};

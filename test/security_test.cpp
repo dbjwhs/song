@@ -204,7 +204,7 @@ TEST(SecureTransportTest, SendReceiveWithSecurity) {
         ASSERT_NE(server_tcp, nullptr);
 
         SecurityConfig config(shared_key);
-        SecureTransport server(std::move(server_tcp), config);
+        SecureTransport server(std::move(server_tcp), std::move(config));
 
         // Receive message
         Buffer msg;
@@ -224,7 +224,7 @@ TEST(SecureTransportTest, SendReceiveWithSecurity) {
     client_tcp->connect("127.0.0.1", port, 5000);
 
     SecurityConfig config(shared_key);
-    SecureTransport client(std::move(client_tcp), config);
+    SecureTransport client(std::move(client_tcp), std::move(config));
 
     // Send a call message
     Buffer args;
@@ -251,7 +251,7 @@ TEST(SecureTransportTest, MismatchedKeysFails) {
 
         // Server uses different key
         SecurityConfig config("server-key-different-32-bytes!!");
-        SecureTransport server(std::move(server_tcp), config);
+        SecureTransport server(std::move(server_tcp), std::move(config));
 
         // Receive should fail due to HMAC mismatch
         Buffer msg;
@@ -263,7 +263,7 @@ TEST(SecureTransportTest, MismatchedKeysFails) {
     client_tcp->connect("127.0.0.1", port, 5000);
 
     SecurityConfig config("client-key-different-32-bytes!!");
-    SecureTransport client(std::move(client_tcp), config);
+    SecureTransport client(std::move(client_tcp), std::move(config));
 
     // Send a message
     Buffer args;
@@ -286,9 +286,8 @@ TEST(SecureTransportTest, NoSecurityPassthrough) {
 
         // No security
         SecurityConfig config;
-        SecureTransport server(std::move(server_tcp), config);
-
         EXPECT_FALSE(config.is_enabled());
+        SecureTransport server(std::move(server_tcp), std::move(config));
 
         // Receive message (should work without HMAC)
         Buffer msg;
@@ -303,7 +302,7 @@ TEST(SecureTransportTest, NoSecurityPassthrough) {
     client_tcp->connect("127.0.0.1", port, 5000);
 
     SecurityConfig config;
-    SecureTransport client(std::move(client_tcp), config);
+    SecureTransport client(std::move(client_tcp), std::move(config));
 
     // Send a call message
     Buffer args;
@@ -316,7 +315,7 @@ TEST(SecureTransportTest, NoSecurityPassthrough) {
 TEST(SecureTransportTest, TypeName) {
     auto tcp = std::make_unique<TcpTransport>();
     SecurityConfig config("key");
-    SecureTransport secure(std::move(tcp), config);
+    SecureTransport secure(std::move(tcp), std::move(config));
 
     std::string type_name = secure.type_name();
     EXPECT_TRUE(type_name.find("secure") != std::string::npos);
@@ -326,7 +325,7 @@ TEST(SecureTransportTest, TypeName) {
 TEST(SecureTransportTest, IsConnected) {
     auto tcp = std::make_unique<TcpTransport>();
     SecurityConfig config;
-    SecureTransport secure(std::move(tcp), config);
+    SecureTransport secure(std::move(tcp), std::move(config));
 
     // Not connected since we didn't connect the underlying TCP
     EXPECT_FALSE(secure.is_connected());
@@ -337,7 +336,7 @@ TEST(SecureTransportTest, InnerAccess) {
     TcpTransport* raw_ptr = tcp.get();
 
     SecurityConfig config;
-    SecureTransport secure(std::move(tcp), config);
+    SecureTransport secure(std::move(tcp), std::move(config));
 
     EXPECT_EQ(secure.inner(), raw_ptr);
 }
@@ -355,7 +354,7 @@ TEST(SecureTransportTest, MultipleMessages) {
         ASSERT_NE(server_tcp, nullptr);
 
         SecurityConfig config(shared_key);
-        SecureTransport server(std::move(server_tcp), config);
+        SecureTransport server(std::move(server_tcp), std::move(config));
 
         // Receive and respond to 5 messages
         for (int i = 0; i < 5; ++i) {
@@ -376,7 +375,7 @@ TEST(SecureTransportTest, MultipleMessages) {
     client_tcp->connect("127.0.0.1", port, 5000);
 
     SecurityConfig config(shared_key);
-    SecureTransport client(std::move(client_tcp), config);
+    SecureTransport client(std::move(client_tcp), std::move(config));
 
     // Send 5 messages
     for (int i = 0; i < 5; ++i) {
@@ -414,7 +413,7 @@ TEST(SecureTransportPipeTest, SendReceiveWithPipes) {
         );
 
         SecurityConfig config(shared_key);
-        SecureTransport server(std::move(pipe_transport), config);
+        SecureTransport server(std::move(pipe_transport), std::move(config));
 
         // Receive message
         Buffer msg;
@@ -434,7 +433,7 @@ TEST(SecureTransportPipeTest, SendReceiveWithPipes) {
     );
 
     SecurityConfig config(shared_key);
-    SecureTransport client(std::move(pipe_transport), config);
+    SecureTransport client(std::move(pipe_transport), std::move(config));
 
     // Send a call message
     Buffer args;

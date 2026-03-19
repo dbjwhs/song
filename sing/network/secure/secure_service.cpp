@@ -49,7 +49,7 @@ void calculator_dispatcher(u16 method_id, Buffer& request, Buffer& response) {
 // Handle a single client connection with security
 void handle_secure_client(std::unique_ptr<Transport> tcp_transport) {
     SecurityConfig security(kSharedKey);
-    SecureTransport transport(std::move(tcp_transport), security);
+    SecureTransport transport(std::move(tcp_transport), std::move(security));
 
     Log::info("Client connected with HMAC auth");
 
