@@ -450,3 +450,83 @@ TEST(SecureTransportPipeTest, SendReceiveWithPipes) {
 
     server_thread.join();
 }
+
+// =============================================================================
+// SecureTransport HMAC Edge Case Tests
+// =============================================================================
+
+// A message whose payload_size is exactly one byte past the limit
+// (kMaxPayloadSize - kHmacTagSize + 1) must be rejected by send() before
+// any bytes reach the wire, because appending the HMAC tag would overflow
+// the protocol's maximum payload size.
+TEST(SecureTransportTest, OversizedPayloadRejected) {
+    // The size check in send() fires before inner_->send() is ever called,
+    // so no functioning underlying transport is required.  A default-constructed
+    // Pipe pair with fds = -1 is sufficient — the code never reaches the write.
+    auto sender_pipe = std::make_unique<PipeTransport>(Pipe{}, Pipe{});
+
+    SecurityConfig config("test-shared-secret-key-32bytes!!");
+    SecureTransport sender(std::move(sender_pipe), std::move(config));
+
+    // Build a buffer whose header declares payload_size one byte past the
+    // threshold: payload_size + kHmacTagSize > kMaxPayloadSize.
+    wire::Header hdr{};
+    hdr.magic        = wire::kMagic;
+    hdr.flags        = wire::MsgFlags::none;
+    hdr.type         = wire::MsgType::call;
+    hdr.reserved     = 0;
+    hdr.sequence_id  = 1;
+    hdr.payload_size = static_cast<u32>(wire::kMaxPayloadSize - kHmacTagSize + 1);
+
+    Buffer oversized;
+    wire::encode_header(oversized, hdr);
+    // No payload bytes are appended: the size check reads the header field,
+    // not the actual buffer contents.
+
+    EXPECT_THROW(sender.send(oversized), SecurityError);
+}
+
+// A message delivered over the wire whose payload_size is smaller than
+// kHmacTagSize (8 bytes) cannot be split into data + tag, so receive()
+// must throw SecurityError before attempting the split.
+TEST(SecureTransportTest, TruncatedHmacRejected) {
+    // Need bidirectional pipes since PipeTransport::is_connected() requires both ends
+    auto [c2s_read, c2s_write] = Pipe::create_pair();
+    auto [s2c_read, s2c_write] = Pipe::create_pair();
+
+    std::thread server_thread([
+        read = std::move(c2s_read),
+        write = std::move(s2c_write)]() mutable {
+        auto pipe_transport = std::make_unique<PipeTransport>(
+            std::move(write), std::move(read)
+        );
+
+        SecurityConfig config("test-shared-secret-key-32bytes!!");
+        SecureTransport server(std::move(pipe_transport), std::move(config));
+
+        Buffer msg;
+        EXPECT_THROW(server.receive(msg, 5000), SecurityError);
+    });
+
+    // Send raw wire message (no SecureTransport) with payload_size < kHmacTagSize
+    auto raw_sender = std::make_unique<PipeTransport>(
+        std::move(c2s_write), std::move(s2c_read)
+    );
+
+    wire::Header hdr{};
+    hdr.magic        = wire::kMagic;
+    hdr.flags        = wire::MsgFlags::none;
+    hdr.type         = wire::MsgType::call;
+    hdr.reserved     = 0;
+    hdr.sequence_id  = 1;
+    hdr.payload_size = static_cast<u32>(kHmacTagSize - 1);  // too short for HMAC
+
+    std::array<std::byte, kHmacTagSize - 1> dummy{};
+    Buffer malformed;
+    wire::encode_header(malformed, hdr);
+    malformed.write(dummy.data(), dummy.size());
+
+    raw_sender->send(malformed);
+
+    server_thread.join();
+}
