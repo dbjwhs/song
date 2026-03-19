@@ -3,6 +3,7 @@
 
 #include "song/buffer.hpp"
 #include <stdexcept>
+#include <limits>
 #include <bit>
 
 // Song specifies a little-endian wire format. All numeric types are serialized
@@ -62,6 +63,12 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
 void Buffer::ensure_capacity(size_t required) {
     if (required <= capacity_) return;
 
+    // Guard against overflow: capacity doubling must not wrap around SIZE_MAX
+    constexpr size_t kMaxCapacity = std::numeric_limits<size_t>::max() / 2;
+    if (required > kMaxCapacity) {
+        throw std::runtime_error("Buffer capacity overflow: requested size too large");
+    }
+
     size_t new_capacity = capacity_;
     while (new_capacity < required) {
         new_capacity *= 2;
@@ -79,13 +86,16 @@ void Buffer::ensure_capacity(size_t required) {
 }
 
 void Buffer::write(const void* data, size_t len) {
+    if (len > 0 && size_ > std::numeric_limits<size_t>::max() - len) {
+        throw std::runtime_error("Buffer write overflow: size + len exceeds maximum");
+    }
     ensure_capacity(size_ + len);
     std::memcpy(data_ + size_, data, len);
     size_ += len;
 }
 
 void Buffer::read(void* data, size_t len) {
-    if (read_pos_ + len > size_) {
+    if (len > size_ || read_pos_ > size_ - len) {
         throw std::runtime_error("Buffer underflow: attempted to read beyond buffer size");
     }
     std::memcpy(data, data_ + read_pos_, len);
