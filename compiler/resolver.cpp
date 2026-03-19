@@ -288,6 +288,49 @@ void Resolver::check_duplicate_fields(const std::vector<compiler::Field>& fields
         }
         seen.insert(field.name);
     }
+
+    // Check for shadowing of inherited fields
+    const TypeInfo* info = lookup(parent_name);
+    if (!info || !info->base) return;
+
+    // Collect all ancestor field names (with cycle guard)
+    std::unordered_set<std::string> ancestor_fields;
+    std::unordered_set<std::string> visited;
+    std::string current = *info->base;
+    while (true) {
+        if (visited.count(current)) break;  // cycle — already reported elsewhere
+        visited.insert(current);
+
+        // Find this ancestor's fields in the AST
+        for (const auto& ns : m_ast.namespaces) {
+            for (const auto& s : ns.structs) {
+                if (s.name == current) {
+                    for (const auto& f : s.fields) {
+                        ancestor_fields.insert(f.name);
+                    }
+                }
+            }
+            for (const auto& e : ns.errors) {
+                if (e.name == current) {
+                    for (const auto& f : e.fields) {
+                        ancestor_fields.insert(f.name);
+                    }
+                }
+            }
+        }
+        // Walk up the chain
+        const TypeInfo* ancestor = lookup(current);
+        if (!ancestor || !ancestor->base) break;
+        current = *ancestor->base;
+    }
+
+    // Report any shadowed fields
+    for (const auto& field : fields) {
+        if (ancestor_fields.count(field.name)) {
+            error(field.loc, "Field '" + field.name + "' in " + parent_name +
+                  " shadows inherited field from base type");
+        }
+    }
 }
 
 void Resolver::check_duplicate_methods(const std::vector<compiler::Method>& methods,
@@ -311,6 +354,21 @@ void Resolver::check_duplicate_enum_items(const std::vector<compiler::EnumItem>&
                   "' in " + parent_name);
         }
         seen.insert(item.name);
+    }
+
+    // Check for duplicate explicit values
+    std::unordered_map<int64_t, std::string> seen_values;
+    int64_t auto_value = 0;
+    for (const auto& item : items) {
+        int64_t val = item.value.value_or(auto_value);
+        auto it = seen_values.find(val);
+        if (it != seen_values.end()) {
+            error(item.loc, "Enum value " + std::to_string(val) + " for '" +
+                  item.name + "' collides with '" + it->second +
+                  "' in " + parent_name);
+        }
+        seen_values[val] = item.name;
+        auto_value = val + 1;
     }
 }
 
