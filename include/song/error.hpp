@@ -9,6 +9,49 @@
 
 namespace song {
 
+// =============================================================================
+// Error Model Contracts
+// =============================================================================
+//
+// Song uses a mix of return values and exceptions with the following contracts:
+//
+// Transport layer (PipeTransport, TcpTransport):
+//   - send():     throws on fatal I/O error (broken pipe, closed socket)
+//   - receive():  returns false on timeout or clean disconnect (EOF)
+//                 throws nothing — callers detect disconnect via false return
+//   - close():    never throws (best-effort cleanup)
+//
+// SecureTransport (wraps Transport):
+//   - send():     throws SecurityError if payload too large for HMAC
+//   - receive():  returns false on timeout/disconnect (same as inner transport)
+//                 throws SecurityError on HMAC verification failure (tampered data)
+//
+// ServiceManager:
+//   - connect():  throws ServiceError if service not registered or spawn fails
+//   - start():    throws ServiceError if already running or spawn fails
+//   - stop():     throws ServiceError if not registered; no-op if already stopped
+//
+// ServiceConnection:
+//   - call():     throws std::runtime_error on I/O error or protocol error
+//                 throws ProtocolError on wire-level decoding errors
+//                 returns Buffer containing the response payload
+//
+// Process:
+//   - Lifecycle errors throw ServiceError (spawn_failed, service_crashed)
+//
+// Buffer:
+//   - encode_*:   throws std::runtime_error on capacity overflow
+//   - decode_*:   throws std::runtime_error on buffer underflow (read past end)
+//   - Strings/bytes: throws on size > kMaxStringSize/kMaxBytesSize
+//
+// ObjectRegistry:
+//   - create_object(): throws std::runtime_error if factory not found
+//   - get():           returns nullptr for unknown IDs (no throw)
+//   - release():       no-op for unknown IDs (no throw)
+//   - add_ref():       returns false for unknown IDs (no throw)
+//
+// =============================================================================
+
 /// Error codes for Song framework
 enum class ErrorCode : u16 {
     ok = 0,
