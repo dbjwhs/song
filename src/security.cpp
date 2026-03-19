@@ -80,29 +80,29 @@ void SecureTransport::send(const Buffer& msg) {
         return;
     }
 
-    // Compute HMAC over the original message (before modification)
+    // Compute HMAC over the raw wire bytes of the original message
     HmacTag tag = compute_hmac(config_.key(), msg);
 
-    // Parse the original header to get payload_size
-    Buffer temp_buf;
-    temp_buf.write(msg.data(), msg.size());
-    temp_buf.reset_read();
-    auto hdr = wire::decode_header(temp_buf);
+    // Read payload_size directly from raw wire bytes at offset 8
+    u32 payload_size = 0;
+    std::memcpy(&payload_size, msg.data() + 8, sizeof(u32));
 
     // Validate payload_size won't overflow when adding HMAC tag
-    if (hdr.payload_size > wire::kMaxPayloadSize - kHmacTagSize) {
+    if (payload_size > wire::kMaxPayloadSize - kHmacTagSize) {
         throw SecurityError("payload too large for HMAC authentication");
     }
 
-    // Create new message with modified payload_size to include HMAC tag
+    // Build secure message: copy original header, patch payload_size, append payload + tag
     Buffer secure_msg;
-    wire::Header new_hdr = hdr;
-    new_hdr.payload_size = hdr.payload_size + static_cast<u32>(kHmacTagSize);
-    wire::encode_header(secure_msg, new_hdr);
+    secure_msg.write(msg.data(), 16);  // Copy raw header
+
+    // Patch payload_size at offset 8 to include HMAC tag
+    u32 new_payload_size = payload_size + static_cast<u32>(kHmacTagSize);
+    std::memcpy(secure_msg.data() + 8, &new_payload_size, sizeof(u32));
 
     // Copy original payload
-    if (hdr.payload_size > 0) {
-        secure_msg.write(msg.data() + 16, hdr.payload_size);
+    if (payload_size > 0) {
+        secure_msg.write(msg.data() + 16, payload_size);
     }
 
     // Append HMAC tag (now part of the "extended" payload)
@@ -127,17 +127,17 @@ bool SecureTransport::receive(Buffer& msg, int timeout_ms) {
         return false;
     }
 
-    // Parse header to get extended payload_size
-    secure_msg.reset_read();
-    auto hdr = wire::decode_header(secure_msg);
+    // Read payload_size directly from raw wire bytes at offset 8
+    u32 ext_payload_size = 0;
+    std::memcpy(&ext_payload_size, secure_msg.data() + 8, sizeof(u32));
 
     // Extended payload must include at least the HMAC tag
-    if (hdr.payload_size < kHmacTagSize) {
+    if (ext_payload_size < kHmacTagSize) {
         throw SecurityError("message payload too short for HMAC verification");
     }
 
     // Calculate original payload size
-    u32 orig_payload_size = hdr.payload_size - static_cast<u32>(kHmacTagSize);
+    u32 orig_payload_size = ext_payload_size - static_cast<u32>(kHmacTagSize);
 
     // Extract HMAC tag from end of extended payload
     HmacTag received_tag{};
@@ -145,18 +145,15 @@ bool SecureTransport::receive(Buffer& msg, int timeout_ms) {
                 secure_msg.data() + 16 + orig_payload_size,
                 kHmacTagSize);
 
-    // Reconstruct original message (with original payload_size)
+    // Build original message from raw wire bytes (header + payload, no tag)
+    // by copying the received bytes and patching payload_size back to original
     msg.reset();
-    wire::Header orig_hdr = hdr;
-    orig_hdr.payload_size = orig_payload_size;
-    wire::encode_header(msg, orig_hdr);
+    msg.write(secure_msg.data(), 16 + orig_payload_size);
 
-    // Copy original payload
-    if (orig_payload_size > 0) {
-        msg.write(secure_msg.data() + 16, orig_payload_size);
-    }
+    // Patch payload_size at offset 8 to the original value
+    std::memcpy(msg.data() + 8, &orig_payload_size, sizeof(u32));
 
-    // Verify HMAC over reconstructed original message
+    // Verify HMAC over raw wire bytes of original message
     if (!verify_hmac(config_.key(), msg, received_tag)) {
         throw SecurityError("HMAC verification failed - message may be tampered");
     }
