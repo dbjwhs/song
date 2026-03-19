@@ -387,8 +387,9 @@ TEST(PythonCodegenTest, ArrayTypeHints) {
     )");
 
     EXPECT_NE(code.find("data: list[list[float]]"), std::string::npos);
-    // Multi-dimensional primitive arrays emit NotImplementedError (honest limitation)
-    EXPECT_NE(code.find("NotImplementedError"), std::string::npos);
+    // Multi-dimensional arrays now generate proper encode/decode loops
+    EXPECT_EQ(code.find("NotImplementedError"), std::string::npos);
+    EXPECT_NE(code.find("encode_u32"), std::string::npos);
 }
 
 TEST(PythonCodegenTest, UserTypeArray) {

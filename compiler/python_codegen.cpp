@@ -88,8 +88,16 @@ std::string PythonCodeGenerator::encode_call(const Type& t, const std::string& e
                    + indent + "for _item in " + expr + ":\n"
                    + indent + "    encode_" + get_user_type(elem) + "(req, _item)";
         }
-        // Multi-dimensional or other unsupported array: emit runtime error
-        return "raise NotImplementedError('encode for " + type_to_python(t) + " not yet supported')";
+        // Multi-dimensional array: encode outer length, then recurse for each element
+        if (elem.is_array) {
+            return "req.encode_u32(len(" + expr + "))\n"
+                   + indent + "for _item in " + expr + ":\n"
+                   + indent + "    " + encode_call(elem, "_item", indent + "    ");
+        }
+        // Remaining primitive array types without built-in helpers
+        return "req.encode_u32(len(" + expr + "))\n"
+               + indent + "for _item in " + expr + ":\n"
+               + indent + "    " + encode_call(elem, "_item", indent + "    ");
     }
 
     if (t.is_optional) {
@@ -145,8 +153,8 @@ std::string PythonCodeGenerator::decode_call(const Type& t) {
             // User-defined type array: decode each element via its decode function
             return "[decode_" + get_user_type(elem) + "(resp) for _ in range(resp.decode_u32())]";
         }
-        // Multi-dimensional or other unsupported array: emit runtime error
-        return "raise NotImplementedError('decode for " + type_to_python(t) + " not yet supported')";
+        // Multi-dimensional array or remaining primitive arrays: decode with length prefix + loop
+        return "[" + decode_call(elem) + " for _ in range(resp.decode_u32())]";
     }
 
     if (t.is_optional) {
