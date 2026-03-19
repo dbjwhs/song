@@ -474,3 +474,42 @@ TEST(BufferTest, MixedDataRoundtrip) {
     auto result_bytes = decode_array<u8>(buf);
     EXPECT_EQ(result_bytes, bytes);
 }
+
+// =============================================================================
+// Buffer Overflow Boundary Tests
+// =============================================================================
+
+TEST(BufferOverflowTest, WriteOverflow) {
+    // write() guards: size_ > SIZE_MAX - len must throw
+    Buffer buf;
+    const char seed[] = "seed";
+    buf.write(seed, sizeof(seed));
+
+    // Passing SIZE_MAX as the length guarantees size_ + len overflows size_t
+    EXPECT_THROW(buf.write(seed, std::numeric_limits<size_t>::max()), std::runtime_error);
+}
+
+TEST(BufferOverflowTest, ReadBeyondBounds) {
+    // read() guards: read_pos_ > size_ - len must throw when not enough data remains
+    Buffer buf;
+    const char data[] = "ABCD";  // 4 bytes
+    buf.write(data, sizeof(data));
+
+    char out[4] = {0};
+    buf.read(out, 2);  // consume 2 bytes; 2 bytes remain (+ NUL, actually sizeof(data)=5)
+
+    // Attempt to read more bytes than what remains in the buffer
+    EXPECT_THROW(buf.read(out, buf.size()), std::runtime_error);
+}
+
+TEST(BufferOverflowTest, EnsureCapacityOverflow) {
+    // ensure_capacity() guards: required > SIZE_MAX/2 must throw
+    // write() calls ensure_capacity(size_ + len), so request SIZE_MAX/2 + 2 bytes
+    Buffer buf;
+    constexpr size_t kHuge = std::numeric_limits<size_t>::max() / 2 + 2;
+
+    // write() overflow check fires first (size_ + kHuge wraps), which is also
+    // a valid guard hit. Drive ensure_capacity directly via a two-step approach:
+    // keep size_ = 0 so addition doesn't overflow, but len alone exceeds the cap limit.
+    EXPECT_THROW(buf.write(nullptr, kHuge), std::runtime_error);
+}
