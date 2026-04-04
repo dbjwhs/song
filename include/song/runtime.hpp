@@ -135,15 +135,19 @@ public:
                                           const std::string& name,
                                           const std::string& type);
 
+    /// Send init confirmation to a Transport-based client
+    void send_init_confirmation_transport(Transport& transport);
+
+    /// Handle a single message from a client (dispatch to registered handlers)
+    void handle_message(const wire::Header& hdr, Buffer& payload,
+                       Transport& transport,
+                       std::unordered_set<i32>& tracked_objects);
+
 private:
     /// Release all objects tracked by a connection (prevents leaks on crash)
     void release_connection_objects(std::unordered_set<i32>& tracked);
 
     void send_init_confirmation_fd(int fd);
-    void send_init_confirmation_transport(Transport& transport);
-    void handle_message(const wire::Header& hdr, Buffer& payload,
-                       Transport& transport,
-                       std::unordered_set<i32>& tracked_objects);
     void handle_message_fd(const wire::Header& hdr, Buffer& payload,
                           int write_fd,
                           std::unordered_set<i32>& tracked_objects);

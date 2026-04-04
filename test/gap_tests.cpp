@@ -207,3 +207,649 @@ TEST(VersionCrossCompatTest, MajorVersionMismatchRejects) {
     listener.close();
     server.join();
 }
+
+// =============================================================================
+// C2: TLS + ServiceRuntime Integration
+// =============================================================================
+
+#if defined(SONG_HAS_TLS)
+
+static std::string test_cert_dir() {
+    std::vector<std::string> candidates = {"test/certs", "../test/certs", "../../test/certs"};
+    for (const auto& c : candidates) {
+        if (std::filesystem::exists(c + "/ca_cert.pem")) return c;
+    }
+    return "/Users/dbjones/ng/dbjwhs/song/test/certs";
+}
+
+static void tls_echo_dispatcher(u16, Buffer& request, Buffer& response) {
+    std::string s = decode_string(request);
+    encode_string(response, "tls:" + s);
+}
+
+static TlsTransport make_test_tls_client(u16 port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+
+    TlsConfig cli_config(
+        test_cert_dir() + "/client_cert.pem",
+        test_cert_dir() + "/client_key.pem",
+        test_cert_dir() + "/ca_cert.pem");
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsTransport transport(sock, std::move(cli_config), "127.0.0.1", port);
+    transport.handshake();
+    return transport;
+}
+
+TEST(TlsIntegrationTest, RpcOverTlsWithDispatcher) {
+    if (!std::filesystem::exists(test_cert_dir() + "/ca_cert.pem")) {
+        GTEST_SKIP() << "Test certs not found";
+    }
+
+    TlsConfig srv_config(
+        test_cert_dir() + "/server_cert.pem",
+        test_cert_dir() + "/server_key.pem",
+        test_cert_dir() + "/ca_cert.pem");
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener tls_listener;
+    tls_listener.listen(srv_config, 0);
+    u16 port = tls_listener.bound_port();
+
+    std::thread server([&tls_listener]() {
+        auto conn = tls_listener.accept(5000);
+        if (!conn) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, 0);
+            conn->send(init_msg);
+
+            for (;;) {
+                Buffer msg;
+                if (!conn->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::call) {
+                    [[maybe_unused]] auto [sid, mid] = wire::decode_method_call_header(msg);
+                    Buffer response;
+                    tls_echo_dispatcher(mid, msg, response);
+                    Buffer result = wire::create_result_message(hdr.sequence_id, response);
+                    conn->send(result);
+                }
+            }
+        } catch (...) {}
+    });
+
+    auto tls_client = make_test_tls_client(port);
+    ServiceConnection conn(&tls_client);
+    conn.init_handshake();
+
+    // Multiple RPC calls over TLS
+    for (int i = 0; i < 5; ++i) {
+        Buffer args;
+        encode_string(args, std::to_string(i));
+        Buffer result = conn.call(1, 1, args);
+        EXPECT_EQ(decode_string(result), "tls:" + std::to_string(i));
+    }
+
+    Buffer shutdown = wire::create_shutdown_message();
+    tls_client.send(shutdown);
+    tls_listener.close();
+    server.join();
+}
+
+#endif // SONG_HAS_TLS
+
+// =============================================================================
+// C3: Streaming + Security (HMAC)
+// =============================================================================
+
+TEST(StreamSecurityTest, StreamOverHmac) {
+    std::string key = "stream-hmac-test-key-32-bytes!!";
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener, &key]() {
+        auto tcp = listener.accept(5000);
+        if (!tcp) return;
+        SecurityConfig security(key);
+        SecureTransport transport(std::move(tcp), std::move(security));
+
+        StreamWriter writer(transport, 42);
+        for (int i = 0; i < 3; ++i) {
+            Buffer chunk;
+            encode_i32(chunk, i * 10);
+            writer.write(chunk);
+        }
+        writer.end();
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    SecurityConfig security(key);
+    SecureTransport client(std::move(tcp), std::move(security));
+
+    std::vector<i32> values;
+    for (;;) {
+        Buffer msg;
+        ASSERT_TRUE(client.receive(msg, 5000));
+        msg.reset_read();
+        auto hdr = wire::decode_header(msg);
+        if (hdr.type == wire::MsgType::stream_end) break;
+        ASSERT_EQ(hdr.type, wire::MsgType::stream);
+        values.push_back(decode_i32(msg));
+    }
+
+    ASSERT_EQ(values.size(), 3u);
+    EXPECT_EQ(values[0], 0);
+    EXPECT_EQ(values[1], 10);
+    EXPECT_EQ(values[2], 20);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+#if defined(SONG_HAS_TLS)
+
+TEST(StreamSecurityTest, StreamOverTls) {
+    if (!std::filesystem::exists(test_cert_dir() + "/ca_cert.pem")) {
+        GTEST_SKIP() << "Test certs not found";
+    }
+
+    TlsConfig srv_config(
+        test_cert_dir() + "/server_cert.pem",
+        test_cert_dir() + "/server_key.pem",
+        test_cert_dir() + "/ca_cert.pem");
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener tls_listener;
+    tls_listener.listen(srv_config, 0);
+    u16 port = tls_listener.bound_port();
+
+    std::thread server([&tls_listener]() {
+        auto conn = tls_listener.accept(5000);
+        if (!conn) return;
+        StreamWriter writer(*conn, 99);
+        for (int i = 0; i < 5; ++i) {
+            Buffer chunk;
+            encode_string(chunk, "chunk-" + std::to_string(i));
+            writer.write(chunk);
+        }
+        writer.end();
+    });
+
+    auto client = make_test_tls_client(port);
+
+    std::vector<std::string> chunks;
+    for (;;) {
+        Buffer msg;
+        ASSERT_TRUE(client.receive(msg, 5000));
+        msg.reset_read();
+        auto hdr = wire::decode_header(msg);
+        if (hdr.type == wire::MsgType::stream_end) break;
+        ASSERT_EQ(hdr.type, wire::MsgType::stream);
+        EXPECT_TRUE(wire::has_flag(hdr.flags, wire::MsgFlags::encrypted));
+        chunks.push_back(decode_string(msg));
+    }
+
+    ASSERT_EQ(chunks.size(), 5u);
+    EXPECT_EQ(chunks[0], "chunk-0");
+    EXPECT_EQ(chunks[4], "chunk-4");
+
+    client.close();
+    tls_listener.close();
+    server.join();
+}
+
+#endif // SONG_HAS_TLS
+
+// =============================================================================
+// C4: Streaming Error Paths
+// =============================================================================
+
+TEST(StreamErrorTest, ServiceThrowsMidStream) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, 0);
+            client->send(init_msg);
+
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                if (hdr.type == wire::MsgType::shutdown) break;
+
+                if (hdr.type == wire::MsgType::call) {
+                    [[maybe_unused]] auto [sid, mid] = wire::decode_method_call_header(msg);
+                    // Send 2 chunks then error instead of stream_end
+                    for (int i = 0; i < 2; ++i) {
+                        Buffer chunk;
+                        encode_i32(chunk, i);
+                        Buffer stream_msg = wire::create_stream_message(hdr.sequence_id, chunk);
+                        client->send(stream_msg);
+                    }
+                    Buffer err = wire::create_error_message(
+                        hdr.sequence_id, ErrorCode::unknown_method, "mid-stream failure");
+                    client->send(err);
+                }
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    encode_i32(args, 5);
+    EXPECT_THROW(conn.call_streaming(1, 1, args), ServiceError);
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
+TEST(StreamErrorTest, EmptyStreamViaServiceConnection) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, 0);
+            client->send(init_msg);
+
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::call) {
+                    Buffer end_msg = wire::create_stream_end_message(hdr.sequence_id);
+                    client->send(end_msg);
+                }
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    StreamReader reader = conn.call_streaming(1, 1, args);
+    EXPECT_TRUE(reader.complete());
+    EXPECT_EQ(reader.chunk_count(), 0u);
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
+// =============================================================================
+// C5: init_ack Full Handshake Through ServiceRuntime
+// =============================================================================
+
+TEST(InitAckIntegrationTest, RuntimeReceivesClientCapabilities) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::atomic<u32> received_peer_caps{0};
+
+    std::thread server([&listener, &received_peer_caps]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            u32 srv_caps = static_cast<u32>(
+                wire::Capability::streaming | wire::Capability::hmac);
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, srv_caps);
+            client->send(init_msg);
+
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::shutdown) break;
+
+                if (hdr.type == wire::MsgType::init_ack) {
+                    auto peer_init = wire::decode_init(msg);
+                    received_peer_caps = peer_init.capabilities;
+                    continue;
+                }
+
+                if (hdr.type == wire::MsgType::call) {
+                    [[maybe_unused]] auto [sid, mid] = wire::decode_method_call_header(msg);
+                    Buffer response;
+                    encode_string(response, "ok");
+                    Buffer result = wire::create_result_message(hdr.sequence_id, response);
+                    client->send(result);
+                }
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+
+    u32 client_caps = static_cast<u32>(
+        wire::Capability::streaming | wire::Capability::tls | wire::Capability::ext_0);
+    conn.set_local_capabilities(client_caps);
+    conn.init_handshake();
+
+    // negotiated = local & peer
+    // Client has streaming+tls+ext_0, server has streaming+hmac
+    // Intersection = streaming only
+    EXPECT_TRUE(conn.has_capability(wire::Capability::streaming));
+    EXPECT_FALSE(conn.has_capability(wire::Capability::hmac));  // server has it, client doesn't
+    EXPECT_FALSE(conn.has_capability(wire::Capability::tls));   // client has it, server doesn't
+    // Peer caps (raw) should include both server flags
+    EXPECT_EQ(conn.peer_capabilities(),
+        static_cast<u32>(wire::Capability::streaming | wire::Capability::hmac));
+
+    // Make a call to ensure connection is working
+    Buffer args;
+    Buffer result = conn.call(1, 1, args);
+    EXPECT_EQ(decode_string(result), "ok");
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+
+    // Server should have received client's capabilities via init_ack
+    EXPECT_EQ(received_peer_caps, client_caps);
+}
+
+// =============================================================================
+// M1: ServiceRuntime.run_tcp() via handle_message
+// =============================================================================
+
+TEST(RuntimeTcpTest, DispatcherCalledThroughRuntime) {
+    ServiceRuntime runtime;
+    std::atomic<int> call_count{0};
+
+    runtime.register_dispatcher(1, [&call_count](u16 method_id, Buffer& req, Buffer& resp) {
+        call_count++;
+        if (method_id == 1) {
+            i32 val = decode_i32(req);
+            encode_i32(resp, val * 3);
+        }
+    });
+    runtime.register_method(1, 1);
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) break;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    for (int i = 0; i < 10; ++i) {
+        Buffer args;
+        encode_i32(args, i);
+        Buffer result = conn.call(1, 1, args);
+        EXPECT_EQ(decode_i32(result), i * 3);
+    }
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+
+    EXPECT_EQ(call_count, 10);
+}
+
+// =============================================================================
+// M2: Concurrent / Interleaved Operations
+// =============================================================================
+
+TEST(ConcurrencyTest, SequentialClientsOnSamePort) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+    std::atomic<int> clients_served{0};
+
+    std::thread server([&listener, &clients_served]() {
+        for (int c = 0; c < 3; ++c) {
+            auto client = listener.accept(5000);
+            if (!client) return;
+            try {
+                Buffer init_msg = wire::create_init_message(
+                    wire::kFirstVersion, wire::kCurrentVersion, 0);
+                client->send(init_msg);
+                for (;;) {
+                    Buffer msg;
+                    if (!client->receive(msg, 2000)) break;
+                    auto hdr = wire::decode_header(msg);
+                    if (hdr.type == wire::MsgType::init_ack) continue;
+                    if (hdr.type == wire::MsgType::shutdown) break;
+                    if (hdr.type == wire::MsgType::call) {
+                        [[maybe_unused]] auto [sid, mid] = wire::decode_method_call_header(msg);
+                        i32 val = decode_i32(msg);
+                        Buffer response;
+                        encode_i32(response, val + c);
+                        Buffer result = wire::create_result_message(hdr.sequence_id, response);
+                        client->send(result);
+                    }
+                }
+            } catch (...) {}
+            clients_served++;
+        }
+    });
+
+    for (int c = 0; c < 3; ++c) {
+        auto tcp = std::make_unique<TcpTransport>();
+        tcp->connect("127.0.0.1", port, 5000);
+        ServiceConnection conn(std::move(tcp));
+        conn.init_handshake();
+
+        Buffer args;
+        encode_i32(args, 10);
+        Buffer result = conn.call(1, 1, args);
+        EXPECT_EQ(decode_i32(result), 10 + c);
+
+        Buffer shutdown = wire::create_shutdown_message();
+        conn.transport()->send(shutdown);
+    }
+
+    listener.close();
+    server.join();
+    EXPECT_EQ(clients_served, 3);
+}
+
+TEST(ConcurrencyTest, InterleavedStreamAndRegularCalls) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, 0);
+            client->send(init_msg);
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::call) {
+                    auto [sid, mid] = wire::decode_method_call_header(msg);
+                    if (mid == 1) {
+                        i32 val = decode_i32(msg);
+                        Buffer resp;
+                        encode_i32(resp, val);
+                        client->send(wire::create_result_message(hdr.sequence_id, resp));
+                    } else if (mid == 2) {
+                        i32 n = decode_i32(msg);
+                        for (i32 i = 0; i < n; ++i) {
+                            Buffer chunk;
+                            encode_i32(chunk, i);
+                            client->send(wire::create_stream_message(hdr.sequence_id, chunk));
+                        }
+                        client->send(wire::create_stream_end_message(hdr.sequence_id));
+                    }
+                }
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    // Regular call
+    Buffer a1;
+    encode_i32(a1, 42);
+    Buffer r1 = conn.call(1, 1, a1);
+    EXPECT_EQ(decode_i32(r1), 42);
+
+    // Streaming call
+    Buffer a2;
+    encode_i32(a2, 3);
+    StreamReader reader = conn.call_streaming(1, 2, a2);
+    EXPECT_EQ(reader.chunk_count(), 3u);
+
+    // Regular call after streaming
+    Buffer a3;
+    encode_i32(a3, 99);
+    Buffer r3 = conn.call(1, 1, a3);
+    EXPECT_EQ(decode_i32(r3), 99);
+
+    conn.transport()->send(wire::create_shutdown_message());
+    listener.close();
+    server.join();
+}
+
+// =============================================================================
+// M3: Crash / Disconnect Mid-Operation
+// =============================================================================
+
+TEST(CrashRecoveryTest, ServerDisconnectDuringCall) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        Buffer init_msg = wire::create_init_message(
+            wire::kFirstVersion, wire::kCurrentVersion, 0);
+        client->send(init_msg);
+        // Read one message (possibly init_ack), then crash
+        Buffer msg;
+        client->receive(msg, 5000);
+        auto hdr = wire::decode_header(msg);
+        if (hdr.type == wire::MsgType::init_ack) {
+            client->receive(msg, 5000);  // Read the actual call
+        }
+        client->close();  // Crash without responding
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    encode_i32(args, 1);
+    EXPECT_THROW(conn.call(1, 1, args), std::exception);
+
+    listener.close();
+    server.join();
+}
+
+TEST(CrashRecoveryTest, ServerDisconnectDuringStream) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion, 0);
+            client->send(init_msg);
+
+            // Read init_ack + call
+            Buffer msg;
+            if (!client->receive(msg, 5000)) return;
+            auto hdr = wire::decode_header(msg);
+            if (hdr.type == wire::MsgType::init_ack) {
+                if (!client->receive(msg, 5000)) return;
+                hdr = wire::decode_header(msg);
+            }
+
+            // Send 2 chunks then crash
+            for (int i = 0; i < 2; ++i) {
+                Buffer chunk;
+                encode_i32(chunk, i);
+                client->send(wire::create_stream_message(hdr.sequence_id, chunk));
+            }
+            client->close();  // No stream_end
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    encode_i32(args, 5);
+    EXPECT_THROW(conn.call_streaming(1, 1, args), std::exception);
+
+    listener.close();
+    server.join();
+}
