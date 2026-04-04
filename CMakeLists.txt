@@ -49,6 +49,16 @@ if(UNIX AND NOT APPLE)
     endif()
 endif()
 
+# mbedTLS for TLS transport encryption
+find_package(MbedTLS QUIET)
+if(MbedTLS_FOUND)
+    target_sources(song PRIVATE src/tls.cpp)
+    target_link_libraries(song PRIVATE MbedTLS::mbedtls_static MbedTLS::mbedx509_static MbedTLS::tfpsacrypto_static)
+    target_compile_definitions(song PUBLIC SONG_HAS_TLS=1)
+else()
+    message(STATUS "mbedTLS not found - TLS transport disabled")
+endif()
+
 # Compiler
 add_executable(songc
     compiler/main.cpp

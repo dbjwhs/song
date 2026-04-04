@@ -157,4 +157,86 @@ public:
     int socket_fd() const { return sock_; }
 };
 
+#if defined(SONG_HAS_TLS)
+
+class TlsConfig;  // Forward declaration (defined in security.hpp)
+
+/// TLS-encrypted transport over a TCP socket
+/// Uses mbedTLS for encryption, wrapping a raw socket file descriptor.
+/// PIMPL hides mbedTLS headers from consumers.
+class TlsTransport : public Transport {
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+public:
+    /// Create TLS transport from a connected socket
+    /// @param sock Connected socket file descriptor (takes ownership)
+    /// @param config TLS configuration (takes ownership)
+    /// @param peer_addr Peer address string (for logging)
+    /// @param peer_port Peer port (for logging)
+    TlsTransport(int sock, TlsConfig config,
+                 const std::string& peer_addr = "", u16 peer_port = 0);
+
+    ~TlsTransport() override;
+
+    // Non-copyable, movable
+    TlsTransport(const TlsTransport&) = delete;
+    TlsTransport& operator=(const TlsTransport&) = delete;
+    TlsTransport(TlsTransport&&) noexcept;
+    TlsTransport& operator=(TlsTransport&&) noexcept;
+
+    /// Perform TLS handshake (must call before send/receive)
+    /// @throws SecurityError on handshake failure
+    void handshake();
+
+    void send(const Buffer& msg) override;
+    bool receive(Buffer& msg, int timeout_ms = -1) override;
+    void close() override;
+    bool is_connected() const override;
+    const char* type_name() const override;
+
+    /// Get peer address
+    const std::string& peer_address() const;
+
+    /// Get peer port
+    u16 peer_port() const;
+};
+
+/// TLS listener - accepts TCP connections and wraps them with TLS
+class TlsListener {
+    TcpListener inner_;
+    TlsConfig* config_ = nullptr;  // Non-owning pointer, caller must keep alive
+    // Stored as pointer because TlsConfig is forward-declared here
+
+public:
+    TlsListener() = default;
+    ~TlsListener();
+
+    // Non-copyable, non-movable (holds pointer to external config)
+    TlsListener(const TlsListener&) = delete;
+    TlsListener& operator=(const TlsListener&) = delete;
+
+    /// Bind to a port and start listening
+    /// @param config TLS configuration (must outlive this listener)
+    /// @param port Port to listen on (0 for OS-assigned)
+    /// @param backlog Listen queue size
+    void listen(TlsConfig& config, u16 port = 0, int backlog = 128);
+
+    /// Accept an incoming TLS connection (performs handshake)
+    /// @param timeout_ms Timeout in milliseconds (-1 for blocking)
+    /// @return Connected TlsTransport, or nullptr on timeout
+    std::unique_ptr<TlsTransport> accept(int timeout_ms = -1);
+
+    /// Close the listener
+    void close();
+
+    /// Check if listener is active
+    bool is_listening() const { return inner_.is_listening(); }
+
+    /// Get the bound port
+    u16 bound_port() const { return inner_.bound_port(); }
+};
+
+#endif // SONG_HAS_TLS
+
 } // namespace song
