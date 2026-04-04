@@ -1,8 +1,8 @@
 # Song: Services Over Native Gateways
 
-A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with HMAC-SHA256 security and zero-config mDNS discovery.
+A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with TLS encryption, HMAC-SHA256 security, streaming RPC, and zero-config mDNS discovery.
 
-**596 tests (489 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~26K lines of C++20**
+**668 tests (561 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~29K lines of C++20**
 
 ```song
 // calculator.song                     // Write an IDL definition...
@@ -32,8 +32,11 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **Full IDL Compiler**: Hand-written lexer, recursive descent parser, semantic resolver, multi-target code generation (C++ and Python)
 - **Binary Wire Protocol**: 16-byte fixed headers, version negotiation, capability exchange, `static_assert` on all struct sizes
 - **Process Isolation**: Services run as separate processes with crash containment, auto-restart, and hot replacement
-- **Three Transport Modes**: Local pipes, explicit TCP, or zero-config mDNS discovery — all behind a unified API
+- **Three Transport Modes**: Local pipes, explicit TCP, or zero-config mDNS discovery -- all behind a unified API
+- **TLS Encryption**: Full mbedTLS 4.x integration with certificate and PSK modes, PIMPL-hidden from public API
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
+- **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS.
+- **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
 - **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
 - **Scaffold Sync**: Re-running the scaffold generator diffs against existing implementations, reporting new/removed/modified methods
 
@@ -240,9 +243,22 @@ int main() {
 
 ## Security
 
-Song provides HMAC-SHA256 authentication for services communicating over untrusted networks.
+Song provides two security layers: HMAC-SHA256 for message authentication and TLS for full encryption.
 
-### Shared Secret Authentication
+### TLS Encryption (Recommended for untrusted networks)
+
+```cpp
+// Certificate-based TLS
+TlsConfig config("server_cert.pem", "server_key.pem", "ca_cert.pem");
+TlsListener listener;
+listener.listen(config, 12345);
+auto conn = listener.accept();  // Handshake included
+
+// PSK-based TLS (lighter weight, no certificates needed)
+TlsConfig psk_config("shared-secret-key", "my-identity", TlsConfig::Mode::psk);
+```
+
+### HMAC-SHA256 Authentication (For trusted LANs)
 
 ```cpp
 // Configure security with a shared key
@@ -251,19 +267,19 @@ SecurityConfig security("my-secret-key-32-bytes-long!!!!");
 // Client: wrap connection in SecureTransport
 auto tcp = std::make_unique<TcpTransport>();
 tcp->connect("192.168.1.50", 12345, 5000);
-SecureTransport secure(std::move(tcp), security);
+SecureTransport secure(std::move(tcp), std::move(security));
 
 // Server: wrap accepted connection
 auto client_tcp = listener.accept();
-SecureTransport secure_client(std::move(client_tcp), security);
+SecurityConfig srv_security("my-secret-key-32-bytes-long!!!!");
+SecureTransport secure_client(std::move(client_tcp), std::move(srv_security));
 ```
 
 ### How It Works
 
-- HMAC-SHA256 computed over each message (header + payload)
-- Tag embedded in wire protocol (transparent to application)
-- Constant-time comparison prevents timing attacks
-- Mismatched keys throw `SecurityError`
+- **TLS**: Full encryption via mbedTLS 4.x. Certificate or PSK mode. `MsgFlags::encrypted` set on all TLS messages.
+- **HMAC**: SHA-256 computed over each message, 8-byte truncated tag, constant-time comparison, transparent decorator over any transport.
+- Mismatched keys/certs throw `SecurityError`
 
 ### HMAC Tag Size
 
@@ -271,16 +287,53 @@ Song uses a truncated 8-byte (64-bit) HMAC tag rather than the full 32-byte SHA-
 
 - **Per-message overhead**: 8 bytes vs 32 bytes. At high message rates (100K+ msg/sec in IPC), the 24-byte savings per message is meaningful.
 - **Security margin**: 64-bit tags provide 2^64 brute-force resistance, which is sufficient for integrity verification in a same-host or local-network IPC context where the attacker cannot observe enough messages to mount a birthday attack.
-- **Not a substitute for TLS**: Song's HMAC layer provides message authentication (tamper detection), not confidentiality. For cross-network deployment, wrap transport in TLS and use Song's HMAC as defense-in-depth.
+- **Complementary to TLS**: Song's HMAC layer provides message authentication (tamper detection), not confidentiality. For cross-network deployment, use Song's built-in TLS transport for encryption with HMAC as defense-in-depth.
 
 This follows NIST SP 800-107 guidance that HMAC truncation to t bits provides t/2 bits of collision resistance, yielding 32-bit collision resistance — acceptable for the threat model (authenticated local/LAN IPC, not internet-facing).
 
 ### Platform Support
 
-| Platform | Crypto Library |
-|----------|---------------|
-| macOS    | CommonCrypto  |
-| Linux    | OpenSSL       |
+| Platform | HMAC | TLS |
+|----------|------|-----|
+| macOS    | CommonCrypto | mbedTLS |
+| Linux    | OpenSSL | mbedTLS |
+
+## Streaming
+
+Song supports server-push streaming where a method sends multiple incremental results before completion.
+
+### Service Side
+
+```cpp
+// Register a streaming dispatcher instead of a regular one
+void my_stream_handler(u16 method_id, Buffer& request, StreamWriter& writer) {
+    i32 count = decode_i32(request);
+    for (i32 i = 0; i < count; ++i) {
+        Buffer chunk;
+        encode_i32(chunk, i);
+        writer.write(chunk);  // Sends MSG_STREAM
+    }
+    // MSG_STREAM_END sent automatically when writer goes out of scope
+}
+
+runtime.register_stream_dispatcher(kServiceId, my_stream_handler);
+```
+
+### Client Side
+
+```cpp
+Buffer args;
+encode_i32(args, 100);
+StreamReader reader = conn.call_streaming(service_id, method_id, args);
+
+while (reader.next()) {
+    i32 value = decode_i32(reader.chunk());
+    // Process each chunk as it arrives
+}
+// reader.chunk_count() == 100
+```
+
+Streaming works over all transports (pipes, TCP, HMAC, TLS).
 
 ## Cross-Subnet Discovery (Registry)
 
@@ -400,13 +453,16 @@ All core features are complete and tested:
 
 | Component | Status | Key Details |
 |-----------|--------|-------------|
-| **Runtime** | Complete | Buffer (4KB SBO), wire protocol, process management, auto-restart |
+| **Runtime** | Complete | Buffer (4KB SBO), wire protocol v1.1, process management, auto-restart |
 | **IDL Compiler** | Complete | Lexer, parser, resolver, C++ codegen, Python codegen, scaffold sync |
 | **Networking** | Complete | TCP transport, mDNS discovery (macOS), registry fallback |
-| **Security** | Complete | HMAC-SHA256, constant-time verification, platform crypto |
+| **TLS Encryption** | Complete | mbedTLS 4.x, certificate and PSK modes, PIMPL design |
+| **HMAC Security** | Complete | HMAC-SHA256, constant-time verification, platform crypto |
+| **Streaming** | Complete | StreamWriter (service), StreamReader (client), works over all transports |
+| **Versioning** | Complete | Semver v1.1, 32-bit capability bitfield, bidirectional init_ack, dynamic extensions |
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
-| **Tests** | 596 total | 489 unit tests (incl. 8 stress/perf) + 107 integration tests across 7 projects |
+| **Tests** | 668 total | 561 unit tests + 107 integration tests across 7 projects |
 
 ## Code Quality
 
@@ -480,12 +536,14 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 |---------|-------|-------|
 | Core runtime (pipes, TCP) | Full | Full |
 | HMAC-SHA256 security | CommonCrypto | OpenSSL |
+| TLS encryption | mbedTLS | mbedTLS |
 | mDNS service discovery | Bonjour (dns_sd) | Planned (Avahi) |
+| Streaming RPC | Full | Full |
 
 **Known limitations:**
-- **mDNS discovery is macOS-only** — Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
-- **Streaming** — Wire protocol defines stream message types (`0x05`, `0x06`) but the runtime API doesn't expose them yet.
-- **Property change notifications** — Planned but not yet implemented.
+- **mDNS discovery is macOS-only** -- Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
+- **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
+- **Property change notifications** -- Planned but not yet implemented.
 
 ## References
 
