@@ -8,6 +8,7 @@
 #include "wire.hpp"
 #include "object.hpp"
 #include "stream.hpp"
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -29,6 +30,9 @@ class ServiceRuntime {
     std::unordered_map<u16, StreamDispatcher> stream_dispatchers_;
     std::vector<wire::MethodDescriptor> methods_;
     ObjectRegistry object_registry_;
+    u32 local_capabilities_ = 0;
+    std::array<std::string, 8> extension_names_{};
+    u8 next_extension_slot_ = 0;
 
 public:
     /// Register a service dispatcher
@@ -41,6 +45,27 @@ public:
     /// service_id: unique identifier for this service
     /// dispatcher: function that takes (method_id, request, stream_writer)
     void register_stream_dispatcher(u16 service_id, StreamDispatcher dispatcher);
+
+    // -------------------------------------------------------------------------
+    // Capability Management
+    // -------------------------------------------------------------------------
+
+    /// Set a capability flag (advertised to peers in init message)
+    void set_capability(wire::Capability cap);
+
+    /// Clear a capability flag
+    void clear_capability(wire::Capability cap);
+
+    /// Get current local capabilities (auto-detected + manually set)
+    u32 capabilities() const;
+
+    /// Register a named dynamic extension (claims one of ext_0..ext_7)
+    /// @return The Capability bit assigned
+    /// @throws std::runtime_error if all 8 extension slots are full
+    wire::Capability register_extension(const std::string& name);
+
+    /// Check if a named extension is registered locally
+    bool has_extension(const std::string& name) const;
 
     /// Register a method for capability exchange
     /// service_id: service this method belongs to

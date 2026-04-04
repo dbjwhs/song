@@ -112,6 +112,9 @@ public:
     ObjectRegistry(ObjectRegistry&&) = delete;
     ObjectRegistry& operator=(ObjectRegistry&&) = delete;
 
+    /// Check if any factories are registered
+    bool has_factories() const { return !factories_.empty(); }
+
     /// Register a factory for creating objects of a given type
     /// @param type_id Type identifier for this class
     /// @param factory Function that creates instances of this class

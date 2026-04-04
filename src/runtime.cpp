@@ -57,6 +57,59 @@ void ServiceRuntime::register_stream_dispatcher(u16 service_id, StreamDispatcher
     stream_dispatchers_[service_id] = std::move(dispatcher);
 }
 
+void ServiceRuntime::set_capability(wire::Capability cap) {
+    local_capabilities_ |= static_cast<u32>(cap);
+}
+
+void ServiceRuntime::clear_capability(wire::Capability cap) {
+    local_capabilities_ &= ~static_cast<u32>(cap);
+}
+
+u32 ServiceRuntime::capabilities() const {
+    // Start with manually set capabilities
+    u32 caps = local_capabilities_;
+
+    // Auto-detect from registered features
+    if (!stream_dispatchers_.empty()) {
+        caps |= static_cast<u32>(wire::Capability::streaming);
+    }
+    if (object_registry_.has_factories()) {
+        caps |= static_cast<u32>(wire::Capability::objects);
+    }
+
+    return caps;
+}
+
+wire::Capability ServiceRuntime::register_extension(const std::string& name) {
+    if (next_extension_slot_ >= 8) {
+        throw std::runtime_error("All 8 extension capability slots are in use");
+    }
+
+    // Check for duplicate
+    for (u8 i = 0; i < next_extension_slot_; ++i) {
+        if (extension_names_[i] == name) {
+            // Already registered -- return existing bit
+            auto bit = static_cast<wire::Capability>(
+                static_cast<u32>(wire::Capability::ext_0) << i);
+            return bit;
+        }
+    }
+
+    u8 slot = next_extension_slot_++;
+    extension_names_[slot] = name;
+    auto bit = static_cast<wire::Capability>(
+        static_cast<u32>(wire::Capability::ext_0) << slot);
+    set_capability(bit);
+    return bit;
+}
+
+bool ServiceRuntime::has_extension(const std::string& name) const {
+    for (u8 i = 0; i < next_extension_slot_; ++i) {
+        if (extension_names_[i] == name) return true;
+    }
+    return false;
+}
+
 void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::MethodFlags flags) {
     methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
 }
@@ -104,11 +157,11 @@ bool ServiceRuntime::has_method(u16 service_id, u16 method_id) const {
 }
 
 void ServiceRuntime::send_init_confirmation_fd(int fd) {
-    // Send init message with method list
+    // Send init message with method list and capabilities
     Buffer init_msg = wire::create_init_message(
         wire::kFirstVersion,
         wire::kCurrentVersion,
-        0,  // capabilities
+        capabilities(),
         methods_
     );
 
@@ -119,11 +172,11 @@ void ServiceRuntime::send_init_confirmation_fd(int fd) {
 }
 
 void ServiceRuntime::send_init_confirmation_transport(Transport& transport) {
-    // Send init message with method list
+    // Send init message with method list and capabilities
     Buffer init_msg = wire::create_init_message(
         wire::kFirstVersion,
         wire::kCurrentVersion,
-        0,  // capabilities
+        capabilities(),
         methods_
     );
 
@@ -470,6 +523,13 @@ void ServiceRuntime::client_loop(Transport& transport) {
             return;
         }
 
+        // Handle init_ack from v1.1+ clients (silently consume)
+        if (hdr.type == wire::MsgType::init_ack) {
+            // Client is telling us its version and capabilities.
+            // Decode for logging/debugging but don't require it.
+            continue;
+        }
+
         // Handle message
         handle_message(hdr, msg, transport, tracked_objects);
     }
@@ -508,6 +568,16 @@ void ServiceRuntime::client_loop(Transport& transport) {
             // Graceful shutdown
             release_connection_objects(tracked_objects);
             std::exit(0);
+        }
+
+        // Handle init_ack from v1.1+ clients (silently consume)
+        if (hdr.type == wire::MsgType::init_ack) {
+            // Read and discard init_ack payload
+            if (hdr.payload_size > 0) {
+                std::vector<std::byte> discard_buf(hdr.payload_size);
+                read_all(STDIN_FILENO, discard_buf.data(), hdr.payload_size);
+            }
+            continue;
         }
 
         // Read payload
