@@ -464,11 +464,19 @@ TEST(ManagerRemoteTest, ConnectToRemoteService) {
             );
             server->send(init_msg);
 
-            // Receive call and echo back
+            // Read next message -- may be init_ack (v1.1+) or call
             Buffer call;
             if (!server->receive(call, 5000)) return;
 
             auto hdr = wire::decode_header_validated(call);
+
+            // Skip init_ack if present (v1.1 client acknowledges)
+            if (hdr.type == wire::MsgType::init_ack) {
+                call = Buffer{};
+                if (!server->receive(call, 5000)) return;
+                hdr = wire::decode_header_validated(call);
+            }
+
             [[maybe_unused]] auto call_info = wire::decode_method_call_header(call);
             std::string input = decode_string(call);
 

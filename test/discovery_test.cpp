@@ -320,11 +320,16 @@ TEST(DiscoveryE2ETest, ConnectToDiscoveredService) {
             );
             server->send(init_msg);
 
-            // Receive call and echo back
+            // Receive next message (skip init_ack if present)
             Buffer call;
             if (!server->receive(call, 10000)) return;
 
             auto hdr = wire::decode_header_validated(call);
+            if (hdr.type == wire::MsgType::init_ack) {
+                call = Buffer{};
+                if (!server->receive(call, 10000)) return;
+                hdr = wire::decode_header_validated(call);
+            }
             [[maybe_unused]] auto call_info = wire::decode_method_call_header(call);
             std::string input = decode_string(call);
 

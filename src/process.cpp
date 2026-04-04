@@ -131,6 +131,12 @@ void ServiceProcess::init_handshake() {
     // Rule 3: Effective version = min(our current, peer current)
     negotiated_version_ = std::min(wire::kCurrentVersion, init.current_version);
 
+    // Store peer capabilities and compute negotiated set
+    peer_capabilities_ = init.capabilities;
+    // For ServiceProcess (host side), our capabilities are not known here.
+    // The ServiceManager/caller can set them. Default: accept all peer caps.
+    negotiated_capabilities_ = init.capabilities;
+
     // Decode method list
     methods_.clear();
     methods_.reserve(init.method_count);
@@ -279,10 +285,18 @@ ServiceConnection::ServiceConnection(ServiceConnection&& other) noexcept
     , transport_(other.transport_)
     , owned_transport_(std::move(other.owned_transport_))
     , next_seq_(other.next_seq_)
+    , negotiated_version_(other.negotiated_version_)
+    , peer_capabilities_(other.peer_capabilities_)
+    , negotiated_capabilities_(other.negotiated_capabilities_)
+    , local_capabilities_(other.local_capabilities_)
     , methods_(std::move(other.methods_)) {
     other.proc_ = nullptr;
     other.transport_ = nullptr;
     other.next_seq_ = 1;
+    other.negotiated_version_ = 0;
+    other.peer_capabilities_ = 0;
+    other.negotiated_capabilities_ = 0;
+    other.local_capabilities_ = 0;
 }
 
 ServiceConnection& ServiceConnection::operator=(ServiceConnection&& other) noexcept {
@@ -291,10 +305,18 @@ ServiceConnection& ServiceConnection::operator=(ServiceConnection&& other) noexc
         transport_ = other.transport_;
         owned_transport_ = std::move(other.owned_transport_);
         next_seq_ = other.next_seq_;
+        negotiated_version_ = other.negotiated_version_;
+        peer_capabilities_ = other.peer_capabilities_;
+        negotiated_capabilities_ = other.negotiated_capabilities_;
+        local_capabilities_ = other.local_capabilities_;
         methods_ = std::move(other.methods_);
         other.proc_ = nullptr;
         other.transport_ = nullptr;
         other.next_seq_ = 1;
+        other.negotiated_version_ = 0;
+        other.peer_capabilities_ = 0;
+        other.negotiated_capabilities_ = 0;
+        other.local_capabilities_ = 0;
     }
     return *this;
 }
@@ -338,11 +360,25 @@ void ServiceConnection::init_handshake() {
             std::to_string(init.first_version & 0xFF));
     }
 
+    // Negotiate version
+    negotiated_version_ = std::min(wire::kCurrentVersion, init.current_version);
+
+    // Store peer capabilities and compute negotiated set
+    peer_capabilities_ = init.capabilities;
+    negotiated_capabilities_ = local_capabilities_ & init.capabilities;
+
     // Decode method list
     methods_.clear();
     methods_.reserve(init.method_count);
     for (u32 i = 0; i < init.method_count; ++i) {
         methods_.push_back(wire::decode_method_descriptor(init_msg));
+    }
+
+    // Send init_ack if both sides support v1.1+
+    if (negotiated_version_ >= wire::make_version(1, 1)) {
+        Buffer ack = wire::create_init_ack_message(
+            wire::kFirstVersion, wire::kCurrentVersion, local_capabilities_);
+        transport_->send(ack);
     }
 }
 
@@ -505,6 +541,26 @@ void ServiceConnection::call_oneway(u16 service_id, u16 method_id, const Buffer&
     } else {
         transport_->send(call_msg);
     }
+}
+
+u16 ServiceConnection::negotiated_version() const {
+    if (proc_) return proc_->negotiated_version();
+    return negotiated_version_;
+}
+
+u32 ServiceConnection::peer_capabilities() const {
+    if (proc_) return proc_->peer_capabilities();
+    return peer_capabilities_;
+}
+
+u32 ServiceConnection::negotiated_capabilities() const {
+    if (proc_) return proc_->negotiated_capabilities();
+    return negotiated_capabilities_;
+}
+
+bool ServiceConnection::has_capability(wire::Capability cap) const {
+    return wire::has_capability(
+        static_cast<wire::Capability>(negotiated_capabilities()), cap);
 }
 
 bool ServiceConnection::supports(u16 service_id, u16 method_id) const {

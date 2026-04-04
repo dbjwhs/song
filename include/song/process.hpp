@@ -25,7 +25,9 @@ class ServiceProcess {
     Pipe to_service_;
     Pipe from_service_;
     bool reusable_ = true;
-    u16 negotiated_version_ = 0;  // Negotiated protocol version (0 = not negotiated)
+    u16 negotiated_version_ = 0;       // Negotiated protocol version (0 = not negotiated)
+    u32 peer_capabilities_ = 0;        // Raw capabilities the peer advertised
+    u32 negotiated_capabilities_ = 0;  // Intersection of our and peer capabilities
     std::vector<wire::MethodDescriptor> methods_;  // Methods supported by service
 
 public:
@@ -70,6 +72,17 @@ public:
     /// Returns 0 if not yet negotiated
     u16 negotiated_version() const { return negotiated_version_; }
 
+    /// Get raw capabilities the peer advertised
+    u32 peer_capabilities() const { return peer_capabilities_; }
+
+    /// Get negotiated capabilities (intersection of ours and peer's)
+    u32 negotiated_capabilities() const { return negotiated_capabilities_; }
+
+    /// Check if a specific capability was negotiated
+    bool has_capability(wire::Capability cap) const {
+        return wire::has_capability(static_cast<wire::Capability>(negotiated_capabilities_), cap);
+    }
+
     /// Get methods supported by the service
     const std::vector<wire::MethodDescriptor>& methods() const { return methods_; }
 
@@ -85,6 +98,10 @@ class ServiceConnection {
     Transport* transport_ = nullptr;  // For remote services (borrows transport)
     std::unique_ptr<Transport> owned_transport_;  // Owns transport if created internally
     u32 next_seq_ = 1;
+    u16 negotiated_version_ = 0;       // For remote connections (local delegates to proc_)
+    u32 peer_capabilities_ = 0;        // Raw capabilities the peer advertised
+    u32 negotiated_capabilities_ = 0;  // Intersection of our and peer capabilities
+    u32 local_capabilities_ = 0;       // Our capabilities (set before init_handshake)
     std::vector<wire::MethodDescriptor> methods_;  // Cached method list
 
 public:
@@ -177,6 +194,22 @@ public:
     /// Perform init handshake (for remote connections)
     /// Local connections get this automatically from ServiceProcess
     void init_handshake();
+
+    /// Set local capabilities before calling init_handshake()
+    /// These are sent to the peer in the init_ack message
+    void set_local_capabilities(u32 caps) { local_capabilities_ = caps; }
+
+    /// Get negotiated protocol version
+    u16 negotiated_version() const;
+
+    /// Get raw capabilities the peer advertised
+    u32 peer_capabilities() const;
+
+    /// Get negotiated capabilities (intersection of local and peer)
+    u32 negotiated_capabilities() const;
+
+    /// Check if a specific capability was negotiated
+    bool has_capability(wire::Capability cap) const;
 
     /// Get methods supported by the service
     const std::vector<wire::MethodDescriptor>& methods() const;

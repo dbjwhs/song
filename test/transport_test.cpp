@@ -439,12 +439,19 @@ TEST(TcpServiceConnectionTest, ConnectAndCallViaTcp) {
             server->send(init_msg);
             server_ready = true;
 
-            // Receive call message
+            // Receive next message (skip init_ack if present)
             Buffer call;
             if (!server->receive(call, 5000)) {
                 throw std::runtime_error("Server receive timed out");
             }
             auto hdr = wire::decode_header_validated(call);
+            if (hdr.type == wire::MsgType::init_ack) {
+                call = Buffer{};
+                if (!server->receive(call, 5000)) {
+                    throw std::runtime_error("Server receive timed out after init_ack");
+                }
+                hdr = wire::decode_header_validated(call);
+            }
             if (hdr.type != wire::MsgType::call) {
                 throw std::runtime_error("Expected call message");
             }
@@ -514,6 +521,18 @@ TEST(TcpServiceConnectionTest, MultipleCallsViaTcp) {
             methods
         );
         server->send(init_msg);
+
+        // Skip init_ack if present (v1.1 client)
+        {
+            Buffer ack;
+            if (server->receive(ack, 500)) {
+                auto ack_hdr = wire::decode_header_validated(ack);
+                if (ack_hdr.type != wire::MsgType::init_ack) {
+                    // Not an ack -- this is the first call, handle below
+                    // (won't happen in practice since client sends ack first)
+                }
+            }
+        }
 
         // Handle multiple calls
         for (int i = 0; i < 3; ++i) {
