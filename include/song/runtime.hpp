@@ -7,6 +7,7 @@
 #include "buffer.hpp"
 #include "wire.hpp"
 #include "object.hpp"
+#include "stream.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -25,6 +26,7 @@ class Discovery;
 /// Supports both pipe-based (stdin/stdout) and TCP connections
 class ServiceRuntime {
     std::unordered_map<u16, std::function<void(u16, Buffer&, Buffer&)>> dispatchers_;
+    std::unordered_map<u16, StreamDispatcher> stream_dispatchers_;
     std::vector<wire::MethodDescriptor> methods_;
     ObjectRegistry object_registry_;
 
@@ -34,6 +36,11 @@ public:
     /// dispatcher: function that takes (method_id, request, response)
     void register_dispatcher(u16 service_id,
                            std::function<void(u16, Buffer&, Buffer&)> dispatcher);
+
+    /// Register a streaming dispatcher
+    /// service_id: unique identifier for this service
+    /// dispatcher: function that takes (method_id, request, stream_writer)
+    void register_stream_dispatcher(u16 service_id, StreamDispatcher dispatcher);
 
     /// Register a method for capability exchange
     /// service_id: service this method belongs to

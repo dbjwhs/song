@@ -7,6 +7,7 @@
 #include "buffer.hpp"
 #include "pipe.hpp"
 #include "wire.hpp"
+#include "stream.hpp"
 #include <sys/types.h>
 #include <string>
 #include <vector>
@@ -111,6 +112,11 @@ public:
     /// Make a synchronous call to a service method
     /// Returns the result buffer
     Buffer call(u16 service_id, u16 method_id, const Buffer& args);
+
+    /// Make a streaming call to a service method
+    /// Sends the call, then collects MSG_STREAM chunks until MSG_STREAM_END.
+    /// @return StreamReader containing all received chunks
+    StreamReader call_streaming(u16 service_id, u16 method_id, const Buffer& args);
 
     /// Make a one-way call (no response expected)
     void call_oneway(u16 service_id, u16 method_id, const Buffer& args);

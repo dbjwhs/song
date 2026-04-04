@@ -53,6 +53,10 @@ void ServiceRuntime::register_dispatcher(u16 service_id,
     dispatchers_[service_id] = std::move(dispatcher);
 }
 
+void ServiceRuntime::register_stream_dispatcher(u16 service_id, StreamDispatcher dispatcher) {
+    stream_dispatchers_[service_id] = std::move(dispatcher);
+}
+
 void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::MethodFlags flags) {
     methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
 }
@@ -144,7 +148,25 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
 
-        // Find dispatcher
+        // Check for streaming dispatcher first
+        auto stream_it = stream_dispatchers_.find(service_id);
+        if (stream_it != stream_dispatchers_.end()) {
+            try {
+                StreamWriter writer(write_fd, hdr.sequence_id);
+                stream_it->second(method_id, payload, writer);
+                // writer destructor sends stream_end
+            } catch (const std::exception& e) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::unknown_method,
+                    e.what()
+                );
+                write_all(write_fd, error_msg.data(), error_msg.size());
+            }
+            return;
+        }
+
+        // Find regular dispatcher
         auto it = dispatchers_.find(service_id);
         if (it == dispatchers_.end()) {
             // Unknown service - send error
@@ -275,7 +297,25 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
 
-        // Find dispatcher
+        // Check for streaming dispatcher first
+        auto stream_it = stream_dispatchers_.find(service_id);
+        if (stream_it != stream_dispatchers_.end()) {
+            try {
+                StreamWriter writer(transport, hdr.sequence_id);
+                stream_it->second(method_id, payload, writer);
+                // writer destructor sends stream_end
+            } catch (const std::exception& e) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::unknown_method,
+                    e.what()
+                );
+                transport.send(error_msg);
+            }
+            return;
+        }
+
+        // Find regular dispatcher
         auto it = dispatchers_.find(service_id);
         if (it == dispatchers_.end()) {
             // Unknown service - send error

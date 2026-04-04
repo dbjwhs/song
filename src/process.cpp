@@ -416,6 +416,74 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
     return result;
 }
 
+StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, const Buffer& args) {
+    if (proc_) {
+        if (!proc_->alive()) {
+            throw ServiceError("Service not running");
+        }
+    } else if (transport_) {
+        if (!transport_->is_connected()) {
+            throw ServiceError("Transport not connected");
+        }
+    } else {
+        throw ServiceError("ServiceConnection: no transport or process");
+    }
+
+    u32 seq = next_seq_++;
+
+    // Send call message
+    Buffer call_msg = wire::create_call_message(seq, service_id, method_id, args);
+    if (proc_) {
+        proc_->send(call_msg);
+    } else {
+        transport_->send(call_msg);
+    }
+
+    // Collect stream chunks until stream_end
+    StreamReader reader(seq);
+
+    for (;;) {
+        Buffer response;
+        bool received = false;
+        if (proc_) {
+            received = proc_->receive(response, 5000);
+        } else {
+            received = transport_->receive(response, 5000);
+        }
+
+        if (!received) {
+            throw ServiceError("Service died or timed out during streaming");
+        }
+
+        auto hdr = wire::decode_header_validated(response);
+
+        if (hdr.sequence_id != seq) {
+            throw ProtocolError("Sequence ID mismatch in stream");
+        }
+
+        if (hdr.type == wire::MsgType::stream) {
+            // Extract payload (skip 16-byte header)
+            Buffer chunk;
+            if (hdr.payload_size > 0) {
+                chunk.write(response.data() + 16, hdr.payload_size);
+                chunk.reset_read();
+            }
+            reader.add_chunk(std::move(chunk));
+        } else if (hdr.type == wire::MsgType::stream_end) {
+            reader.set_complete();
+            break;
+        } else if (hdr.type == wire::MsgType::error) {
+            u16 code = decode_u16(response);
+            std::string msg = decode_string(response);
+            throw ServiceError("Service error (code " + std::to_string(code) + "): " + msg);
+        } else {
+            throw ProtocolError("Unexpected message type during streaming");
+        }
+    }
+
+    return reader;
+}
+
 void ServiceConnection::call_oneway(u16 service_id, u16 method_id, const Buffer& args) {
     if (proc_) {
         if (!proc_->alive()) {

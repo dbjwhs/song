@@ -17,4 +17,5 @@
 #include "security.hpp"
 #include "registry.hpp"
 #include "object.hpp"
+#include "stream.hpp"
 #include "error.hpp"
