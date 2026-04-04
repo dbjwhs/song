@@ -311,8 +311,9 @@ TEST(WireTest, MakeVersion) {
 }
 
 TEST(WireTest, CurrentVersionFormat) {
-    // kCurrentVersion should be 1.0 = 0x0100
-    EXPECT_EQ(kCurrentVersion, make_version(1, 0));
+    // kCurrentVersion is 1.1 (capability negotiation, init_ack)
+    EXPECT_EQ(kCurrentVersion, make_version(1, 1));
+    // kFirstVersion stays at 1.0 for backward compatibility
     EXPECT_EQ(kFirstVersion, make_version(1, 0));
 }
 

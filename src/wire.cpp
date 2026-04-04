@@ -200,6 +200,25 @@ Buffer create_shutdown_message() {
     return buf;
 }
 
+Buffer create_init_ack_message(u16 first_version, u16 current_version, u32 capabilities) {
+    Buffer payload;
+    InitMessage msg{kMagic, first_version, current_version, capabilities, 0};
+    encode_init(payload, msg);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::init_ack,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
 // =============================================================================
 // Stream Protocol Functions
 // =============================================================================

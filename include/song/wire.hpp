@@ -15,7 +15,7 @@ constexpr u32 kMagic = 0x534F4E47;
 
 // Protocol version
 constexpr u16 kVersionMajor = 1;
-constexpr u16 kVersionMinor = 0;
+constexpr u16 kVersionMinor = 1;  // 1.1: capability negotiation, init_ack
 
 // Version encoding helper: major in high byte, minor in low byte
 constexpr u16 make_version(u8 major, u8 minor) {
@@ -26,7 +26,7 @@ constexpr u16 make_version(u8 major, u8 minor) {
 constexpr u16 kCurrentVersion = make_version(kVersionMajor, kVersionMinor);
 
 // First supported version (oldest we can talk to)
-// For now, same as current since we only have v1.0
+// Stays at 1.0 so existing v1.0 peers can still connect
 constexpr u16 kFirstVersion = make_version(1, 0);
 
 // Message types
@@ -43,6 +43,7 @@ enum class MsgType : u8 {
     release      = 0x0A,  // Release object reference
     prop_get     = 0x0B,  // Read property value
     prop_set     = 0x0C,  // Write property value
+    init_ack     = 0x0D,  // Client -> Service: version/capability acknowledgment (v1.1+)
 };
 
 // Message flags
@@ -61,6 +62,60 @@ inline MsgFlags operator&(MsgFlags a, MsgFlags b) {
 }
 inline bool has_flag(MsgFlags flags, MsgFlags flag) {
     return (flags & flag) != MsgFlags::none;
+}
+
+// Capability flags exchanged during init handshake.
+// Negotiated capabilities = bitwise AND of both peers' capabilities.
+//
+// Bit layout:
+//   Bits 0-15:  Protocol features (defined by Song framework)
+//   Bits 16-23: Extension slots (runtime-registered, deployment-specific)
+//   Bits 24-31: Vendor slots (application-specific)
+enum class Capability : u32 {
+    none        = 0x00000000,
+
+    // Protocol features (bits 0-15)
+    streaming   = 0x00000001,  // MSG_STREAM / MSG_STREAM_END support
+    compression = 0x00000002,  // MsgFlags::compressed payloads
+    tls         = 0x00000004,  // TLS-encrypted connection
+    properties  = 0x00000008,  // MSG_PROP_GET / MSG_PROP_SET
+    objects     = 0x00000010,  // MSG_CREATE / MSG_RELEASE / object methods
+    oneway      = 0x00000020,  // Fire-and-forget calls
+    hmac        = 0x00000040,  // HMAC message authentication active
+
+    // Extension slots (bits 16-23): runtime-registered dynamic capabilities
+    ext_0       = 0x00010000,
+    ext_1       = 0x00020000,
+    ext_2       = 0x00040000,
+    ext_3       = 0x00080000,
+    ext_4       = 0x00100000,
+    ext_5       = 0x00200000,
+    ext_6       = 0x00400000,
+    ext_7       = 0x00800000,
+
+    // Vendor slots (bits 24-31): application-specific
+    vendor_0    = 0x01000000,
+    vendor_1    = 0x02000000,
+    vendor_2    = 0x04000000,
+    vendor_3    = 0x08000000,
+    vendor_4    = 0x10000000,
+    vendor_5    = 0x20000000,
+    vendor_6    = 0x40000000,
+    vendor_7    = static_cast<u32>(0x80000000),
+};
+
+// Bitwise operators for Capability
+inline Capability operator|(Capability a, Capability b) {
+    return static_cast<Capability>(static_cast<u32>(a) | static_cast<u32>(b));
+}
+inline Capability operator&(Capability a, Capability b) {
+    return static_cast<Capability>(static_cast<u32>(a) & static_cast<u32>(b));
+}
+inline Capability operator~(Capability a) {
+    return static_cast<Capability>(~static_cast<u32>(a));
+}
+inline bool has_capability(Capability set, Capability cap) {
+    return (set & cap) != Capability::none;
 }
 
 // Message header structure (16 bytes fixed)
@@ -203,6 +258,9 @@ Buffer create_shutdown_message();
 // Stream message creation helpers
 Buffer create_stream_message(u32 sequence_id, const Buffer& chunk);
 Buffer create_stream_end_message(u32 sequence_id);
+
+// Init acknowledgment (client -> service, v1.1+)
+Buffer create_init_ack_message(u16 first_version, u16 current_version, u32 capabilities);
 
 // Object message creation helpers
 Buffer create_object_create_message(u32 sequence_id, u32 type_id, u16 constructor_id, const Buffer& args);
