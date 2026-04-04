@@ -111,6 +111,11 @@ static int tls_bio_recv(void* ctx, unsigned char* buf, size_t len) {
 }
 
 static int tls_bio_recv_timeout(void* ctx, unsigned char* buf, size_t len, uint32_t timeout) {
+    // timeout=0 means "no timeout" in mbedTLS (blocking recv)
+    if (timeout == 0) {
+        return tls_bio_recv(ctx, buf, len);
+    }
+
     int sock = *static_cast<int*>(ctx);
 
     struct pollfd pfd{};
