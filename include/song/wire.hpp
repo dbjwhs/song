@@ -49,8 +49,19 @@ enum class MsgType : u8 {
 enum class MsgFlags : u8 {
     none         = 0x00,
     compressed   = 0x01,  // Reserved for future
-    encrypted    = 0x02,  // Reserved for future
+    encrypted    = 0x02,  // Set by TLS transport
 };
+
+// Bitwise operators for MsgFlags
+inline MsgFlags operator|(MsgFlags a, MsgFlags b) {
+    return static_cast<MsgFlags>(static_cast<u8>(a) | static_cast<u8>(b));
+}
+inline MsgFlags operator&(MsgFlags a, MsgFlags b) {
+    return static_cast<MsgFlags>(static_cast<u8>(a) & static_cast<u8>(b));
+}
+inline bool has_flag(MsgFlags flags, MsgFlags flag) {
+    return (flags & flag) != MsgFlags::none;
+}
 
 // Message header structure (16 bytes fixed)
 struct Header {

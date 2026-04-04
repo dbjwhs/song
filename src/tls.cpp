@@ -265,11 +265,20 @@ void TlsTransport::send(const Buffer& msg) {
         throw ServiceError("TlsTransport: not connected or handshake incomplete");
     }
 
+    // Stamp the encrypted flag on the outgoing message header (byte offset 4)
+    // This is informational -- the actual encryption is handled by TLS below
+    Buffer stamped;
+    stamped.write(msg.data(), msg.size());
+    if (stamped.size() >= 16) {
+        auto* flags_byte = reinterpret_cast<u8*>(stamped.data() + 4);
+        *flags_byte |= static_cast<u8>(wire::MsgFlags::encrypted);
+    }
+
     size_t offset = 0;
-    while (offset < msg.size()) {
+    while (offset < stamped.size()) {
         int ret = mbedtls_ssl_write(&impl_->ssl,
-            reinterpret_cast<const unsigned char*>(msg.data()) + offset,
-            msg.size() - offset);
+            reinterpret_cast<const unsigned char*>(stamped.data()) + offset,
+            stamped.size() - offset);
 
         if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
         if (ret < 0) {

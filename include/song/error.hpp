@@ -26,6 +26,14 @@ namespace song {
 //   - receive():  returns false on timeout/disconnect (same as inner transport)
 //                 throws SecurityError on HMAC verification failure (tampered data)
 //
+// TlsTransport (mbedTLS encrypted transport, requires SONG_HAS_TLS):
+//   - constructor: throws SecurityError if PSA init, cert loading, or config fails
+//   - handshake(): throws SecurityError on TLS negotiation failure
+//   - send():     throws ServiceError on write failure; stamps MsgFlags::encrypted
+//   - receive():  returns false on clean disconnect
+//                 throws ServiceError on read failure or timeout
+//   - close():    sends close_notify, then closes socket (best-effort)
+//
 // ServiceManager:
 //   - connect():  throws ServiceError if service not registered or spawn fails
 //   - start():    throws ServiceError if already running or spawn fails
