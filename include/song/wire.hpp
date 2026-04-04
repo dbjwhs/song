@@ -200,6 +200,10 @@ Buffer create_result_message(u32 sequence_id, const Buffer& result);
 Buffer create_error_message(u32 sequence_id, ErrorCode code, const std::string& message);
 Buffer create_shutdown_message();
 
+// Stream message creation helpers
+Buffer create_stream_message(u32 sequence_id, const Buffer& chunk);
+Buffer create_stream_end_message(u32 sequence_id);
+
 // Object message creation helpers
 Buffer create_object_create_message(u32 sequence_id, u32 type_id, u16 constructor_id, const Buffer& args);
 Buffer create_object_release_message(u32 type_id, i32 object_id);  // No sequence (fire-and-forget)

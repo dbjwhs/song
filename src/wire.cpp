@@ -201,6 +201,41 @@ Buffer create_shutdown_message() {
 }
 
 // =============================================================================
+// Stream Protocol Functions
+// =============================================================================
+
+Buffer create_stream_message(u32 sequence_id, const Buffer& chunk) {
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::stream,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(chunk.size()),
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    if (chunk.size() > 0) {
+        buf.write(chunk.data(), chunk.size());
+    }
+    return buf;
+}
+
+Buffer create_stream_end_message(u32 sequence_id) {
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::stream_end,
+        .reserved = 0,
+        .payload_size = 0,
+        .sequence_id = sequence_id
+    };
+    encode_header(buf, hdr);
+    return buf;
+}
+
+// =============================================================================
 // Object Protocol Functions
 // =============================================================================
 
