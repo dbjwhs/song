@@ -40,6 +40,7 @@ add_executable(song_tests
     python_codegen_test.cpp
     stress_test.cpp
     tls_test.cpp
+    stream_test.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp

@@ -82,14 +82,15 @@ class StreamReader {
     u32 sequence_id_ = 0;
     bool complete_ = false;
 
-    // Internal: used by ServiceConnection to populate
-    friend class ServiceConnection;
-    void add_chunk(Buffer chunk);
-    void set_complete() { complete_ = true; }
-
 public:
     StreamReader() = default;
     explicit StreamReader(u32 sequence_id) : sequence_id_(sequence_id) {}
+
+    /// Add a chunk (used internally by ServiceConnection and custom readers)
+    void add_chunk(Buffer chunk);
+
+    /// Mark the stream as complete (stream_end received)
+    void set_complete() { complete_ = true; }
 
     /// Advance to the next chunk
     /// @return true if a chunk is available, false if stream ended
