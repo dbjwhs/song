@@ -42,6 +42,7 @@ add_executable(song_tests
     tls_test.cpp
     stream_test.cpp
     version_test.cpp
+    gap_tests.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp
