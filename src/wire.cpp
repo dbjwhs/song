@@ -428,5 +428,63 @@ Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id,
     return buf;
 }
 
+// =============================================================================
+// Property Notification Functions
+// =============================================================================
+
+Buffer create_property_subscribe_message(u32 type_id, i32 object_id, u16 property_id) {
+    Buffer payload;
+    encode_property_get(payload, type_id, object_id, property_id);  // Same encoding as prop_get
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::prop_subscribe,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0  // Fire-and-forget
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_property_unsubscribe_message(u32 type_id, i32 object_id, u16 property_id) {
+    Buffer payload;
+    encode_property_get(payload, type_id, object_id, property_id);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::prop_unsubscribe,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0  // Fire-and-forget
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
+Buffer create_property_notify_message(u32 type_id, i32 object_id, u16 property_id, const Buffer& value) {
+    Buffer payload;
+    encode_property_set(payload, type_id, object_id, property_id, value);
+
+    Buffer buf;
+    Header hdr{
+        .magic = kMagic,
+        .flags = MsgFlags::none,
+        .type = MsgType::prop_notify,
+        .reserved = 0,
+        .payload_size = static_cast<u32>(payload.size()),
+        .sequence_id = 0  // Unsolicited push
+    };
+    encode_header(buf, hdr);
+    buf.write(payload.data(), payload.size());
+    return buf;
+}
+
 } // namespace wire
 } // namespace song

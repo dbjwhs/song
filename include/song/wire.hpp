@@ -44,6 +44,9 @@ enum class MsgType : u8 {
     prop_get     = 0x0B,  // Read property value
     prop_set     = 0x0C,  // Write property value
     init_ack     = 0x0D,  // Client -> Service: version/capability acknowledgment (v1.1+)
+    prop_subscribe   = 0x0E,  // Client -> Service: subscribe to property changes
+    prop_unsubscribe = 0x0F,  // Client -> Service: unsubscribe from property changes
+    prop_notify      = 0x10,  // Service -> Client: property value changed (unsolicited)
 };
 
 // Message flags
@@ -268,6 +271,11 @@ Buffer create_object_release_message(u32 type_id, i32 object_id);  // No sequenc
 Buffer create_property_get_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id);
 Buffer create_property_set_message(u32 sequence_id, u32 type_id, i32 object_id, u16 property_id, const Buffer& value);
 Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id, u16 method_id, const Buffer& args);
+
+// Property notification message creation helpers
+Buffer create_property_subscribe_message(u32 type_id, i32 object_id, u16 property_id);
+Buffer create_property_unsubscribe_message(u32 type_id, i32 object_id, u16 property_id);
+Buffer create_property_notify_message(u32 type_id, i32 object_id, u16 property_id, const Buffer& value);
 
 } // namespace wire
 } // namespace song
