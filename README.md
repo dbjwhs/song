@@ -2,7 +2,7 @@
 
 A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with TLS encryption, HMAC-SHA256 security, streaming RPC, and zero-config mDNS discovery.
 
-**668 tests (561 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~29K lines of C++20**
+**678 tests (571 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~30K lines of C++20**
 
 ```song
 // calculator.song                     // Write an IDL definition...
@@ -36,6 +36,8 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **TLS Encryption**: Full mbedTLS 4.x integration with certificate and PSK modes, PIMPL-hidden from public API
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
 - **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS.
+- **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients.
+- **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
 - **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
 - **Scaffold Sync**: Re-running the scaffold generator diffs against existing implementations, reporting new/removed/modified methods
@@ -460,9 +462,11 @@ All core features are complete and tested:
 | **HMAC Security** | Complete | HMAC-SHA256, constant-time verification, platform crypto |
 | **Streaming** | Complete | StreamWriter (service), StreamReader (client), works over all transports |
 | **Versioning** | Complete | Semver v1.1, 32-bit capability bitfield, bidirectional init_ack, dynamic extensions |
+| **Property Notifications** | Complete | Subscribe/unsubscribe, fan-out via SubscriptionRegistry, multi-client push |
+| **Multi-Client** | Complete | `run_tcp_multi()` thread-per-client, shared object registry and subscriptions |
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
-| **Tests** | 668 total | 561 unit tests + 107 integration tests across 7 projects |
+| **Tests** | 678 total | 571 unit tests + 107 integration tests across 7 projects |
 
 ## Code Quality
 
@@ -543,7 +547,6 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 **Known limitations:**
 - **mDNS discovery is macOS-only** -- Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
-- **Property change notifications** -- Planned but not yet implemented.
 
 ## References
 
