@@ -6,6 +6,7 @@
 #include "types.hpp"
 #include "buffer.hpp"
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <functional>
 #include <atomic>
@@ -17,10 +18,16 @@ class ObjectRegistry;
 /// Base class for all remotable objects (DAG-style reference types)
 /// Objects have identity (object_id), are reference counted, and support
 /// property access and method dispatch via the wire protocol.
+/// Callback type for property change notifications
+/// Parameters: (type_id, object_id, property_id, value)
+using PropertyNotifyCallback = std::function<void(u32, i32, u16, const Buffer&)>;
+
 class Object {
     i32 object_id_ = 0;       // Assigned by registry (negative integers, 0 = null)
+    u32 type_id_ = 0;         // Type identifier (set by registry on creation)
     std::atomic<int> ref_count_{1};  // Reference count
     ObjectRegistry* registry_ = nullptr;
+    PropertyNotifyCallback notify_cb_;
 
 public:
     virtual ~Object() = default;
@@ -34,6 +41,9 @@ public:
 
     /// Get the object's unique ID (negative integer, 0 = null)
     i32 object_id() const { return object_id_; }
+
+    /// Get the object's type identifier
+    u32 type_id() const { return type_id_; }
 
     /// Check if this is a null reference
     bool is_null() const { return object_id_ == 0; }
@@ -61,6 +71,16 @@ public:
     /// @param resp Buffer to write method result to
     virtual void dispatch(u16 method_id, Buffer& req, Buffer& resp) = 0;
 
+    /// Notify that a property value has changed
+    /// This triggers push notifications to subscribed clients.
+    /// Call this from prop_set() or any internal state change.
+    /// @param prop_id Property that changed
+    /// @param value Buffer containing the new property value
+    void notify_property(u16 prop_id, const Buffer& value);
+
+    /// Set the notification callback (called by ServiceRuntime)
+    void set_notify_callback(PropertyNotifyCallback cb) { notify_cb_ = std::move(cb); }
+
     /// Increment reference count
     void add_ref() {
         ref_count_.fetch_add(1, std::memory_order_relaxed);
@@ -80,9 +100,10 @@ public:
 private:
     friend class ObjectRegistry;
 
-    /// Initialize object with ID and registry (called by ObjectRegistry::register_object)
-    void init(i32 id, ObjectRegistry* reg) {
+    /// Initialize object with ID, type, and registry (called by ObjectRegistry)
+    void init(i32 id, ObjectRegistry* reg, u32 type_id = 0) {
         object_id_ = id;
+        type_id_ = type_id;
         registry_ = reg;
     }
 };

@@ -6,6 +6,12 @@
 
 namespace song {
 
+void Object::notify_property(u16 prop_id, const Buffer& value) {
+    if (notify_cb_) {
+        notify_cb_(type_id_, object_id_, prop_id, value);
+    }
+}
+
 ObjectRegistry::~ObjectRegistry() {
     clear();
 }
@@ -31,7 +37,7 @@ i32 ObjectRegistry::create_object(u32 type_id, u16 constructor_id, Buffer& args)
 
     // Assign ID and register
     i32 id = next_id_--;
-    obj->init(id, this);
+    obj->init(id, this, type_id);
     objects_[id] = obj;
 
     return id;

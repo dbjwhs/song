@@ -346,6 +346,53 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
 void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
                                    Transport& transport,
                                    std::unordered_set<i32>& tracked_objects) {
+    SubscriptionSet unused_subs;
+    handle_message(hdr, payload, transport, tracked_objects, unused_subs);
+}
+
+void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
+                                   Transport& transport,
+                                   std::unordered_set<i32>& tracked_objects,
+                                   SubscriptionSet& subscriptions) {
+    // Property subscribe/unsubscribe (fire-and-forget, no response)
+    if (hdr.type == wire::MsgType::prop_subscribe) {
+        auto prop_hdr = wire::decode_property_header(payload);
+        subscriptions.insert({prop_hdr.object_id, prop_hdr.property_id});
+
+        // Set up notification callback on the object so prop changes push to this client
+        Object* obj = object_registry_.get(prop_hdr.object_id);
+        if (obj) {
+            Transport* tp = &transport;
+            obj->set_notify_callback([tp](u32 type_id, i32 obj_id, u16 prop_id, const Buffer& value) {
+                try {
+                    Buffer notify_msg = wire::create_property_notify_message(type_id, obj_id, prop_id, value);
+                    tp->send(notify_msg);
+                } catch (...) {
+                    // Client may have disconnected
+                }
+            });
+        }
+        return;
+    }
+
+    if (hdr.type == wire::MsgType::prop_unsubscribe) {
+        auto prop_hdr = wire::decode_property_header(payload);
+        subscriptions.erase({prop_hdr.object_id, prop_hdr.property_id});
+
+        // Clear notification callback if no subscriptions remain for this object
+        Object* obj = object_registry_.get(prop_hdr.object_id);
+        if (obj) {
+            bool any_subs = false;
+            for (const auto& [oid, pid] : subscriptions) {
+                if (oid == prop_hdr.object_id) { any_subs = true; break; }
+            }
+            if (!any_subs) {
+                obj->set_notify_callback(nullptr);
+            }
+        }
+        return;
+    }
+
     if (hdr.type == wire::MsgType::call) {
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);

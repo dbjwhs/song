@@ -9,6 +9,7 @@
 #include "object.hpp"
 #include "stream.hpp"
 #include <array>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -135,6 +136,10 @@ public:
                                           const std::string& name,
                                           const std::string& type);
 
+    /// Property subscription key: (object_id, property_id)
+    using SubscriptionKey = std::pair<i32, u16>;
+    using SubscriptionSet = std::set<SubscriptionKey>;
+
     /// Send init confirmation to a Transport-based client
     void send_init_confirmation_transport(Transport& transport);
 
@@ -142,6 +147,12 @@ public:
     void handle_message(const wire::Header& hdr, Buffer& payload,
                        Transport& transport,
                        std::unordered_set<i32>& tracked_objects);
+
+    /// Handle a single message with property subscription tracking
+    void handle_message(const wire::Header& hdr, Buffer& payload,
+                       Transport& transport,
+                       std::unordered_set<i32>& tracked_objects,
+                       SubscriptionSet& subscriptions);
 
 private:
     /// Release all objects tracked by a connection (prevents leaks on crash)

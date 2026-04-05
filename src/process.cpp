@@ -563,6 +563,61 @@ bool ServiceConnection::has_capability(wire::Capability cap) const {
         static_cast<wire::Capability>(negotiated_capabilities()), cap);
 }
 
+void ServiceConnection::subscribe_property(u32 type_id, i32 object_id, u16 property_id,
+                                           std::function<void(const Buffer&)> callback) {
+    prop_callbacks_[{object_id, property_id}] = std::move(callback);
+
+    // Send subscribe message to service
+    Buffer msg = wire::create_property_subscribe_message(type_id, object_id, property_id);
+    if (proc_) {
+        proc_->send(msg);
+    } else if (transport_) {
+        transport_->send(msg);
+    }
+}
+
+void ServiceConnection::unsubscribe_property([[maybe_unused]] u32 type_id, i32 object_id, u16 property_id) {
+    prop_callbacks_.erase({object_id, property_id});
+
+    // Send unsubscribe message to service
+    Buffer msg = wire::create_property_unsubscribe_message(type_id, object_id, property_id);
+    if (proc_) {
+        proc_->send(msg);
+    } else if (transport_) {
+        transport_->send(msg);
+    }
+}
+
+void ServiceConnection::poll_notifications(int timeout_ms) {
+    Buffer msg;
+    bool received = false;
+
+    if (proc_) {
+        received = proc_->receive(msg, timeout_ms);
+    } else if (transport_) {
+        received = transport_->receive(msg, timeout_ms);
+    }
+
+    if (!received) return;
+
+    msg.reset_read();
+    auto hdr = wire::decode_header(msg);
+
+    if (hdr.type == wire::MsgType::prop_notify) {
+        auto prop_hdr = wire::decode_property_header(msg);
+        auto it = prop_callbacks_.find({prop_hdr.object_id, prop_hdr.property_id});
+        if (it != prop_callbacks_.end()) {
+            // Remaining data in msg is the property value
+            Buffer value;
+            if (msg.remaining() > 0) {
+                value.write(msg.data() + msg.read_pos(), msg.remaining());
+                value.reset_read();
+            }
+            it->second(value);
+        }
+    }
+}
+
 bool ServiceConnection::supports(u16 service_id, u16 method_id) const {
     const auto& method_list = methods();
     for (const auto& m : method_list) {
