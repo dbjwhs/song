@@ -2,11 +2,18 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "song/object.hpp"
+#include "song/subscription.hpp"
 #include "song/error.hpp"
 
 namespace song {
 
 void Object::notify_property(u16 prop_id, const Buffer& value) {
+    // Fan-out through subscription registry if available (multi-client)
+    if (sub_registry_) {
+        sub_registry_->notify(type_id_, object_id_, prop_id, value);
+        return;
+    }
+    // Single-client callback fallback
     if (notify_cb_) {
         notify_cb_(type_id_, object_id_, prop_id, value);
     }

@@ -30,6 +30,7 @@ add_library(song STATIC
     src/registry.cpp
     src/object.cpp
     src/stream.cpp
+    src/subscription.cpp
     src/logging.cpp
 )
 target_include_directories(song PUBLIC include)

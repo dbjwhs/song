@@ -14,20 +14,22 @@
 namespace song {
 
 class ObjectRegistry;
+class SubscriptionRegistry;
 
-/// Base class for all remotable objects (DAG-style reference types)
-/// Objects have identity (object_id), are reference counted, and support
-/// property access and method dispatch via the wire protocol.
 /// Callback type for property change notifications
 /// Parameters: (type_id, object_id, property_id, value)
 using PropertyNotifyCallback = std::function<void(u32, i32, u16, const Buffer&)>;
 
+/// Base class for all remotable objects (DAG-style reference types)
+/// Objects have identity (object_id), are reference counted, and support
+/// property access and method dispatch via the wire protocol.
 class Object {
     i32 object_id_ = 0;       // Assigned by registry (negative integers, 0 = null)
     u32 type_id_ = 0;         // Type identifier (set by registry on creation)
     std::atomic<int> ref_count_{1};  // Reference count
     ObjectRegistry* registry_ = nullptr;
     PropertyNotifyCallback notify_cb_;
+    SubscriptionRegistry* sub_registry_ = nullptr;  // For fan-out notifications
 
 public:
     virtual ~Object() = default;
@@ -78,8 +80,12 @@ public:
     /// @param value Buffer containing the new property value
     void notify_property(u16 prop_id, const Buffer& value);
 
-    /// Set the notification callback (called by ServiceRuntime)
+    /// Set the notification callback (single-client mode)
     void set_notify_callback(PropertyNotifyCallback cb) { notify_cb_ = std::move(cb); }
+
+    /// Set the subscription registry (multi-client fan-out mode)
+    /// When set, notify_property() fans out through the registry instead of the callback.
+    void set_subscription_registry(SubscriptionRegistry* reg) { sub_registry_ = reg; }
 
     /// Increment reference count
     void add_ref() {

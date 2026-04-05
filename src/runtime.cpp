@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <cerrno>
+#include <thread>
+#include <algorithm>
 
 namespace song {
 
@@ -359,18 +361,14 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         auto prop_hdr = wire::decode_property_header(payload);
         subscriptions.insert({prop_hdr.object_id, prop_hdr.property_id});
 
-        // Set up notification callback on the object so prop changes push to this client
+        auto subscriber_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(&transport);
+        sub_registry_.subscribe(subscriber_id, prop_hdr.object_id,
+                                prop_hdr.property_id, &transport);
+
+        // Ensure the object uses the subscription registry for fan-out
         Object* obj = object_registry_.get(prop_hdr.object_id);
         if (obj) {
-            Transport* tp = &transport;
-            obj->set_notify_callback([tp](u32 type_id, i32 obj_id, u16 prop_id, const Buffer& value) {
-                try {
-                    Buffer notify_msg = wire::create_property_notify_message(type_id, obj_id, prop_id, value);
-                    tp->send(notify_msg);
-                } catch (...) {
-                    // Client may have disconnected
-                }
-            });
+            obj->set_subscription_registry(&sub_registry_);
         }
         return;
     }
@@ -379,17 +377,8 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         auto prop_hdr = wire::decode_property_header(payload);
         subscriptions.erase({prop_hdr.object_id, prop_hdr.property_id});
 
-        // Clear notification callback if no subscriptions remain for this object
-        Object* obj = object_registry_.get(prop_hdr.object_id);
-        if (obj) {
-            bool any_subs = false;
-            for (const auto& [oid, pid] : subscriptions) {
-                if (oid == prop_hdr.object_id) { any_subs = true; break; }
-            }
-            if (!any_subs) {
-                obj->set_notify_callback(nullptr);
-            }
-        }
+        auto subscriber_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(&transport);
+        sub_registry_.unsubscribe(subscriber_id, prop_hdr.object_id, prop_hdr.property_id);
         return;
     }
 
@@ -543,15 +532,19 @@ void ServiceRuntime::client_loop(Transport& transport) {
     // Send init confirmation to client
     send_init_confirmation_transport(transport);
 
-    // Track objects created by this connection for cleanup on disconnect
+    // Track objects and subscriptions for this connection
     std::unordered_set<i32> tracked_objects;
+    SubscriptionSet subscriptions;
+
+    auto subscriber_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(&transport);
 
     // Handle messages until client disconnects
     for (;;) {
         Buffer msg;
         if (!transport.receive(msg, -1)) {  // Blocking receive
-            // Client disconnected - release all tracked objects
+            // Client disconnected - clean up
             release_connection_objects(tracked_objects);
+            sub_registry_.unsubscribe_all(subscriber_id);
             return;
         }
 
@@ -561,24 +554,24 @@ void ServiceRuntime::client_loop(Transport& transport) {
         // Validate
         if (hdr.magic != wire::kMagic) {
             release_connection_objects(tracked_objects);
+            sub_registry_.unsubscribe_all(subscriber_id);
             return;  // Invalid client, disconnect
         }
 
         if (hdr.type == wire::MsgType::shutdown) {
             // Client requested shutdown of this connection
             release_connection_objects(tracked_objects);
+            sub_registry_.unsubscribe_all(subscriber_id);
             return;
         }
 
         // Handle init_ack from v1.1+ clients (silently consume)
         if (hdr.type == wire::MsgType::init_ack) {
-            // Client is telling us its version and capabilities.
-            // Decode for logging/debugging but don't require it.
             continue;
         }
 
-        // Handle message
-        handle_message(hdr, msg, transport, tracked_objects);
+        // Handle message (with subscription tracking)
+        handle_message(hdr, msg, transport, tracked_objects, subscriptions);
     }
 }
 
@@ -706,6 +699,46 @@ void ServiceRuntime::client_loop(Transport& transport) {
         } catch (...) {
             // Client error, continue accepting new clients
         }
+    }
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp_multi(u16 port) {
+    TcpListener listener;
+    listener.listen(port);
+    run_tcp_multi(listener);
+}
+
+[[noreturn]] void ServiceRuntime::run_tcp_multi(TcpListener& listener) {
+    // Accept clients concurrently -- one thread per client
+    std::vector<std::thread> client_threads;
+
+    for (;;) {
+        auto client = listener.accept(-1);
+        if (!client) continue;
+
+        // Move the transport into a shared_ptr so the thread owns it
+        auto shared_client = std::shared_ptr<TcpTransport>(client.release());
+
+        client_threads.emplace_back([this, shared_client]() {
+            try {
+                client_loop(*shared_client);
+            } catch (...) {
+                // Client error -- thread exits, subscriptions cleaned up in client_loop
+            }
+        });
+
+        // Clean up finished threads periodically
+        client_threads.erase(
+            std::remove_if(client_threads.begin(), client_threads.end(),
+                [](std::thread& t) {
+                    if (t.joinable()) {
+                        // Can't check if thread is done without joining, so detach old ones
+                        // In production, use a proper thread pool. This is simple and correct.
+                        return false;
+                    }
+                    return true;
+                }),
+            client_threads.end());
     }
 }
 

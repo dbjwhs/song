@@ -8,6 +8,7 @@
 #include "wire.hpp"
 #include "object.hpp"
 #include "stream.hpp"
+#include "subscription.hpp"
 #include <array>
 #include <set>
 #include <unordered_map>
@@ -31,6 +32,7 @@ class ServiceRuntime {
     std::unordered_map<u16, StreamDispatcher> stream_dispatchers_;
     std::vector<wire::MethodDescriptor> methods_;
     ObjectRegistry object_registry_;
+    SubscriptionRegistry sub_registry_;
     u32 local_capabilities_ = 0;
     std::array<std::string, 8> extension_names_{};
     u8 next_extension_slot_ = 0;
@@ -135,6 +137,18 @@ public:
     [[noreturn]] void run_tcp_discoverable(TcpListener& listener,
                                           const std::string& name,
                                           const std::string& type);
+
+    /// Multi-client TCP service loop (thread-per-client)
+    /// Accepts multiple concurrent clients, each in its own thread.
+    /// Property notifications fan out to all subscribed clients.
+    /// @param port Port to listen on (0 for OS-assigned)
+    [[noreturn]] void run_tcp_multi(u16 port);
+
+    /// Multi-client TCP service loop with existing listener
+    [[noreturn]] void run_tcp_multi(TcpListener& listener);
+
+    /// Get the subscription registry (for external notification triggers)
+    SubscriptionRegistry& subscriptions() { return sub_registry_; }
 
     /// Property subscription key: (object_id, property_id)
     using SubscriptionKey = std::pair<i32, u16>;
