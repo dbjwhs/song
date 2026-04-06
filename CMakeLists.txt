@@ -81,3 +81,6 @@ add_subdirectory(examples)
 
 # Sing - Integration Tests
 add_subdirectory(sing)
+
+# Fuzz harnesses (optional, requires LLVM clang with libFuzzer)
+add_subdirectory(fuzz)
