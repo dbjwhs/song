@@ -332,40 +332,333 @@ std::unique_ptr<Discovery> create_discovery() {
 
 #elif defined(__linux__)
 
+#if defined(SONG_HAS_AVAHI)
+
 // =============================================================================
-// Linux Stub (TODO: Implement with Avahi)
+// Linux Implementation using Avahi
 // =============================================================================
 
-class AvahiDiscovery : public Discovery {
-public:
-    bool register_service(const std::string&, const std::string&, u16) override {
-        return false;  // Not implemented yet
+#include <avahi-client/client.h>
+#include <avahi-client/publish.h>
+#include <avahi-client/lookup.h>
+#include <avahi-common/simple-watch.h>
+#include <avahi-common/malloc.h>
+#include <avahi-common/error.h>
+#include <avahi-common/timeval.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <mutex>
+#include <atomic>
+
+namespace {
+
+// Poll the Avahi event loop until a condition is met or timeout expires
+template<typename Predicate>
+void avahi_poll_until(AvahiSimplePoll* poll, Predicate pred,
+                      std::chrono::milliseconds timeout) {
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred() && std::chrono::steady_clock::now() < deadline) {
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        int ms = std::max(static_cast<int>(remaining.count()), 0);
+        if (ms <= 0) break;
+        avahi_simple_poll_iterate(poll, std::min(ms, 100));
+    }
+}
+
+std::string resolve_hostname(const std::string& hostname) {
+    struct addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo* result = nullptr;
+    if (getaddrinfo(hostname.c_str(), nullptr, &hints, &result) != 0) {
+        return "";
     }
 
-    void unregister_service() override {}
+    std::string ip;
+    if (result) {
+        auto* addr = reinterpret_cast<struct sockaddr_in*>(result->ai_addr);
+        char buf[INET_ADDRSTRLEN];
+        if (inet_ntop(AF_INET, &addr->sin_addr, buf, sizeof(buf))) {
+            ip = buf;
+        }
+        freeaddrinfo(result);
+    }
+    return ip;
+}
+
+} // anonymous namespace
+
+// Browse context for collecting discovered service names
+struct AvahiBrowseContext {
+    std::vector<std::string> names;
+    std::string domain;
+    std::mutex mutex;
+};
+
+// Resolve context for a single service resolution
+struct AvahiResolveContext {
+    std::string host;
+    u16 port = 0;
+    bool resolved = false;
+    AvahiSimplePoll* poll = nullptr;
+};
+
+static void avahi_browse_callback(
+    [[maybe_unused]] AvahiServiceBrowser* b,
+    [[maybe_unused]] AvahiIfIndex interface,
+    [[maybe_unused]] AvahiProtocol protocol,
+    AvahiBrowserEvent event,
+    const char* name,
+    [[maybe_unused]] const char* type,
+    const char* domain,
+    [[maybe_unused]] AvahiLookupResultFlags flags,
+    void* userdata) {
+
+    auto* ctx = static_cast<AvahiBrowseContext*>(userdata);
+    if (event == AVAHI_BROWSER_NEW) {
+        std::lock_guard lock(ctx->mutex);
+        ctx->names.push_back(name);
+        if (domain) ctx->domain = domain;
+    }
+}
+
+static void avahi_resolve_callback(
+    [[maybe_unused]] AvahiServiceResolver* r,
+    [[maybe_unused]] AvahiIfIndex interface,
+    [[maybe_unused]] AvahiProtocol protocol,
+    AvahiResolverEvent event,
+    [[maybe_unused]] const char* name,
+    [[maybe_unused]] const char* type,
+    [[maybe_unused]] const char* domain,
+    const char* host_name,
+    [[maybe_unused]] const AvahiAddress* address,
+    uint16_t port,
+    [[maybe_unused]] AvahiStringList* txt,
+    [[maybe_unused]] AvahiLookupResultFlags flags,
+    void* userdata) {
+
+    auto* ctx = static_cast<AvahiResolveContext*>(userdata);
+    if (event == AVAHI_RESOLVER_FOUND) {
+        ctx->host = host_name ? host_name : "";
+        ctx->port = port;
+        ctx->resolved = true;
+    }
+}
+
+static void avahi_entry_group_callback(
+    [[maybe_unused]] AvahiEntryGroup* g,
+    AvahiEntryGroupState state,
+    void* userdata) {
+    auto* registered = static_cast<std::atomic<bool>*>(userdata);
+    if (state == AVAHI_ENTRY_GROUP_ESTABLISHED) {
+        *registered = true;
+    }
+}
+
+class AvahiDiscovery : public Discovery {
+    AvahiSimplePoll* poll_ = nullptr;
+    AvahiClient* client_ = nullptr;
+    AvahiEntryGroup* group_ = nullptr;
+    std::mutex mutex_;
+    std::atomic<bool> registered_{false};
+
+public:
+    AvahiDiscovery() {
+        poll_ = avahi_simple_poll_new();
+        if (!poll_) return;
+
+        int error = 0;
+        client_ = avahi_client_new(avahi_simple_poll_get(poll_),
+                                    static_cast<AvahiClientFlags>(0),
+                                    nullptr, nullptr, &error);
+    }
+
+    ~AvahiDiscovery() override {
+        unregister_service();
+        if (client_) avahi_client_free(client_);
+        if (poll_) avahi_simple_poll_free(poll_);
+    }
+
+    bool register_service(const std::string& name,
+                         const std::string& type,
+                         u16 port) override {
+        std::lock_guard lock(mutex_);
+        if (!client_) return false;
+
+        if (group_) {
+            avahi_entry_group_reset(group_);
+            registered_ = false;
+        } else {
+            group_ = avahi_entry_group_new(client_, avahi_entry_group_callback,
+                                            &registered_);
+            if (!group_) return false;
+        }
+
+        std::string service_type = make_service_type(type);
+        int ret = avahi_entry_group_add_service(
+            group_, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
+            static_cast<AvahiPublishFlags>(0),
+            name.c_str(), service_type.c_str(),
+            nullptr, nullptr, port, nullptr);
+
+        if (ret < 0) return false;
+
+        ret = avahi_entry_group_commit(group_);
+        if (ret < 0) return false;
+
+        // Wait for registration to complete
+        avahi_poll_until(poll_, [this]() { return registered_.load(); },
+                         std::chrono::milliseconds(1000));
+
+        return registered_.load();
+    }
+
+    void unregister_service() override {
+        std::lock_guard lock(mutex_);
+        if (group_) {
+            avahi_entry_group_reset(group_);
+            avahi_entry_group_free(group_);
+            group_ = nullptr;
+            registered_ = false;
+        }
+    }
 
     bool is_registered() const override {
-        return false;
+        return registered_.load();
     }
 
     std::vector<DiscoveredService> discover(
-        const std::string&, std::chrono::milliseconds) override {
-        return {};  // Not implemented yet
+        const std::string& type,
+        std::chrono::milliseconds timeout) override {
+
+        std::vector<DiscoveredService> results;
+        if (!client_) return results;
+
+        std::string service_type = make_service_type(type);
+
+        AvahiBrowseContext ctx;
+        AvahiServiceBrowser* browser = avahi_service_browser_new(
+            client_, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
+            service_type.c_str(), nullptr,
+            static_cast<AvahiLookupFlags>(0),
+            avahi_browse_callback, &ctx);
+
+        if (!browser) return results;
+
+        // Browse with timeout
+        avahi_poll_until(poll_,
+            [&ctx]() {
+                std::lock_guard lock(ctx.mutex);
+                return !ctx.names.empty();
+            },
+            timeout);
+
+        // Keep browsing briefly to collect more results
+        avahi_poll_until(poll_, []() { return false; },
+                         std::chrono::milliseconds(200));
+
+        avahi_service_browser_free(browser);
+
+        // Resolve each discovered service
+        std::lock_guard lock(ctx.mutex);
+        for (const auto& name : ctx.names) {
+            auto resolved = resolve_service(name, service_type,
+                                            ctx.domain.empty() ? "local" : ctx.domain,
+                                            timeout);
+            if (resolved) {
+                results.push_back(std::move(*resolved));
+            }
+        }
+
+        return results;
     }
 
     std::optional<DiscoveredService> discover_one(
-        const std::string&, const std::string&, std::chrono::milliseconds) override {
-        return std::nullopt;  // Not implemented yet
+        const std::string& name,
+        const std::string& type,
+        std::chrono::milliseconds timeout) override {
+
+        std::string service_type = make_service_type(type);
+        return resolve_service(name, service_type, "local", timeout);
     }
 
     bool is_available() const override {
-        return false;  // Not available until Avahi integration is done
+        return client_ != nullptr;
+    }
+
+private:
+    std::optional<DiscoveredService> resolve_service(
+        const std::string& name,
+        const std::string& type,
+        const std::string& domain,
+        std::chrono::milliseconds timeout) {
+
+        if (!client_) return std::nullopt;
+
+        AvahiResolveContext ctx;
+        ctx.poll = poll_;
+
+        AvahiServiceResolver* resolver = avahi_service_resolver_new(
+            client_, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC,
+            name.c_str(), type.c_str(), domain.c_str(),
+            AVAHI_PROTO_UNSPEC,
+            static_cast<AvahiLookupFlags>(0),
+            avahi_resolve_callback, &ctx);
+
+        if (!resolver) return std::nullopt;
+
+        avahi_poll_until(poll_, [&ctx]() { return ctx.resolved; }, timeout);
+
+        avahi_service_resolver_free(resolver);
+
+        if (!ctx.resolved) return std::nullopt;
+
+        std::string ip = resolve_hostname(ctx.host);
+        if (ip.empty()) ip = ctx.host;
+
+        DiscoveredService service;
+        service.name = name;
+        service.host = ip;
+        service.port = ctx.port;
+        service.type = type;
+        service.domain = domain;
+        return service;
     }
 };
 
 std::unique_ptr<Discovery> create_discovery() {
     return std::make_unique<AvahiDiscovery>();
 }
+
+#else // !SONG_HAS_AVAHI
+
+// =============================================================================
+// Linux without Avahi -- stub returns unavailable
+// =============================================================================
+
+class AvahiStubDiscovery : public Discovery {
+public:
+    bool register_service(const std::string&, const std::string&, u16) override {
+        return false;
+    }
+    void unregister_service() override {}
+    bool is_registered() const override { return false; }
+    std::vector<DiscoveredService> discover(
+        const std::string&, std::chrono::milliseconds) override { return {}; }
+    std::optional<DiscoveredService> discover_one(
+        const std::string&, const std::string&, std::chrono::milliseconds) override {
+        return std::nullopt;
+    }
+    bool is_available() const override { return false; }
+};
+
+std::unique_ptr<Discovery> create_discovery() {
+    return std::make_unique<AvahiStubDiscovery>();
+}
+
+#endif // SONG_HAS_AVAHI
 
 #else
 
