@@ -10,8 +10,9 @@
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonHMAC.h>
 #elif defined(__linux__)
-#include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include <openssl/core_names.h>
+#include <openssl/params.h>
 #else
 #error "No HMAC implementation available. Song requires CommonCrypto (macOS) or OpenSSL (Linux)."
 #endif
@@ -30,13 +31,25 @@ HmacTag compute_hmac(const void* key, size_t key_len,
     std::memcpy(tag.data(), full_hmac, kHmacTagSize);
 
 #elif defined(__linux__)
-    // Use OpenSSL HMAC-SHA256
+    // Use OpenSSL 3.x EVP_MAC API for HMAC-SHA256
     unsigned char full_hmac[EVP_MAX_MD_SIZE];
-    unsigned int hmac_len = 0;
-    HMAC(EVP_sha256(),
-         key, static_cast<int>(key_len),
-         static_cast<const unsigned char*>(data), data_len,
-         full_hmac, &hmac_len);
+    size_t hmac_len = 0;
+
+    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0),
+        OSSL_PARAM_construct_end()
+    };
+
+    EVP_MAC_init(ctx, static_cast<const unsigned char*>(key), key_len, params);
+    EVP_MAC_update(ctx, static_cast<const unsigned char*>(data), data_len);
+    EVP_MAC_final(ctx, full_hmac, &hmac_len, sizeof(full_hmac));
+
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
+
     // Truncate to 8 bytes
     std::memcpy(tag.data(), full_hmac, kHmacTagSize);
 
