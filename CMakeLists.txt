@@ -49,6 +49,19 @@ if(UNIX AND NOT APPLE)
     if(OpenSSL_FOUND)
         target_link_libraries(song PUBLIC OpenSSL::Crypto)
     endif()
+
+    # Avahi for mDNS service discovery on Linux
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(AVAHI QUIET avahi-client)
+        if(AVAHI_FOUND)
+            target_link_libraries(song PUBLIC ${AVAHI_LIBRARIES})
+            target_include_directories(song PUBLIC ${AVAHI_INCLUDE_DIRS})
+            target_compile_definitions(song PUBLIC SONG_HAS_AVAHI=1)
+        else()
+            message(STATUS "Avahi not found - mDNS discovery disabled on Linux")
+        endif()
+    endif()
 endif()
 
 # mbedTLS for TLS transport encryption
