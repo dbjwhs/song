@@ -61,7 +61,9 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
 }
 
 void Buffer::ensure_capacity(size_t required) {
-    if (required <= capacity_) return;
+    if (required <= capacity_) {
+        return;
+    }
 
     // Guard against overflow: capacity doubling must not wrap around SIZE_MAX
     constexpr size_t kMaxCapacity = std::numeric_limits<size_t>::max() / 2;

@@ -121,12 +121,16 @@ void Lexer::advance() {
 }
 
 char Lexer::peek() const {
-    if (at_end()) return '\0';
+    if (at_end()) {
+        return '\0';
+    }
     return m_input[m_current];
 }
 
 char Lexer::peek_next() const {
-    if (m_current + 1 >= m_input.length()) return '\0';
+    if (m_current + 1 >= m_input.length()) {
+        return '\0';
+    }
     return m_input[m_current + 1];
 }
 

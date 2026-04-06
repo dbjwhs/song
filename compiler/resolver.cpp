@@ -291,14 +291,18 @@ void Resolver::check_duplicate_fields(const std::vector<compiler::Field>& fields
 
     // Check for shadowing of inherited fields
     const TypeInfo* info = lookup(parent_name);
-    if (!info || !info->base) return;
+    if (!info || !info->base) {
+        return;
+    }
 
     // Collect all ancestor field names (with cycle guard)
     std::unordered_set<std::string> ancestor_fields;
     std::unordered_set<std::string> visited;
     std::string current = *info->base;
     while (true) {
-        if (visited.count(current)) break;  // cycle — already reported elsewhere
+        if (visited.count(current)) { // cycle — already reported elsewhere
+            break;
+        }
         visited.insert(current);
 
         // Find this ancestor's fields in the AST
@@ -320,7 +324,9 @@ void Resolver::check_duplicate_fields(const std::vector<compiler::Field>& fields
         }
         // Walk up the chain
         const TypeInfo* ancestor = lookup(current);
-        if (!ancestor || !ancestor->base) break;
+        if (!ancestor || !ancestor->base) {
+            break;
+        }
         current = *ancestor->base;
     }
 

@@ -173,7 +173,9 @@ compiler::EnumDef Parser::parse_enum(bool is_flags) {
 
         while (check(TokenType::Comma)) {
             advance();  // consume comma
-            if (check(TokenType::RBrace)) break;  // trailing comma
+            if (check(TokenType::RBrace)) { // trailing comma
+                break;
+            }
             def.items.push_back(parse_enum_item());
         }
     }
@@ -559,7 +561,9 @@ bool Parser::is_type_start() const {
 }
 
 bool Parser::is_primitive_type() const {
-    if (!m_current_token) return false;
+    if (!m_current_token) {
+        return false;
+    }
     switch (m_current_token->m_type) {
         case TokenType::KwBool:
         case TokenType::KwI8:

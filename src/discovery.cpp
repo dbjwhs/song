@@ -49,7 +49,9 @@ static void DNSSD_API browse_callback(
     const char* /* regtype */,
     const char* replyDomain,
     void* context) {
-    if (errorCode != kDNSServiceErr_NoError) return;
+    if (errorCode != kDNSServiceErr_NoError) {
+        return;
+    }
     auto* ctx = static_cast<BrowseContext*>(context);
     std::lock_guard lock(ctx->mutex);
     if (flags & kDNSServiceFlagsAdd) {
@@ -70,7 +72,9 @@ static void DNSSD_API resolve_callback(
     uint16_t /* txtLen */,
     const unsigned char* /* txtRecord */,
     void* context) {
-    if (errorCode != kDNSServiceErr_NoError) return;
+    if (errorCode != kDNSServiceErr_NoError) {
+        return;
+    }
     auto* ctx = static_cast<ResolveContext*>(context);
     std::lock_guard lock(ctx->mutex);
     ctx->host = hosttarget;
@@ -188,7 +192,9 @@ public:
             int timeout_ms = static_cast<int>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count());
 
-            if (timeout_ms <= 0) break;
+            if (timeout_ms <= 0) {
+                break;
+            }
 
             if (poll(&pfd, 1, std::min(timeout_ms, 100)) > 0) {
                 DNSServiceProcessResult(browse_ref);
@@ -275,7 +281,9 @@ private:
             int timeout_ms = static_cast<int>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count());
 
-            if (timeout_ms <= 0) break;
+            if (timeout_ms <= 0) {
+                break;
+            }
 
             if (poll(&pfd, 1, std::min(timeout_ms, 100)) > 0) {
                 DNSServiceProcessResult(resolve_ref);
@@ -361,7 +369,9 @@ void avahi_poll_until(AvahiSimplePoll* poll, Predicate pred,
         auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now());
         int ms = std::max(static_cast<int>(remaining.count()), 0);
-        if (ms <= 0) break;
+        if (ms <= 0) {
+            break;
+        }
         avahi_simple_poll_iterate(poll, std::min(ms, 100));
     }
 }
@@ -467,7 +477,9 @@ class AvahiDiscovery : public Discovery {
 public:
     AvahiDiscovery() {
         poll_ = avahi_simple_poll_new();
-        if (!poll_) return;
+        if (!poll_) {
+            return;
+        }
 
         int error = 0;
         client_ = avahi_client_new(avahi_simple_poll_get(poll_),
@@ -485,7 +497,9 @@ public:
                          const std::string& type,
                          u16 port) override {
         std::lock_guard lock(mutex_);
-        if (!client_) return false;
+        if (!client_) {
+            return false;
+        }
 
         if (group_) {
             avahi_entry_group_reset(group_);
@@ -493,7 +507,9 @@ public:
         } else {
             group_ = avahi_entry_group_new(client_, avahi_entry_group_callback,
                                             &registered_);
-            if (!group_) return false;
+            if (!group_) {
+                return false;
+            }
         }
 
         std::string service_type = make_service_type(type);
@@ -503,10 +519,14 @@ public:
             name.c_str(), service_type.c_str(),
             nullptr, nullptr, port, nullptr);
 
-        if (ret < 0) return false;
+        if (ret < 0) {
+            return false;
+        }
 
         ret = avahi_entry_group_commit(group_);
-        if (ret < 0) return false;
+        if (ret < 0) {
+            return false;
+        }
 
         // Wait for registration to complete
         avahi_poll_until(poll_, [this]() { return registered_.load(); },
@@ -534,7 +554,9 @@ public:
         std::chrono::milliseconds timeout) override {
 
         std::vector<DiscoveredService> results;
-        if (!client_) return results;
+        if (!client_) {
+            return results;
+        }
 
         std::string service_type = make_service_type(type);
 
@@ -545,7 +567,9 @@ public:
             static_cast<AvahiLookupFlags>(0),
             avahi_browse_callback, &ctx);
 
-        if (!browser) return results;
+        if (!browser) {
+            return results;
+        }
 
         // Browse with timeout
         avahi_poll_until(poll_,
@@ -595,7 +619,9 @@ private:
         const std::string& domain,
         std::chrono::milliseconds timeout) {
 
-        if (!client_) return std::nullopt;
+        if (!client_) {
+            return std::nullopt;
+        }
 
         AvahiResolveContext ctx;
         ctx.poll = poll_;
@@ -607,13 +633,17 @@ private:
             static_cast<AvahiLookupFlags>(0),
             avahi_resolve_callback, &ctx);
 
-        if (!resolver) return std::nullopt;
+        if (!resolver) {
+            return std::nullopt;
+        }
 
         avahi_poll_until(poll_, [&ctx]() { return ctx.resolved; }, timeout);
 
         avahi_service_resolver_free(resolver);
 
-        if (!ctx.resolved) return std::nullopt;
+        if (!ctx.resolved) {
+            return std::nullopt;
+        }
 
         std::string ip = resolve_hostname(ctx.host);
         if (ip.empty()) ip = ctx.host;

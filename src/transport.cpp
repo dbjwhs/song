@@ -52,7 +52,9 @@ void PipeTransport::send(const Buffer& msg) {
             msg.size() - offset
         );
         if (written < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) {
+                continue;
+            }
             throw ServiceError("PipeTransport: write failed: " + std::string(strerror(errno)));
         }
         offset += static_cast<size_t>(written);
@@ -105,7 +107,9 @@ bool PipeTransport::receive(Buffer& msg, int timeout_ms) {
                 hdr.payload_size - offset
             );
             if (n < 0) {
-                if (errno == EINTR) continue;
+                if (errno == EINTR) {
+                    continue;
+                }
                 throw ServiceError("PipeTransport: failed to read payload");
             }
             if (n == 0) {
@@ -273,7 +277,9 @@ void TcpTransport::send(const Buffer& msg) {
             MSG_NOSIGNAL
         );
         if (written < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) {
+                continue;
+            }
             throw ServiceError("TcpTransport: send failed: " + std::string(strerror(errno)));
         }
         if (written == 0) {
@@ -325,7 +331,9 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
             return false;  // Connection closed
         }
         if (n < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) {
+                continue;
+            }
             throw ServiceError("TcpTransport: recv failed: " + std::string(strerror(errno)));
         }
         header_offset += static_cast<size_t>(n);
@@ -349,7 +357,9 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
             ssize_t n = recv(sock_, payload_buf.data() + offset,
                            hdr.payload_size - offset, 0);
             if (n < 0) {
-                if (errno == EINTR) continue;
+                if (errno == EINTR) {
+                    continue;
+                }
                 throw ServiceError("TcpTransport: failed to read payload");
             }
             if (n == 0) {

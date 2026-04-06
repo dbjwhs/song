@@ -60,7 +60,9 @@ public:
     }
 
     std::vector<std::vector<i32>> transpose(const std::vector<std::vector<i32>>& matrix) override {
-        if (matrix.empty()) return {};
+        if (matrix.empty()) {
+            return {};
+        }
 
         // Handle jagged arrays - find max row length
         size_t max_cols = 0;
@@ -68,7 +70,9 @@ public:
             max_cols = std::max(max_cols, row.size());
         }
 
-        if (max_cols == 0) return {};
+        if (max_cols == 0) {
+            return {};
+        }
 
         std::vector<std::vector<i32>> result(max_cols);
         for (size_t i = 0; i < matrix.size(); ++i) {

@@ -15,7 +15,9 @@ void SubscriptionRegistry::subscribe(SubscriberId subscriber_id, i32 object_id,
 
     // Check for duplicate
     for (const auto& sub : subscribers) {
-        if (sub.id == subscriber_id) return;  // Already subscribed
+        if (sub.id == subscriber_id) { // Already subscribed
+            return;
+        }
     }
 
     subscribers.push_back({subscriber_id, transport});
@@ -26,7 +28,9 @@ void SubscriptionRegistry::unsubscribe(SubscriberId subscriber_id, i32 object_id
     std::lock_guard lock(mutex_);
     SubscriptionKey key{object_id, property_id};
     auto it = subs_.find(key);
-    if (it == subs_.end()) return;
+    if (it == subs_.end()) {
+        return;
+    }
 
     auto& subscribers = it->second;
     subscribers.erase(
@@ -67,7 +71,9 @@ void SubscriptionRegistry::notify(u32 type_id, i32 object_id, u16 property_id,
         std::lock_guard lock(mutex_);
         SubscriptionKey key{object_id, property_id};
         auto it = subs_.find(key);
-        if (it == subs_.end()) return;
+        if (it == subs_.end()) {
+            return;
+        }
 
         targets.reserve(it->second.size());
         for (const auto& sub : it->second) {
@@ -89,7 +95,9 @@ size_t SubscriptionRegistry::subscriber_count(i32 object_id, u16 property_id) co
     std::lock_guard lock(mutex_);
     SubscriptionKey key{object_id, property_id};
     auto it = subs_.find(key);
-    if (it == subs_.end()) return 0;
+    if (it == subs_.end()) {
+        return 0;
+    }
     return it->second.size();
 }
 

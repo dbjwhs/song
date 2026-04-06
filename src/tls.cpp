@@ -91,8 +91,12 @@ static int tls_bio_send(void* ctx, const unsigned char* buf, size_t len) {
     int sock = *static_cast<int*>(ctx);
     auto n = ::send(sock, buf, len, MSG_NOSIGNAL);
     if (n < 0) {
-        if (errno == EINTR) return MBEDTLS_ERR_SSL_WANT_WRITE;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_WRITE;
+        if (errno == EINTR) {
+            return MBEDTLS_ERR_SSL_WANT_WRITE;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return MBEDTLS_ERR_SSL_WANT_WRITE;
+        }
         return MBEDTLS_ERR_NET_SEND_FAILED;
     }
     return static_cast<int>(n);
@@ -102,11 +106,17 @@ static int tls_bio_recv(void* ctx, unsigned char* buf, size_t len) {
     int sock = *static_cast<int*>(ctx);
     auto n = ::recv(sock, buf, len, 0);
     if (n < 0) {
-        if (errno == EINTR) return MBEDTLS_ERR_SSL_WANT_READ;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_READ;
+        if (errno == EINTR) {
+            return MBEDTLS_ERR_SSL_WANT_READ;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return MBEDTLS_ERR_SSL_WANT_READ;
+        }
         return MBEDTLS_ERR_NET_RECV_FAILED;
     }
-    if (n == 0) return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
+    if (n == 0) {
+        return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
+    }
     return static_cast<int>(n);
 }
 
@@ -127,8 +137,12 @@ static int tls_bio_recv_timeout(void* ctx, unsigned char* buf, size_t len, uint3
         poll_result = poll(&pfd, 1, static_cast<int>(timeout));
     } while (poll_result < 0 && errno == EINTR);
 
-    if (poll_result == 0) return MBEDTLS_ERR_SSL_TIMEOUT;
-    if (poll_result < 0) return MBEDTLS_ERR_NET_RECV_FAILED;
+    if (poll_result == 0) {
+        return MBEDTLS_ERR_SSL_TIMEOUT;
+    }
+    if (poll_result < 0) {
+        return MBEDTLS_ERR_NET_RECV_FAILED;
+    }
 
     return tls_bio_recv(ctx, buf, len);
 }
@@ -285,7 +299,9 @@ void TlsTransport::send(const Buffer& msg) {
             reinterpret_cast<const unsigned char*>(stamped.data()) + offset,
             stamped.size() - offset);
 
-        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            continue;
+        }
         if (ret < 0) {
             impl_->connected = false;
             throw ServiceError("TlsTransport: write failed: " + tls_error_string(ret));
@@ -315,7 +331,9 @@ bool TlsTransport::receive(Buffer& msg, int timeout_ms) {
         int ret = mbedtls_ssl_read(&impl_->ssl,
             header_buf + header_offset, 16 - header_offset);
 
-        if (ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            continue;
+        }
         if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
             throw ServiceError("TlsTransport: read timeout");
         }
@@ -348,7 +366,9 @@ bool TlsTransport::receive(Buffer& msg, int timeout_ms) {
             int ret = mbedtls_ssl_read(&impl_->ssl,
                 payload_buf.data() + offset, hdr.payload_size - offset);
 
-            if (ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
+            if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+                continue;
+            }
             if (ret < 0) {
                 impl_->connected = false;
                 throw ServiceError("TlsTransport: payload read failed: " +

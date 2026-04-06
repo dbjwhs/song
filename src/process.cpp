@@ -146,7 +146,9 @@ void ServiceProcess::init_handshake() {
 }
 
 bool ServiceProcess::alive() const {
-    if (pid_ <= 0) return false;
+    if (pid_ <= 0) {
+        return false;
+    }
 
     int status;
     pid_t result = waitpid(pid_, &status, WNOHANG);
@@ -159,12 +161,16 @@ bool ServiceProcess::alive() const {
 }
 
 bool ServiceProcess::available() const {
-    if (!reusable_ || pid_ <= 0) return false;
+    if (!reusable_ || pid_ <= 0) {
+        return false;
+    }
     return alive();
 }
 
 void ServiceProcess::terminate() {
-    if (pid_ <= 0) return;
+    if (pid_ <= 0) {
+        return;
+    }
 
     // Send SIGTERM
     kill(pid_, SIGTERM);
@@ -544,17 +550,23 @@ void ServiceConnection::call_oneway(u16 service_id, u16 method_id, const Buffer&
 }
 
 u16 ServiceConnection::negotiated_version() const {
-    if (proc_) return proc_->negotiated_version();
+    if (proc_) {
+        return proc_->negotiated_version();
+    }
     return negotiated_version_;
 }
 
 u32 ServiceConnection::peer_capabilities() const {
-    if (proc_) return proc_->peer_capabilities();
+    if (proc_) {
+        return proc_->peer_capabilities();
+    }
     return peer_capabilities_;
 }
 
 u32 ServiceConnection::negotiated_capabilities() const {
-    if (proc_) return proc_->negotiated_capabilities();
+    if (proc_) {
+        return proc_->negotiated_capabilities();
+    }
     return negotiated_capabilities_;
 }
 
@@ -598,7 +610,9 @@ void ServiceConnection::poll_notifications(int timeout_ms) {
         received = transport_->receive(msg, timeout_ms);
     }
 
-    if (!received) return;
+    if (!received) {
+        return;
+    }
 
     msg.reset_read();
     auto hdr = wire::decode_header(msg);

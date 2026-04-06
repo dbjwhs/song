@@ -22,7 +22,9 @@ bool write_all(int fd, const void* data, size_t len) {
     while (remaining > 0) {
         ssize_t written = ::write(fd, ptr, remaining);
         if (written < 0) {
-            if (errno == EINTR) continue;  // Interrupted, retry
+            if (errno == EINTR) { // Interrupted, retry
+                continue;
+            }
             return false;
         }
         ptr += written;
@@ -38,10 +40,14 @@ bool read_all(int fd, void* data, size_t len) {
     while (remaining > 0) {
         ssize_t n = ::read(fd, ptr, remaining);
         if (n < 0) {
-            if (errno == EINTR) continue;  // Interrupted, retry
+            if (errno == EINTR) { // Interrupted, retry
+                continue;
+            }
             return false;
         }
-        if (n == 0) return false;  // EOF
+        if (n == 0) { // EOF
+            return false;
+        }
         ptr += static_cast<size_t>(n);
         remaining -= static_cast<size_t>(n);
     }
@@ -107,7 +113,9 @@ wire::Capability ServiceRuntime::register_extension(const std::string& name) {
 
 bool ServiceRuntime::has_extension(const std::string& name) const {
     for (u8 i = 0; i < next_extension_slot_; ++i) {
-        if (extension_names_[i] == name) return true;
+        if (extension_names_[i] == name) {
+            return true;
+        }
     }
     return false;
 }
@@ -714,7 +722,9 @@ void ServiceRuntime::client_loop(Transport& transport) {
 
     for (;;) {
         auto client = listener.accept(-1);
-        if (!client) continue;
+        if (!client) {
+            continue;
+        }
 
         // Move the transport into a shared_ptr so the thread owns it
         auto shared_client = std::shared_ptr<TcpTransport>(client.release());

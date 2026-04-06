@@ -18,7 +18,9 @@ bool write_all(int fd, const void* data, size_t len) {
     while (remaining > 0) {
         ssize_t written = ::write(fd, ptr, remaining);
         if (written < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) {
+                continue;
+            }
             return false;
         }
         ptr += written;
@@ -86,7 +88,9 @@ void StreamWriter::write(const Buffer& chunk) {
 }
 
 void StreamWriter::end() {
-    if (ended_) return;
+    if (ended_) {
+        return;
+    }
     ended_ = true;
 
     Buffer msg = wire::create_stream_end_message(sequence_id_);
