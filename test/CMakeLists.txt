@@ -64,6 +64,11 @@ target_include_directories(song_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/compiler
 )
 
+# Provide source directory path for test cert discovery
+target_compile_definitions(song_tests PRIVATE
+    SONG_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
 # Discover tests for CTest
 # RESOURCE_LOCK prevents parallel execution of tests that use network ports
 gtest_discover_tests(song_tests

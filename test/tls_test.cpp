@@ -23,13 +23,16 @@ static std::string cert_dir() {
         "test/certs",
         "../test/certs",
         "../../test/certs",
+#ifdef SONG_SOURCE_DIR
+        SONG_SOURCE_DIR "/test/certs",
+#endif
     };
     for (const auto& c : candidates) {
         if (std::filesystem::exists(c + "/ca_cert.pem")) {
             return c;
         }
     }
-    return "/Users/dbjones/ng/dbjwhs/song/test/certs";
+    return "test/certs";  // Last resort -- will fail with clear error
 }
 
 static std::string ca_cert()     { return cert_dir() + "/ca_cert.pem"; }

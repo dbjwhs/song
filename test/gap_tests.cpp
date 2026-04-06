@@ -215,11 +215,16 @@ TEST(VersionCrossCompatTest, MajorVersionMismatchRejects) {
 #if defined(SONG_HAS_TLS)
 
 static std::string test_cert_dir() {
-    std::vector<std::string> candidates = {"test/certs", "../test/certs", "../../test/certs"};
+    std::vector<std::string> candidates = {
+        "test/certs", "../test/certs", "../../test/certs",
+#ifdef SONG_SOURCE_DIR
+        SONG_SOURCE_DIR "/test/certs",
+#endif
+    };
     for (const auto& c : candidates) {
         if (std::filesystem::exists(c + "/ca_cert.pem")) return c;
     }
-    return "/Users/dbjones/ng/dbjwhs/song/test/certs";
+    return "test/certs";
 }
 
 static void tls_echo_dispatcher(u16, Buffer& request, Buffer& response) {
