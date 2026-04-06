@@ -2,7 +2,7 @@
 
 A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with TLS encryption, HMAC-SHA256 security, streaming RPC, and zero-config mDNS discovery.
 
-**678 tests (571 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~30K lines of C++20**
+**705 tests (598 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~31K lines of C++20**
 
 ```song
 // calculator.song                     // Write an IDL definition...
@@ -488,7 +488,7 @@ All core features are complete and tested:
 | **Multi-Client** | Complete | `run_tcp_multi()` thread-per-client, shared object registry and subscriptions |
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
-| **Tests** | 678 total | 571 unit tests + 107 integration tests across 7 projects |
+| **Tests** | 705 total | 598 unit tests + 107 integration tests across 7 projects |
 
 ## Code Quality
 
