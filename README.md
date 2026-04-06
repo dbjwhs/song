@@ -93,15 +93,17 @@ graph LR
 **Linux (Ubuntu/Debian)**:
 ```bash
 sudo apt-get install build-essential cmake libssl-dev
-# Optional for TLS:
-sudo apt-get install libmbedtls-dev
+# Optional:
+sudo apt-get install libmbedtls-dev      # TLS encryption
+sudo apt-get install libavahi-client-dev  # mDNS discovery
 ```
 
 **Linux (Fedora/RHEL)**:
 ```bash
 sudo dnf install gcc-c++ cmake openssl-devel
-# Optional for TLS:
-sudo dnf install mbedtls-devel
+# Optional:
+sudo dnf install mbedtls-devel    # TLS encryption
+sudo dnf install avahi-devel      # mDNS discovery
 ```
 
 ### Build
@@ -315,10 +317,10 @@ This follows NIST SP 800-107 guidance that HMAC truncation to t bits provides t/
 
 ### Platform Support
 
-| Platform | HMAC | TLS |
-|----------|------|-----|
-| macOS    | CommonCrypto | mbedTLS |
-| Linux    | OpenSSL | mbedTLS |
+| Platform | HMAC | TLS | mDNS |
+|----------|------|-----|------|
+| macOS    | CommonCrypto | mbedTLS | Bonjour (dns_sd) |
+| Linux    | OpenSSL | mbedTLS | Avahi |
 
 ## Streaming
 
@@ -559,14 +561,14 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 | Feature | macOS | Linux |
 |---------|-------|-------|
 | Core runtime (pipes, TCP) | Full | Full |
-| HMAC-SHA256 security | CommonCrypto | OpenSSL |
+| HMAC-SHA256 security | CommonCrypto | OpenSSL 3.x |
 | TLS encryption | mbedTLS | mbedTLS |
-| mDNS service discovery | Bonjour (dns_sd) | Planned (Avahi) |
+| mDNS service discovery | Bonjour (dns_sd) | Avahi |
 | Streaming RPC | Full | Full |
 
 **Known limitations:**
-- **mDNS discovery is macOS-only** -- Linux support requires Avahi integration (tracked for future work). TCP with explicit addresses and the registry service work on both platforms.
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
+- **mDNS requires platform library** -- Bonjour on macOS (built-in), Avahi on Linux (`libavahi-client-dev`). Both optional; builds without them, discovery tests skip.
 
 ## References
 
