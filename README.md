@@ -86,6 +86,26 @@ graph LR
 
 ## Building
 
+### Dependencies
+
+**macOS**: No external dependencies required (CommonCrypto is built-in). Optional: `brew install mbedtls` for TLS.
+
+**Linux (Ubuntu/Debian)**:
+```bash
+sudo apt-get install build-essential cmake libssl-dev
+# Optional for TLS:
+sudo apt-get install libmbedtls-dev
+```
+
+**Linux (Fedora/RHEL)**:
+```bash
+sudo dnf install gcc-c++ cmake openssl-devel
+# Optional for TLS:
+sudo dnf install mbedtls-devel
+```
+
+### Build
+
 ```bash
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
