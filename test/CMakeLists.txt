@@ -45,6 +45,7 @@ add_executable(song_tests
     gap_tests.cpp
     prop_notify_test.cpp
     fanout_test.cpp
+    fuzz_test.cpp
     ${CMAKE_SOURCE_DIR}/compiler/lexer.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parser.cpp
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp
