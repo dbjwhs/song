@@ -144,9 +144,9 @@ TEST(PropNotifyE2ETest, SubscribeAndReceiveNotification) {
             EXPECT_EQ(hdr.type, wire::MsgType::prop_subscribe);
 
             // Push 3 notifications
-            for (int i = 0; i < 3; ++i) {
+            for (int ndx = 0; ndx < 3; ++ndx) {
                 Buffer value;
-                encode_f64(value, static_cast<f64>(i) * 10.0);
+                encode_f64(value, static_cast<f64>(ndx) * 10.0);
                 Buffer notify = wire::create_property_notify_message(100, -1, 1, value);
                 client->send(notify);
             }
@@ -177,7 +177,7 @@ TEST(PropNotifyE2ETest, SubscribeAndReceiveNotification) {
     });
 
     // Poll for notifications
-    for (int i = 0; i < 3; ++i) {
+    for (int ndx = 0; ndx < 3; ++ndx) {
         conn.poll_notifications(5000);
     }
 
@@ -207,7 +207,7 @@ TEST(PropNotifyE2ETest, UnsubscribeStopsNotifications) {
             client->send(init_msg);
 
             // Read subscribe (+ init_ack)
-            for (int i = 0; i < 3; ++i) {
+            for (int ndx = 0; ndx < 3; ++ndx) {
                 Buffer msg;
                 if (!client->receive(msg, 5000)) return;
                 auto hdr = wire::decode_header(msg);

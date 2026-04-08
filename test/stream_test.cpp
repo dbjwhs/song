@@ -61,9 +61,9 @@ TEST(StreamWriterTest, WriteAndEnd) {
 
         // Create a stream writer and send 3 chunks
         StreamWriter writer(*conn, 42);
-        for (int i = 0; i < 3; ++i) {
+        for (int ndx = 0; ndx < 3; ++ndx) {
             Buffer chunk;
-            encode_i32(chunk, i * 100);
+            encode_i32(chunk, ndx * 100);
             writer.write(chunk);
         }
         writer.end();

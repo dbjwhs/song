@@ -42,16 +42,16 @@ static std::string get_test_service_path(const std::string& name) {
 TEST(StressTest, BufferRapidAllocFree) {
     // Rapid allocation and deallocation to test for memory leaks
     // and small-buffer optimization under pressure
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf;
-        encode_i32(buf, i);
+        encode_i32(buf, ndx);
         encode_string(buf, "test string payload");
-        encode_f64(buf, 3.14159 * i);
+        encode_f64(buf, 3.14159 * ndx);
 
         buf.reset_read();
-        ASSERT_EQ(decode_i32(buf), i);
+        ASSERT_EQ(decode_i32(buf), ndx);
         ASSERT_EQ(decode_string(buf), "test string payload");
-        ASSERT_NEAR(decode_f64(buf), 3.14159 * i, 0.001);
+        ASSERT_NEAR(decode_f64(buf), 3.14159 * ndx, 0.001);
     }
 }
 
@@ -75,15 +75,15 @@ TEST(StressTest, BufferLargePayload) {
 
 TEST(StressTest, BufferMoveSemantics) {
     // Stress-test move semantics to catch use-after-move bugs
-    for (int i = 0; i < 1000; ++i) {
+    for (int ndx = 0; ndx < 1000; ++ndx) {
         Buffer src;
-        encode_i64(src, static_cast<int64_t>(i) * 1000000);
+        encode_i64(src, static_cast<int64_t>(ndx) * 1000000);
         encode_string(src, "move test");
 
         Buffer dst = std::move(src);
 
         dst.reset_read();
-        ASSERT_EQ(decode_i64(dst), static_cast<int64_t>(i) * 1000000);
+        ASSERT_EQ(decode_i64(dst), static_cast<int64_t>(ndx) * 1000000);
         ASSERT_EQ(decode_string(dst), "move test");
     }
 }
@@ -116,15 +116,15 @@ TEST(StressTest, WireHeaderRoundtrip) {
 
 TEST(StressTest, WireMessageCreation) {
     // Create many complete messages to test for allocation pressure
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer args;
-        encode_i32(args, i);
-        encode_i32(args, i * 2);
+        encode_i32(args, ndx);
+        encode_i32(args, ndx * 2);
 
         Buffer msg = wire::create_call_message(
-            static_cast<uint32_t>(i),  // sequence
-            1,                          // service_id
-            1,                          // method_id
+            static_cast<uint32_t>(ndx),  // sequence
+            1,                            // service_id
+            1,                            // method_id
             args
         );
 
@@ -146,8 +146,8 @@ TEST(StressTest, ManagerConcurrentRegistration) {
 
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&mgr, &success_count, t]() {
-            for (int i = 0; i < kServicesPerThread; ++i) {
-                std::string name = "svc_t" + std::to_string(t) + "_" + std::to_string(i);
+            for (int ndx = 0; ndx < kServicesPerThread; ++ndx) {
+                std::string name = "svc_t" + std::to_string(t) + "_" + std::to_string(ndx);
                 try {
                     mgr.register_service(name, "/dummy/path", 1);
                     ++success_count;
@@ -186,9 +186,9 @@ TEST(StressTest, ManagerConcurrentStartStop) {
 
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t]() {
-            for (int i = 0; i < kOpsPerThread; ++i) {
+            for (int ndx = 0; ndx < kOpsPerThread; ++ndx) {
                 try {
-                    int op = (t * kOpsPerThread + i) % 3;
+                    int op = (t * kOpsPerThread + ndx) % 3;
                     if (op == 0) {
                         mgr.start("echo");
                         ++start_count;
@@ -234,11 +234,11 @@ TEST(StressTest, RegistryConcurrentOps) {
 
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t]() {
-            for (int i = 0; i < kOpsPerThread; ++i) {
-                std::string name = "svc_" + std::to_string(t) + "_" + std::to_string(i);
-                int op = i % 3;
+            for (int ndx = 0; ndx < kOpsPerThread; ++ndx) {
+                std::string name = "svc_" + std::to_string(t) + "_" + std::to_string(ndx);
+                int op = ndx % 3;
                 if (op == 0) {
-                    ServiceInfo info{name, "localhost", static_cast<u16>(8000 + t * 1000 + i)};
+                    ServiceInfo info{name, "localhost", static_cast<u16>(8000 + t * 1000 + ndx)};
                     if (registry.register_service(info)) {
                         ++registered;
                     }
@@ -270,7 +270,7 @@ TEST(StressTest, BufferEncodeDecode1000Roundtrips) {
     // Measure encode/decode throughput for a realistic message
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < 1000; ++i) {
+    for (int ndx = 0; ndx < 1000; ++ndx) {
         Buffer buf;
         encode_i32(buf, 42);
         encode_i64(buf, 123456789LL);
@@ -305,7 +305,7 @@ TEST(StressTest, PipeRPCLatency) {
     ServiceConnection conn = mgr.connect("echo");
 
     // Warm up
-    for (int i = 0; i < 10; ++i) {
+    for (int ndx = 0; ndx < 10; ++ndx) {
         Buffer args;
         encode_string(args, "warmup");
         conn.call(1, 1, args);
@@ -315,7 +315,7 @@ TEST(StressTest, PipeRPCLatency) {
     constexpr int kCalls = 1000;
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < kCalls; ++i) {
+    for (int ndx = 0; ndx < kCalls; ++ndx) {
         Buffer args;
         encode_string(args, "ping");
         conn.call(1, 1, args);
@@ -364,7 +364,7 @@ TEST(StressTest, RegistryConcurrentObjectLifecycle) {
 
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&]() {
-            for (int i = 0; i < kItersPerThread; ++i) {
+            for (int ndx = 0; ndx < kItersPerThread; ++ndx) {
                 song::Buffer args;
 
                 // Create the object (ref_count starts at 1)
@@ -473,9 +473,9 @@ TEST(StressTest, MultiClientConcurrentRPC) {
                 mgr.register_service(svc_name, echo_path, 1);
                 auto conn = mgr.connect(svc_name);
 
-                for (int i = 0; i < kCallsPerClient; ++i) {
+                for (int ndx = 0; ndx < kCallsPerClient; ++ndx) {
                     Buffer args;
-                    std::string payload = "client" + std::to_string(c) + "_msg" + std::to_string(i);
+                    std::string payload = "client" + std::to_string(c) + "_msg" + std::to_string(ndx);
                     encode_string(args, payload);
 
                     Buffer resp = conn.call(1, 1, args);

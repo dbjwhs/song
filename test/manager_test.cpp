@@ -262,7 +262,7 @@ TEST(ManagerTest, MaxRestartsRespected) {
     mgr.start("crash");
 
     // Trigger multiple crashes
-    for (int i = 0; i < 4; ++i) {
+    for (int ndx = 0; ndx < 4; ++ndx) {
         try {
             auto conn = mgr.connect("crash");
             Buffer args;

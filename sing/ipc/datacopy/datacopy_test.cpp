@@ -165,8 +165,8 @@ TEST_F(DataCopyTest, OverwriteChunk) {
 TEST_F(DataCopyTest, WriteBinaryData) {
     // Create binary data with all byte values
     std::vector<std::byte> binary_data;
-    for (int i = 0; i < 256; ++i) {
-        binary_data.push_back(static_cast<std::byte>(i));
+    for (int ndx = 0; ndx < 256; ++ndx) {
+        binary_data.push_back(static_cast<std::byte>(ndx));
     }
 
     FileChunk chunk;
@@ -189,19 +189,19 @@ TEST_F(DataCopyTest, WriteLargeFile) {
     const int num_chunks = 10;
     std::vector<std::byte> expected_data;
 
-    for (int i = 0; i < num_chunks; ++i) {
+    for (int ndx = 0; ndx < num_chunks; ++ndx) {
         std::vector<std::byte> chunk_data;
         for (int j = 0; j < chunk_size; ++j) {
-            std::byte b = static_cast<std::byte>((i * chunk_size + j) % 256);
+            std::byte b = static_cast<std::byte>((ndx * chunk_size + j) % 256);
             chunk_data.push_back(b);
             expected_data.push_back(b);
         }
 
         FileChunk chunk;
         chunk.filename = "large.bin";
-        chunk.offset = i * chunk_size;
+        chunk.offset = ndx * chunk_size;
         chunk.data = chunk_data;
-        chunk.is_final = (i == num_chunks - 1);
+        chunk.is_final = (ndx == num_chunks - 1);
 
         auto result = dc_->write_chunk(chunk);
         EXPECT_TRUE(result.success);

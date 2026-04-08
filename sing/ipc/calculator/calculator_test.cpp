@@ -182,8 +182,8 @@ TEST_F(CalculatorTest, RapidFireCalls) {
     CalculatorProxy calc(*conn_);
 
     // Make many rapid calls to test connection stability
-    for (int i = 0; i < 100; ++i) {
-        EXPECT_EQ(calc.add(i, i), i * 2);
+    for (int ndx = 0; ndx < 100; ++ndx) {
+        EXPECT_EQ(calc.add(ndx, ndx), ndx * 2);
     }
 }
 

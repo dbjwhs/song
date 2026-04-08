@@ -256,14 +256,14 @@ TEST(ProcessTest, ConnectionMultipleCalls) {
     ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
     ServiceConnection conn(&proc);
 
-    for (int i = 0; i < 10; ++i) {
+    for (int ndx = 0; ndx < 10; ++ndx) {
         Buffer args;
-        encode_i32(args, i);
-        encode_i32(args, i);
+        encode_i32(args, ndx);
+        encode_i32(args, ndx);
 
         Buffer result = conn.call(1, 2, args);  // add method
         i32 sum = decode_i32(result);
-        EXPECT_EQ(sum, i + i);
+        EXPECT_EQ(sum, ndx + ndx);
     }
 
     proc.terminate();

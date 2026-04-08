@@ -129,8 +129,8 @@ TEST_F(TcpCalculatorTest, MultipleSequentialCalls) {
     CalculatorProxy calc(*conn_);
 
     // Verify connection remains stable across multiple calls
-    for (int i = 0; i < 50; ++i) {
-        EXPECT_EQ(calc.add(i, i), i * 2);
+    for (int ndx = 0; ndx < 50; ++ndx) {
+        EXPECT_EQ(calc.add(ndx, ndx), ndx * 2);
     }
 }
 

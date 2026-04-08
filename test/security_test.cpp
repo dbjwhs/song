@@ -357,13 +357,13 @@ TEST(SecureTransportTest, MultipleMessages) {
         SecureTransport server(std::move(server_tcp), std::move(config));
 
         // Receive and respond to 5 messages
-        for (int i = 0; i < 5; ++i) {
+        for (int ndx = 0; ndx < 5; ++ndx) {
             Buffer msg;
             ASSERT_TRUE(server.receive(msg, 5000));
 
             auto hdr = wire::decode_header(msg);
             EXPECT_EQ(hdr.magic, wire::kMagic);
-            EXPECT_EQ(hdr.sequence_id, static_cast<u32>(i + 1));
+            EXPECT_EQ(hdr.sequence_id, static_cast<u32>(ndx + 1));
 
             Buffer response = wire::create_result_message(hdr.sequence_id, Buffer{});
             server.send(response);
@@ -378,16 +378,16 @@ TEST(SecureTransportTest, MultipleMessages) {
     SecureTransport client(std::move(client_tcp), std::move(config));
 
     // Send 5 messages
-    for (int i = 0; i < 5; ++i) {
+    for (int ndx = 0; ndx < 5; ++ndx) {
         Buffer args;
-        encode_i32(args, i);
-        Buffer call = wire::create_call_message(static_cast<u32>(i + 1), 1, 1, args);
+        encode_i32(args, ndx);
+        Buffer call = wire::create_call_message(static_cast<u32>(ndx + 1), 1, 1, args);
         client.send(call);
 
         Buffer response;
         ASSERT_TRUE(client.receive(response, 5000));
         auto hdr = wire::decode_header(response);
-        EXPECT_EQ(hdr.sequence_id, static_cast<u32>(i + 1));
+        EXPECT_EQ(hdr.sequence_id, static_cast<u32>(ndx + 1));
     }
 
     server_thread.join();

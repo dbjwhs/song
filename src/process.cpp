@@ -140,7 +140,7 @@ void ServiceProcess::init_handshake() {
     // Decode method list
     methods_.clear();
     methods_.reserve(init.method_count);
-    for (u32 i = 0; i < init.method_count; ++i) {
+    for (u32 ndx = 0; ndx < init.method_count; ++ndx) {
         methods_.push_back(wire::decode_method_descriptor(init_msg));
     }
 }
@@ -176,7 +176,7 @@ void ServiceProcess::terminate() {
     kill(pid_, SIGTERM);
 
     // Wait up to 1 second for graceful shutdown
-    for (int i = 0; i < 10; ++i) {
+    for (int ndx = 0; ndx < 10; ++ndx) {
         int status;
         pid_t result = waitpid(pid_, &status, WNOHANG);
         if (result == pid_) {
@@ -376,7 +376,7 @@ void ServiceConnection::init_handshake() {
     // Decode method list
     methods_.clear();
     methods_.reserve(init.method_count);
-    for (u32 i = 0; i < init.method_count; ++i) {
+    for (u32 ndx = 0; ndx < init.method_count; ++ndx) {
         methods_.push_back(wire::decode_method_descriptor(init_msg));
     }
 

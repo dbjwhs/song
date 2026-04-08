@@ -919,7 +919,7 @@ TEST_F(BackupAgentTest, ProgressSubscribeNotification) {
     proxy.receive_chunk(chunk);
 
     // Poll conn2 for notifications
-    for (int i = 0; i < 10 && !notification_received; ++i) {
+    for (int ndx = 0; ndx < 10 && !notification_received; ++ndx) {
         conn2->poll_notifications(100);
     }
 

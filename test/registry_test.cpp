@@ -215,7 +215,7 @@ TEST(MemoryRegistryTest, HeartbeatKeepsAlive) {
     registry.register_service(info);
 
     // Send heartbeats to keep alive
-    for (int i = 0; i < 3; ++i) {
+    for (int ndx = 0; ndx < 3; ++ndx) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         EXPECT_TRUE(registry.heartbeat("test"));
     }

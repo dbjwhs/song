@@ -218,8 +218,8 @@ TEST(TcpTransportTest, LargeMessage) {
 
     // Create large payload (100KB)
     std::vector<std::byte> large_data(100000);
-    for (size_t i = 0; i < large_data.size(); ++i) {
-        large_data[i] = static_cast<std::byte>(i & 0xFF);
+    for (size_t ndx = 0; ndx < large_data.size(); ++ndx) {
+        large_data[ndx] = static_cast<std::byte>(ndx & 0xFF);
     }
 
     std::thread client_thread([&]() {
@@ -535,7 +535,7 @@ TEST(TcpServiceConnectionTest, MultipleCallsViaTcp) {
         }
 
         // Handle multiple calls
-        for (int i = 0; i < 3; ++i) {
+        for (int ndx = 0; ndx < 3; ++ndx) {
             Buffer call;
             if (!server->receive(call, 1000)) break;
 
@@ -561,12 +561,12 @@ TEST(TcpServiceConnectionTest, MultipleCallsViaTcp) {
     conn.init_handshake();
 
     // Make 3 calls
-    for (int i = 1; i <= 3; ++i) {
+    for (int ndx = 1; ndx <= 3; ++ndx) {
         Buffer args;
-        encode_i32(args, i);
+        encode_i32(args, ndx);
         Buffer result = conn.call(1, 1, args);
         i32 response = decode_i32(result);
-        EXPECT_EQ(response, i * 2);
+        EXPECT_EQ(response, ndx * 2);
     }
 
     server_thread.join();

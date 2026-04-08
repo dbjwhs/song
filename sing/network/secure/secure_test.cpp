@@ -131,13 +131,13 @@ TEST_F(SecureTransportTest, MultipleCallsWithAuth) {
     SecureTransport transport(std::move(tcp), std::move(security));
 
     // Multiple calls over the same secure connection
-    for (int i = 0; i < 10; ++i) {
+    for (int ndx = 0; ndx < 10; ++ndx) {
         Buffer req;
-        encode_i32(req, i);
-        encode_i32(req, i);
+        encode_i32(req, ndx);
+        encode_i32(req, ndx);
 
         Buffer resp = make_secure_call(transport, kService_Calculator, kMethod_Calculator_add, req);
-        EXPECT_EQ(decode_i32(resp), i * 2);
+        EXPECT_EQ(decode_i32(resp), ndx * 2);
     }
 }
 

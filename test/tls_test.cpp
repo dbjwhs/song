@@ -176,7 +176,7 @@ TEST_F(TlsCertTest, MultipleMessages) {
     std::thread server([&listener]() {
         auto conn = listener.accept(5000);
         if (!conn) return;
-        for (int i = 0; i < 5; ++i) {
+        for (int ndx = 0; ndx < 5; ++ndx) {
             Buffer msg;
             if (!conn->receive(msg, 5000)) break;
             conn->send(msg);
@@ -188,17 +188,17 @@ TEST_F(TlsCertTest, MultipleMessages) {
     cli_config.set_verify_mode(TlsConfig::VerifyMode::none);
     auto client = make_tls_client(port, std::move(cli_config));
 
-    for (int i = 0; i < 5; ++i) {
+    for (int ndx = 0; ndx < 5; ++ndx) {
         Buffer args;
-        encode_i32(args, i * 10);
-        Buffer msg = wire::create_call_message(static_cast<u32>(i + 1), 1, 1, args);
+        encode_i32(args, ndx * 10);
+        Buffer msg = wire::create_call_message(static_cast<u32>(ndx + 1), 1, 1, args);
         client.send(msg);
 
         Buffer resp;
         ASSERT_TRUE(client.receive(resp, 5000));
         resp.reset_read();
         auto hdr = wire::decode_header(resp);
-        EXPECT_EQ(hdr.sequence_id, static_cast<u32>(i + 1));
+        EXPECT_EQ(hdr.sequence_id, static_cast<u32>(ndx + 1));
         EXPECT_TRUE(wire::has_flag(hdr.flags, wire::MsgFlags::encrypted));
     }
 

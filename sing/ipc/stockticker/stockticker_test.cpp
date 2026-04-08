@@ -254,7 +254,7 @@ TEST_F(StockTickerTest, RapidFireQuotes) {
     StockTickerProxy ticker(*conn_);
 
     // Make many rapid calls
-    for (int i = 0; i < 50; ++i) {
+    for (int ndx = 0; ndx < 50; ++ndx) {
         Quote quote = ticker.get_quote("AAPL");
         EXPECT_EQ(quote.symbol, "AAPL");
     }

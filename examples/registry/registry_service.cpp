@@ -34,11 +34,11 @@ int main(int argc, char* argv[]) {
     u16 port = 9999;  // Default registry port
 
     // Parse command line
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+    for (int ndx = 1; ndx < argc; ++ndx) {
+        std::string arg = argv[ndx];
         if (arg == "-p" || arg == "--port") {
-            if (i + 1 < argc) {
-                port = static_cast<u16>(std::stoi(argv[++i]));
+            if (ndx + 1 < argc) {
+                port = static_cast<u16>(std::stoi(argv[++ndx]));
             }
         } else if (arg == "-h" || arg == "--help") {
             std::cout << "Usage: registry_service [options]\n"

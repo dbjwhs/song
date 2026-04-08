@@ -54,11 +54,11 @@ int main() {
             auto conn = manager.connect("crash");
             std::cout << "Connected to service\n";
 
-            for (int i = 1; i <= 3; i++) {
+            for (int ndx = 1; ndx <= 3; ndx++) {
                 Buffer request;
-                encode_string(request, "test message " + std::to_string(i));
+                encode_string(request, "test message " + std::to_string(ndx));
 
-                std::cout << "Sending message " << i << "...\n";
+                std::cout << "Sending message " << ndx << "...\n";
                 auto response = conn.call(kService_Crash, kMethod_test, request);
                 std::cout << "Got response: " << decode_string(response) << "\n";
             }

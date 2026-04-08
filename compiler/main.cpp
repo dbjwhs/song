@@ -63,8 +63,8 @@ int main(int argc, char** argv) {
     bool scaffold_mode = false;
 
     // Parse arguments
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+    for (int ndx = 1; ndx < argc; ++ndx) {
+        std::string arg = argv[ndx];
 
         if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
@@ -72,20 +72,20 @@ int main(int argc, char** argv) {
         }
 
         if (arg == "-o" || arg == "--output") {
-            if (i + 1 >= argc) {
+            if (ndx + 1 >= argc) {
                 std::cerr << "Error: -o requires an argument\n";
                 return 1;
             }
-            output_dir = argv[++i];
+            output_dir = argv[++ndx];
             continue;
         }
 
         if (arg == "--lang") {
-            if (i + 1 >= argc) {
+            if (ndx + 1 >= argc) {
                 std::cerr << "Error: --lang requires an argument (cpp or python)\n";
                 return 1;
             }
-            lang = argv[++i];
+            lang = argv[++ndx];
             if (lang != "cpp" && lang != "python") {
                 std::cerr << "Error: Unknown language: " << lang << " (use cpp or python)\n";
                 return 1;

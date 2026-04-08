@@ -410,21 +410,21 @@ int main(int argc, char* argv[]) {
     std::string key;
     bool discover = false;
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = static_cast<u16>(std::atoi(argv[++i]));
-        } else if (std::strcmp(argv[i], "--root") == 0 && i + 1 < argc) {
-            root = argv[++i];
-        } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
-            key = argv[++i];
-        } else if (std::strcmp(argv[i], "--discover") == 0) {
+    for (int ndx = 1; ndx < argc; ++ndx) {
+        if (std::strcmp(argv[ndx], "--port") == 0 && ndx + 1 < argc) {
+            port = static_cast<u16>(std::atoi(argv[++ndx]));
+        } else if (std::strcmp(argv[ndx], "--root") == 0 && ndx + 1 < argc) {
+            root = argv[++ndx];
+        } else if (std::strcmp(argv[ndx], "--key") == 0 && ndx + 1 < argc) {
+            key = argv[++ndx];
+        } else if (std::strcmp(argv[ndx], "--discover") == 0) {
             discover = true;
-        } else if (argv[i][0] != '-') {
+        } else if (argv[ndx][0] != '-') {
             // Positional: port then root
-            if (i == 1) {
-                port = static_cast<u16>(std::atoi(argv[i]));
-            } else if (i == 2) {
-                root = argv[i];
+            if (ndx == 1) {
+                port = static_cast<u16>(std::atoi(argv[ndx]));
+            } else if (ndx == 2) {
+                root = argv[ndx];
             }
         }
     }

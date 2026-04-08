@@ -22,14 +22,14 @@ int main(int argc, char* argv[]) {
     std::string key;
     int positional = 0;
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
-            key = argv[++i];
-        } else if (argv[i][0] != '-') {
+    for (int ndx = 1; ndx < argc; ++ndx) {
+        if (std::strcmp(argv[ndx], "--key") == 0 && ndx + 1 < argc) {
+            key = argv[++ndx];
+        } else if (argv[ndx][0] != '-') {
             if (positional == 0) {
-                host = argv[i];
+                host = argv[ndx];
             } else if (positional == 1) {
-                port = static_cast<u16>(std::atoi(argv[i]));
+                port = static_cast<u16>(std::atoi(argv[ndx]));
             }
             positional++;
         }

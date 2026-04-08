@@ -296,11 +296,11 @@ TEST(TlsIntegrationTest, RpcOverTlsWithDispatcher) {
     conn.init_handshake();
 
     // Multiple RPC calls over TLS
-    for (int i = 0; i < 5; ++i) {
+    for (int ndx = 0; ndx < 5; ++ndx) {
         Buffer args;
-        encode_string(args, std::to_string(i));
+        encode_string(args, std::to_string(ndx));
         Buffer result = conn.call(1, 1, args);
-        EXPECT_EQ(decode_string(result), "tls:" + std::to_string(i));
+        EXPECT_EQ(decode_string(result), "tls:" + std::to_string(ndx));
     }
 
     Buffer shutdown = wire::create_shutdown_message();
@@ -328,9 +328,9 @@ TEST(StreamSecurityTest, StreamOverHmac) {
         SecureTransport transport(std::move(tcp), std::move(security));
 
         StreamWriter writer(transport, 42);
-        for (int i = 0; i < 3; ++i) {
+        for (int ndx = 0; ndx < 3; ++ndx) {
             Buffer chunk;
-            encode_i32(chunk, i * 10);
+            encode_i32(chunk, ndx * 10);
             writer.write(chunk);
         }
         writer.end();
@@ -383,9 +383,9 @@ TEST(StreamSecurityTest, StreamOverTls) {
         auto conn = tls_listener.accept(5000);
         if (!conn) return;
         StreamWriter writer(*conn, 99);
-        for (int i = 0; i < 5; ++i) {
+        for (int ndx = 0; ndx < 5; ++ndx) {
             Buffer chunk;
-            encode_string(chunk, "chunk-" + std::to_string(i));
+            encode_string(chunk, "chunk-" + std::to_string(ndx));
             writer.write(chunk);
         }
         writer.end();
@@ -443,9 +443,9 @@ TEST(StreamErrorTest, ServiceThrowsMidStream) {
                 if (hdr.type == wire::MsgType::call) {
                     [[maybe_unused]] auto [sid, mid] = wire::decode_method_call_header(msg);
                     // Send 2 chunks then error instead of stream_end
-                    for (int i = 0; i < 2; ++i) {
+                    for (int ndx = 0; ndx < 2; ++ndx) {
                         Buffer chunk;
-                        encode_i32(chunk, i);
+                        encode_i32(chunk, ndx);
                         Buffer stream_msg = wire::create_stream_message(hdr.sequence_id, chunk);
                         client->send(stream_msg);
                     }
@@ -636,11 +636,11 @@ TEST(RuntimeTcpTest, DispatcherCalledThroughRuntime) {
     ServiceConnection conn(std::move(tcp));
     conn.init_handshake();
 
-    for (int i = 0; i < 10; ++i) {
+    for (int ndx = 0; ndx < 10; ++ndx) {
         Buffer args;
-        encode_i32(args, i);
+        encode_i32(args, ndx);
         Buffer result = conn.call(1, 1, args);
-        EXPECT_EQ(decode_i32(result), i * 3);
+        EXPECT_EQ(decode_i32(result), ndx * 3);
     }
 
     Buffer shutdown = wire::create_shutdown_message();
@@ -837,9 +837,9 @@ TEST(CrashRecoveryTest, ServerDisconnectDuringStream) {
             }
 
             // Send 2 chunks then crash
-            for (int i = 0; i < 2; ++i) {
+            for (int ndx = 0; ndx < 2; ++ndx) {
                 Buffer chunk;
-                encode_i32(chunk, i);
+                encode_i32(chunk, ndx);
                 client->send(wire::create_stream_message(hdr.sequence_id, chunk));
             }
             client->close();  // No stream_end

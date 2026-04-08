@@ -39,11 +39,11 @@ std::string PythonCodeGenerator::type_to_python(const Type& t) {
     if (t.is_array) {
         int dims = t.array_dimensions > 0 ? t.array_dimensions : 1;
         std::string result;
-        for (int i = 0; i < dims; ++i) {
+        for (int ndx = 0; ndx < dims; ++ndx) {
             result += "list[";
         }
         result += base_type;
-        for (int i = 0; i < dims; ++i) {
+        for (int ndx = 0; ndx < dims; ++ndx) {
             result += "]";
         }
         return result;

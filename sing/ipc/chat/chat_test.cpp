@@ -319,8 +319,8 @@ TEST_F(ChatTest, MessageContentPreserved) {
 
 TEST_F(ChatTest, MessageIdMonotonicallyIncreasing) {
     std::vector<i64> ids;
-    for (int i = 0; i < 10; ++i) {
-        auto result = chat_->send("User", "Message " + std::to_string(i));
+    for (int ndx = 0; ndx < 10; ++ndx) {
+        auto result = chat_->send("User", "Message " + std::to_string(ndx));
         ids.push_back(result.message_id);
     }
 

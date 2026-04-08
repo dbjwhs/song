@@ -87,9 +87,9 @@ int main() {
 
         // Test multiple calls (process reuse)
         std::cout << "\nTesting multiple calls...\n";
-        for (int i = 0; i < 5; ++i) {
-            i32 r = proxy.add(i, i);
-            std::cout << i << " + " << i << " = " << r << "\n";
+        for (int ndx = 0; ndx < 5; ++ndx) {
+            i32 r = proxy.add(ndx, ndx);
+            std::cout << ndx << " + " << ndx << " = " << r << "\n";
         }
 
         // Test array serialization

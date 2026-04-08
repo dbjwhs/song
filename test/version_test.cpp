@@ -188,8 +188,8 @@ TEST(RuntimeCapabilityTest, RegisterExtensionDuplicate) {
 
 TEST(RuntimeCapabilityTest, RegisterExtensionOverflow) {
     ServiceRuntime runtime;
-    for (int i = 0; i < 8; ++i) {
-        runtime.register_extension("ext-" + std::to_string(i));
+    for (int ndx = 0; ndx < 8; ++ndx) {
+        runtime.register_extension("ext-" + std::to_string(ndx));
     }
     // 9th should throw
     EXPECT_THROW(runtime.register_extension("ext-8"), std::runtime_error);

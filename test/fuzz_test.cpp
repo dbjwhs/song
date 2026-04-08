@@ -61,7 +61,7 @@ public:
         copy.write(original.data(), original.size());
         std::uniform_int_distribution<size_t> pos_dist(0, copy.size() - 1);
         std::uniform_int_distribution<int> bit_dist(0, 7);
-        for (int i = 0; i < num_flips; ++i) {
+        for (int ndx = 0; ndx < num_flips; ++ndx) {
             size_t pos = pos_dist(rng_);
             int bit = bit_dist(rng_);
             auto* ptr = reinterpret_cast<uint8_t*>(copy.data() + pos);
@@ -90,7 +90,7 @@ TEST(WireFuzzTest, RandomBytesDecodeHeader) {
     int exceptions = 0;
     int successes = 0;
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 32));
         try {
             wire::decode_header(buf);
@@ -107,7 +107,7 @@ TEST(WireFuzzTest, RandomBytesDecodeHeader) {
 TEST(WireFuzzTest, RandomBytesDecodeHeaderValidated) {
     FuzzGen gen(123);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 32));
         try {
             wire::decode_header_validated(buf);
@@ -134,7 +134,7 @@ TEST(WireFuzzTest, TruncatedHeaders) {
 TEST(WireFuzzTest, RandomBytesDecodeInit) {
     FuzzGen gen(456);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 64));
         try {
             wire::decode_init(buf);
@@ -147,7 +147,7 @@ TEST(WireFuzzTest, RandomBytesDecodeInit) {
 TEST(WireFuzzTest, RandomBytesDecodeMethodCall) {
     FuzzGen gen(789);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 16));
         try {
             wire::decode_method_call_header(buf);
@@ -160,7 +160,7 @@ TEST(WireFuzzTest, RandomBytesDecodeMethodCall) {
 TEST(WireFuzzTest, RandomBytesDecodePropertyHeader) {
     FuzzGen gen(101);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 24));
         try {
             wire::decode_property_header(buf);
@@ -173,7 +173,7 @@ TEST(WireFuzzTest, RandomBytesDecodePropertyHeader) {
 TEST(WireFuzzTest, RandomBytesDecodeObjectRef) {
     FuzzGen gen(202);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 16));
         try {
             wire::decode_object_ref(buf);
@@ -186,7 +186,7 @@ TEST(WireFuzzTest, RandomBytesDecodeObjectRef) {
 TEST(WireFuzzTest, RandomBytesDecodeObjectCreate) {
     FuzzGen gen(303);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 24));
         try {
             wire::decode_object_create_header(buf);
@@ -229,7 +229,7 @@ TEST(WireFuzzTest, BitFlippedValidMessages) {
     valid_messages.push_back(wire::create_shutdown_message());
 
     for (const auto& msg : valid_messages) {
-        for (int i = 0; i < 1000; ++i) {
+        for (int ndx = 0; ndx < 1000; ++ndx) {
             Buffer flipped = gen.bit_flip(msg, static_cast<int>(gen.next_size(1, 5)));
             try {
                 auto hdr = wire::decode_header_validated(flipped);
@@ -280,7 +280,7 @@ TEST(WireFuzzTest, OversizedPayloadClaim) {
 TEST(BufferFuzzTest, RandomBytesDecodeI32) {
     FuzzGen gen(500);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 8));
         try {
             decode_i32(buf);
@@ -293,7 +293,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeI32) {
 TEST(BufferFuzzTest, RandomBytesDecodeI64) {
     FuzzGen gen(501);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 12));
         try {
             decode_i64(buf);
@@ -306,7 +306,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeI64) {
 TEST(BufferFuzzTest, RandomBytesDecodeF64) {
     FuzzGen gen(502);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 12));
         try {
             decode_f64(buf);
@@ -319,7 +319,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeF64) {
 TEST(BufferFuzzTest, RandomBytesDecodeString) {
     FuzzGen gen(503);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 64));
         try {
             decode_string(buf);
@@ -332,7 +332,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeString) {
 TEST(BufferFuzzTest, RandomBytesDecodeBytes) {
     FuzzGen gen(504);
 
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 64));
         try {
             decode_bytes(buf);
@@ -345,7 +345,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeBytes) {
 TEST(BufferFuzzTest, RandomBytesDecodeArrayI32) {
     FuzzGen gen(505);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 128));
         try {
             decode_array<i32>(buf);
@@ -358,7 +358,7 @@ TEST(BufferFuzzTest, RandomBytesDecodeArrayI32) {
 TEST(BufferFuzzTest, RandomBytesDecodeArrayString) {
     FuzzGen gen(506);
 
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         Buffer buf = gen.buffer(gen.next_size(0, 128));
         try {
             decode_array<std::string>(buf);
@@ -442,7 +442,7 @@ TEST(BufferFuzzTest, SequentialDecodeExhaustion) {
 
 TEST(RoundTripFuzzTest, RandomI32RoundTrip) {
     FuzzGen gen(600);
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         i32 val = static_cast<i32>(gen.next_u32());
         Buffer buf;
         encode_i32(buf, val);
@@ -453,7 +453,7 @@ TEST(RoundTripFuzzTest, RandomI32RoundTrip) {
 
 TEST(RoundTripFuzzTest, RandomStringRoundTrip) {
     FuzzGen gen(601);
-    for (int i = 0; i < 5000; ++i) {
+    for (int ndx = 0; ndx < 5000; ++ndx) {
         size_t len = gen.next_size(0, 1000);
         auto data = gen.bytes(len);
         // Convert to string (may contain nulls, that's fine)
@@ -467,7 +467,7 @@ TEST(RoundTripFuzzTest, RandomStringRoundTrip) {
 
 TEST(RoundTripFuzzTest, RandomHeaderRoundTrip) {
     FuzzGen gen(602);
-    for (int i = 0; i < 10000; ++i) {
+    for (int ndx = 0; ndx < 10000; ++ndx) {
         wire::Header hdr{
             .magic = wire::kMagic,
             .flags = static_cast<wire::MsgFlags>(gen.next_u32() & 0xFF),

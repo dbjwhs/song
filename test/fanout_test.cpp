@@ -98,7 +98,7 @@ TEST(FanOutTest, ThreeClientsReceiveNotification) {
         std::vector<std::unique_ptr<TcpTransport>> clients;
 
         // Accept 3 clients
-        for (int i = 0; i < 3; ++i) {
+        for (int ndx = 0; ndx < 3; ++ndx) {
             auto conn = listener.accept(5000);
             if (!conn) return;
 
@@ -111,18 +111,18 @@ TEST(FanOutTest, ThreeClientsReceiveNotification) {
         }
 
         // Wait for subscribe messages from all 3
-        for (int i = 0; i < 3; ++i) {
+        for (int ndx = 0; ndx < 3; ++ndx) {
             // Consume init_ack + subscribe
             for (int attempt = 0; attempt < 3; ++attempt) {
                 Buffer msg;
-                if (!clients[i]->receive(msg, 5000)) break;
+                if (!clients[ndx]->receive(msg, 5000)) break;
                 auto hdr = wire::decode_header(msg);
                 if (hdr.type == wire::MsgType::prop_subscribe) {
                     auto prop = wire::decode_property_header(msg);
                     auto sub_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(
-                        clients[i].get());
+                        clients[ndx].get());
                     reg.subscribe(sub_id, prop.object_id, prop.property_id,
-                                  clients[i].get());
+                                  clients[ndx].get());
                     break;
                 }
             }
@@ -146,7 +146,7 @@ TEST(FanOutTest, ThreeClientsReceiveNotification) {
     std::atomic<int> notifications_received{0};
     std::vector<std::thread> client_threads;
 
-    for (int i = 0; i < 3; ++i) {
+    for (int ndx = 0; ndx < 3; ++ndx) {
         client_threads.emplace_back([port, &notifications_received]() {
             auto tcp = std::make_unique<TcpTransport>();
             tcp->connect("127.0.0.1", port, 5000);
@@ -271,9 +271,9 @@ TEST(FanOutTest, ServerInitiatedNotification) {
         }
 
         // Server-initiated: push 5 rapid notifications (simulating a ticker)
-        for (int i = 0; i < 5; ++i) {
+        for (int ndx = 0; ndx < 5; ++ndx) {
             Buffer value;
-            encode_f64(value, 100.0 + static_cast<f64>(i));
+            encode_f64(value, 100.0 + static_cast<f64>(ndx));
             reg.notify(1, -1, 1, value);
         }
 
@@ -295,7 +295,7 @@ TEST(FanOutTest, ServerInitiatedNotification) {
     });
 
     // Poll for all 5
-    for (int i = 0; i < 5; ++i) {
+    for (int ndx = 0; ndx < 5; ++ndx) {
         conn.poll_notifications(5000);
     }
 
