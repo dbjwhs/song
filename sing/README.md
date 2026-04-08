@@ -15,7 +15,8 @@ sing/
 ├── network/                # TCP and network communication tests
 │   ├── tcp_calculator/     # Calculator over TCP (explicit host:port)
 │   ├── discovery/          # mDNS zero-config service discovery
-│   └── secure/             # HMAC-SHA256 authenticated communication
+│   ├── secure/             # HMAC-SHA256 authenticated communication
+│   └── backup/             # Comprehensive backup agent (all features)
 │
 └── README.md
 ```
@@ -159,6 +160,46 @@ HMAC-SHA256 authenticated communication.
 
 ---
 
+### 4. Backup Agent (`network/backup/`)
+
+Comprehensive backup agent exercising all Song features in one project.
+
+**Features:**
+- Filesystem-backed file listing, upload, download, deletion
+- Streaming file transfer via `StreamWriter`/`StreamReader` (64KB chunks)
+- HMAC-SHA256 authentication with `--key` flag
+- Multi-client support via `run_tcp_multi()` and custom secure accept loop
+- Property notifications for upload progress via `SubscriptionRegistry`
+- mDNS discovery with `--discover` flag
+- Incremental backup via `changes_since(timestamp)`
+- Path traversal protection
+
+**What Is Covered:**
+- Generated proxy/interface/dispatcher from `backup.song` IDL
+- Hand-written streaming dispatcher (dual service IDs)
+- Secure multi-client loop using public `handle_message()` API
+- `subscribe_property()` / `poll_notifications()` for progress fan-out
+- End-to-end incremental backup workflow
+- Cross-feature integration (streaming + security + multi-client)
+
+**Usage:**
+```bash
+# Start the agent
+./sing_network_backup_service --port 19000 --root /tmp/backup
+
+# With HMAC auth
+./sing_network_backup_service --port 19000 --root /tmp/backup --key "my-secret-key"
+
+# With mDNS discovery
+./sing_network_backup_service --port 0 --root /tmp/backup --discover
+
+# Connect with client
+./sing_network_backup_client localhost 19000
+./sing_network_backup_client localhost 19000 --key "my-secret-key"
+```
+
+---
+
 ## Building
 
 ```bash
@@ -175,24 +216,26 @@ make sing_network_all   # All network tests
 make sing_ipc_calculator
 make sing_network_tcp_calculator
 make sing_network_secure
+make sing_network_backup
 ```
 
 ## Running Tests
 
 ```bash
 # Run all sing tests
-ctest -R "Calculator\|Chat\|DataCopy\|Stock\|TcpCalculator\|Discovery\|Secure"
+ctest -R "Calculator\|Chat\|DataCopy\|Stock\|TcpCalculator\|Discovery\|Secure\|BackupAgent"
 
 # Run IPC tests only
 ctest -R "^(Calculator|Chat|DataCopy|StockTicker)Test\."
 
 # Run network tests only
-ctest -R "^(TcpCalculator|Discovery|SecureTransport)Test\."
+ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|DiscoverableBackup)Test\."
 
 # Run individual test suites
 ./sing/ipc/calculator/sing_ipc_calculator_test
 ./sing/network/tcp_calculator/sing_network_tcp_calculator_test
 ./sing/network/secure/sing_network_secure_test
+./sing/network/backup/sing_network_backup_test
 ```
 
 ## Test Counts
@@ -206,7 +249,8 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport)Test\."
 | Network TCP Calculator | 9 |
 | Network Discovery | 4 |
 | Network Secure | 5 |
-| **Total** | **94** |
+| Network Backup Agent | 44 |
+| **Total** | **138** |
 
 ## Requirements
 
