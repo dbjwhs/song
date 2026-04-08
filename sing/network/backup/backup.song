@@ -1,0 +1,94 @@
+// Backup Agent Service - Sing Network Integration Test
+// Comprehensive example exercising all Song features:
+// synchronous RPC, streaming, TLS, multi-client, property notifications, mDNS
+
+namespace backup;
+
+/// Status of a backup operation
+enum BackupStatus {
+    idle = 0,
+    scanning = 1,
+    transferring = 2,
+    complete = 3,
+    failed = 4
+}
+
+/// Information about a file on the backup agent
+struct FileEntry {
+    /// Relative path within the backup root
+    string path;
+    /// File size in bytes
+    i64 size;
+    /// Last modification time (unix milliseconds)
+    i64 modified_at;
+    /// HMAC-based checksum (hex string, empty if not computed)
+    string checksum;
+}
+
+/// A chunk of file data for transfer
+struct FileChunk {
+    /// Relative path of the file
+    string path;
+    /// Byte offset within the file
+    i64 offset;
+    /// Chunk payload
+    bytes data;
+    /// Whether this is the last chunk
+    bool is_final;
+}
+
+/// Result of receiving a chunk
+struct ChunkResult {
+    /// Whether the write succeeded
+    bool success;
+    /// Bytes written in this chunk
+    i64 bytes_written;
+    /// Total bytes received for this file so far
+    i64 total_received;
+}
+
+/// Progress of an ongoing operation
+struct Progress {
+    /// Current file being processed
+    string current_file;
+    /// Files completed so far
+    i32 files_done;
+    /// Total files to process
+    i32 files_total;
+    /// Bytes transferred so far
+    i64 bytes_done;
+    /// Total bytes to transfer
+    i64 bytes_total;
+    /// BackupStatus value
+    i32 status;
+}
+
+/// Backup agent service
+service BackupAgent {
+    /// List all files under the backup root
+    list_files() -> FileEntry[];
+
+    /// Get info about a specific file
+    get_file_info(string path) -> FileEntry;
+
+    /// Check if a file exists
+    file_exists(string path) -> bool;
+
+    /// Get files changed since a timestamp (for incremental backup)
+    changes_since(i64 timestamp_ms) -> FileEntry[];
+
+    /// Receive a file chunk (upload to this agent)
+    receive_chunk(FileChunk chunk) -> ChunkResult;
+
+    /// Delete a file
+    delete_file(string path) -> bool;
+
+    /// Get current operation progress
+    get_progress() -> Progress;
+
+    /// Get total storage used in bytes
+    get_storage_used() -> i64;
+
+    /// Compute checksum for a file
+    compute_checksum(string path) -> string;
+}
