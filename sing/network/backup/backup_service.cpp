@@ -27,8 +27,7 @@ namespace fs = std::filesystem;
 // Stream chunk size: 64 KB
 constexpr size_t kStreamChunkSize = 65536;
 
-// Fixed key for deterministic checksum (not for security, just fingerprinting)
-static const std::string kChecksumKey = "song-backup-checksum-key-32byte!";
+// Checksum key from shared constants (not for security, just fingerprinting)
 
 // Convert filesystem time to unix milliseconds
 static i64 to_unix_ms(fs::file_time_type ftime) {
@@ -268,7 +267,7 @@ public:
                                    std::istreambuf_iterator<char>());
 
         // Use HMAC-SHA256 with fixed key as a deterministic checksum
-        auto tag = compute_hmac(kChecksumKey.data(), kChecksumKey.size(),
+        auto tag = compute_hmac(kChecksumKey, kChecksumKeySize,
                                 content.data(), content.size());
         return hmac_to_hex(tag);
     }
@@ -339,69 +338,84 @@ void backup_stream_dispatcher(u16 method_id, Buffer& request, StreamWriter& writ
     }
 }
 
-// Custom secure multi-client loop
-// Replicates ServiceRuntime::client_loop using public APIs, wrapping each
-// accepted TCP connection in SecureTransport for HMAC authentication.
-[[noreturn]] static void run_secure_multi(ServiceRuntime& runtime,
-                                          TcpListener& listener,
-                                          const std::string& key) {
+// Generic multi-client loop using public runtime APIs.
+// Each accepted Transport is dispatched on a detached thread.
+// Works for both SecureTransport (HMAC) and TlsTransport (encryption).
+static void run_client_thread(ServiceRuntime& runtime,
+                               std::shared_ptr<Transport> client) {
+    auto subscriber_id = reinterpret_cast<
+        SubscriptionRegistry::SubscriberId>(client.get());
+    try {
+        runtime.send_init_confirmation_transport(*client);
+
+        std::unordered_set<i32> tracked_objects;
+        ServiceRuntime::SubscriptionSet subscriptions;
+
+        for (;;) {
+            Buffer msg;
+            if (!client->receive(msg, -1)) {
+                runtime.subscriptions().unsubscribe_all(subscriber_id);
+                return;
+            }
+
+            wire::Header hdr = wire::decode_header(msg);
+            if (hdr.magic != wire::kMagic) {
+                runtime.subscriptions().unsubscribe_all(subscriber_id);
+                return;
+            }
+            if (hdr.type == wire::MsgType::shutdown) {
+                runtime.subscriptions().unsubscribe_all(subscriber_id);
+                return;
+            }
+            if (hdr.type == wire::MsgType::init_ack) {
+                continue;
+            }
+
+            runtime.handle_message(hdr, msg, *client,
+                                   tracked_objects, subscriptions);
+        }
+    } catch (const std::exception& e) {
+        Log::warn("Client error: " + std::string(e.what()));
+        runtime.subscriptions().unsubscribe_all(subscriber_id);
+    } catch (...) {
+        runtime.subscriptions().unsubscribe_all(subscriber_id);
+    }
+}
+
+// HMAC-authenticated multi-client loop
+[[noreturn]] static void run_hmac_multi(ServiceRuntime& runtime,
+                                        TcpListener& listener,
+                                        const std::string& key) {
     for (;;) {
         auto tcp_client = listener.accept(-1);
         if (!tcp_client) {
             continue;
         }
-
-        // Wrap in SecureTransport
-        auto secure_client = std::make_shared<SecureTransport>(
+        auto secure = std::make_shared<SecureTransport>(
             std::move(tcp_client), SecurityConfig(key));
-
-        // Detach threads -- they self-clean via subscriber_id unsubscribe.
-        // In production, use a thread pool. Detach is safe here because the
-        // [[noreturn]] loop outlives all client threads.
-        std::thread([&runtime, secure_client]() {
-            auto subscriber_id = reinterpret_cast<
-                SubscriptionRegistry::SubscriberId>(secure_client.get());
-            try {
-                // Init handshake
-                runtime.send_init_confirmation_transport(*secure_client);
-
-                // Track objects and subscriptions for this connection
-                std::unordered_set<i32> tracked_objects;
-                ServiceRuntime::SubscriptionSet subscriptions;
-
-                // Message loop
-                for (;;) {
-                    Buffer msg;
-                    if (!secure_client->receive(msg, -1)) {
-                        runtime.subscriptions().unsubscribe_all(subscriber_id);
-                        return;
-                    }
-
-                    wire::Header hdr = wire::decode_header(msg);
-                    if (hdr.magic != wire::kMagic) {
-                        runtime.subscriptions().unsubscribe_all(subscriber_id);
-                        return;
-                    }
-                    if (hdr.type == wire::MsgType::shutdown) {
-                        runtime.subscriptions().unsubscribe_all(subscriber_id);
-                        return;
-                    }
-                    if (hdr.type == wire::MsgType::init_ack) {
-                        continue;
-                    }
-
-                    runtime.handle_message(hdr, msg, *secure_client,
-                                           tracked_objects, subscriptions);
-                }
-            } catch (const std::exception& e) {
-                Log::warn("Secure client error: " + std::string(e.what()));
-                runtime.subscriptions().unsubscribe_all(subscriber_id);
-            } catch (...) {
-                runtime.subscriptions().unsubscribe_all(subscriber_id);
-            }
+        std::thread([&runtime, secure]() {
+            run_client_thread(runtime, secure);
         }).detach();
     }
 }
+
+#if defined(SONG_HAS_TLS)
+// TLS-encrypted multi-client loop (PSK mode)
+[[noreturn]] static void run_tls_multi(ServiceRuntime& runtime,
+                                       TlsListener& listener) {
+    for (;;) {
+        auto tls_client = listener.accept(-1);
+        if (!tls_client) {
+            continue;
+        }
+        // TlsListener::accept already performs the TLS handshake
+        auto shared = std::shared_ptr<TlsTransport>(tls_client.release());
+        std::thread([&runtime, shared]() {
+            run_client_thread(runtime, shared);
+        }).detach();
+    }
+}
+#endif
 
 int main(int argc, char* argv[]) {
     // Parse arguments
@@ -409,6 +423,7 @@ int main(int argc, char* argv[]) {
     std::string root = "/tmp/song-backup";
     std::string key;
     bool discover = false;
+    bool use_tls = false;
 
     for (int ndx = 1; ndx < argc; ++ndx) {
         if (std::strcmp(argv[ndx], "--port") == 0 && ndx + 1 < argc) {
@@ -417,6 +432,8 @@ int main(int argc, char* argv[]) {
             root = argv[++ndx];
         } else if (std::strcmp(argv[ndx], "--key") == 0 && ndx + 1 < argc) {
             key = argv[++ndx];
+        } else if (std::strcmp(argv[ndx], "--tls") == 0) {
+            use_tls = true;
         } else if (std::strcmp(argv[ndx], "--discover") == 0) {
             discover = true;
         } else if (argv[ndx][0] != '-') {
@@ -431,7 +448,7 @@ int main(int argc, char* argv[]) {
 
     Log::info("Backup agent starting on port " + std::to_string(port) +
               " root=" + root +
-              (key.empty() ? "" : " [HMAC auth]") +
+              (use_tls ? " [TLS encrypted]" : (key.empty() ? "" : " [HMAC auth]")) +
               (discover ? " [discoverable]" : ""));
 
     BackupAgentImpl agent(root);
@@ -472,12 +489,10 @@ int main(int argc, char* argv[]) {
                std::to_string(runtime.service_count()) + " service(s), " +
                std::to_string(runtime.method_count()) + " method(s)");
 
-    if (!key.empty()) {
-        // Secure multi-client mode: custom accept loop with HMAC auth
-        TcpListener listener;
-        listener.listen(port);
-
-        // Optional mDNS registration
+    // Optional mDNS registration (used by secure and TLS modes that
+    // manage their own listener; plain/discover modes handle it internally)
+    auto register_mdns = [&](u16 bound_port) -> std::pair<
+            std::unique_ptr<Discovery>, std::unique_ptr<ServiceRegistration>> {
         std::unique_ptr<Discovery> disc;
         std::unique_ptr<ServiceRegistration> reg;
         if (discover) {
@@ -485,12 +500,33 @@ int main(int argc, char* argv[]) {
             if (disc) {
                 auto svc_type = Discovery::make_service_type("backup");
                 reg = std::make_unique<ServiceRegistration>(
-                    *disc, "BackupAgent", svc_type,
-                    listener.bound_port());
+                    *disc, "BackupAgent", svc_type, bound_port);
             }
         }
+        return {std::move(disc), std::move(reg)};
+    };
 
-        run_secure_multi(runtime, listener, key);
+#if defined(SONG_HAS_TLS)
+    if (use_tls && !key.empty()) {
+        // TLS-encrypted multi-client mode (PSK with --key)
+        TlsConfig tls_config(key, "song-backup", TlsConfig::Mode::psk);
+        tls_config.set_server(true);
+
+        TlsListener listener;
+        listener.listen(tls_config, port);
+        auto [disc, reg] = register_mdns(port);
+
+        runtime.set_capability(wire::Capability::tls);
+        run_tls_multi(runtime, listener);
+    } else
+#endif
+    if (!key.empty()) {
+        // HMAC-authenticated multi-client mode
+        TcpListener listener;
+        listener.listen(port);
+        auto [disc, reg] = register_mdns(listener.bound_port());
+
+        run_hmac_multi(runtime, listener, key);
     } else if (discover) {
         // Discoverable multi-client mode (no auth)
         runtime.run_tcp_discoverable(port, "BackupAgent", "backup");
@@ -498,6 +534,8 @@ int main(int argc, char* argv[]) {
         // Plain multi-client mode
         runtime.run_tcp_multi(port);
     }
+
+    (void)use_tls;  // Suppress unused warning when SONG_HAS_TLS is not defined
 
     return 0;
 }

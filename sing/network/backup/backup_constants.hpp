@@ -21,4 +21,11 @@ constexpr u32 kType_BackupAgent = 1;
 constexpr i32 kObject_BackupAgent = 0;
 constexpr u16 kProp_progress = 1;
 
+// Chunk size for file uploads (64 KB)
+constexpr size_t kUploadChunkSize = 65536;
+
+// Fixed key for deterministic checksum (shared between service and client)
+constexpr const char* kChecksumKey = "song-backup-checksum-key-32byte!";
+constexpr size_t kChecksumKeySize = 32;
+
 } // namespace song::backup
