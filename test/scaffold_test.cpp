@@ -606,6 +606,33 @@ enum class Permissions : u32 {
     EXPECT_TRUE(enums[0].is_flags);  // Powers of 2 detected
 }
 
+// Regression: a hand-edited header whose enum value exceeds int64_t must be
+// tolerated (the value is left unparsed) rather than crashing the scaffold
+// generator with an uncaught std::out_of_range from std::stoll.
+TEST(ScaffoldTest, ParseExistingEnumsToleratesOutOfRangeValue) {
+    std::string header = R"(
+enum class Big : u64 {
+    small = 1,
+    huge = 99999999999999999999
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    ASSERT_NO_THROW({ scaffold.parse_existing_enums(header); });
+
+    auto enums = scaffold.parse_existing_enums(header);
+    ASSERT_EQ(enums.size(), 1u);
+    ASSERT_EQ(enums[0].values.size(), 2u);
+
+    EXPECT_EQ(enums[0].values[0].name, "small");
+    EXPECT_TRUE(enums[0].values[0].value.has_value());
+    EXPECT_EQ(enums[0].values[0].value.value(), 1);
+
+    // The out-of-range value is retained by name but its value is left absent.
+    EXPECT_EQ(enums[0].values[1].name, "huge");
+    EXPECT_FALSE(enums[0].values[1].value.has_value());
+}
+
 // =============================================================================
 // Struct Comparison
 // =============================================================================

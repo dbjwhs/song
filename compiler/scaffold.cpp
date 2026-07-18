@@ -281,9 +281,18 @@ std::vector<ExistingEnum> ScaffoldGenerator::parse_existing_enums(const std::str
             }
 
             if (val_match[2].matched) {
-                v.value = std::stoll(val_match[2].str());
+                // The value regex accepts arbitrary-length digit runs, so a
+                // literal in a hand-edited impl file may exceed int64_t. Tolerate
+                // it: leave the value unparsed rather than letting std::stoll's
+                // std::out_of_range escape the public generate() API.
+                try {
+                    v.value = std::stoll(val_match[2].str());
+                } catch (const std::exception&) {
+                    v.value = std::nullopt;
+                }
                 // Check if value is a power of 2 (likely flags)
-                if (v.value.value() > 0 && (v.value.value() & (v.value.value() - 1)) == 0) {
+                if (v.value.has_value() && v.value.value() > 0 &&
+                    (v.value.value() & (v.value.value() - 1)) == 0) {
                     e.is_flags = true;
                 }
             }
