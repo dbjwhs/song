@@ -233,6 +233,122 @@ TEST(ParserTest, ClassWithProperties) {
     EXPECT_EQ(c.properties[1].name, "height");
 }
 
+// H21: a user-typed class property with prefix array/optional markers must parse
+// like a struct field. Previously the class-property path handled only the
+// postfix C-style form, so "Point[] pts;" threw "Expected property name (got [)".
+TEST(ParserTest, ClassUserTypeArrayProperty) {
+    Parser parser(R"(
+        namespace test;
+        class C { Point[] pts; }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 1u);
+    EXPECT_EQ(c.properties[0].name, "pts");
+    EXPECT_EQ(get_user_type(c.properties[0].type), "Point");
+    EXPECT_TRUE(c.properties[0].type.is_array);
+    EXPECT_EQ(c.properties[0].type.array_dimensions, 1);
+}
+
+TEST(ParserTest, ClassUserTypeOptionalProperty) {
+    Parser parser(R"(
+        namespace test;
+        class C { Point? maybe; }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 1u);
+    EXPECT_EQ(c.properties[0].name, "maybe");
+    EXPECT_EQ(get_user_type(c.properties[0].type), "Point");
+    EXPECT_TRUE(c.properties[0].type.is_optional);
+}
+
+// Contrast: a primitive-typed array and a user-typed array property must parse
+// identically now (previously the primitive parsed and the user type threw).
+TEST(ParserTest, ClassPrimitiveAndUserTypeArraysParseIdentically) {
+    Parser parser(R"(
+        namespace test;
+        class C {
+            i32[] a;
+            Point[] b;
+        }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 2u);
+    EXPECT_TRUE(c.properties[0].type.is_array);
+    EXPECT_EQ(c.properties[0].type.array_dimensions, 1);
+    EXPECT_TRUE(c.properties[1].type.is_array);
+    EXPECT_EQ(c.properties[1].type.array_dimensions, 1);
+    EXPECT_EQ(get_user_type(c.properties[1].type), "Point");
+}
+
+TEST(ParserTest, ClassUserTypeMultiDimArrayProperty) {
+    Parser parser(R"(
+        namespace test;
+        class C { Point[][] grid; }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 1u);
+    EXPECT_EQ(c.properties[0].type.array_dimensions, 2);
+}
+
+// H23: a property whose type equals the enclosing class name must parse as a
+// property, not be mis-dispatched as a constructor.
+TEST(ParserTest, ClassSelfReferentialProperty) {
+    Parser parser(R"(
+        namespace test;
+        class Node { Node next; }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 1u);
+    EXPECT_EQ(c.properties[0].name, "next");
+    EXPECT_EQ(get_user_type(c.properties[0].type), "Node");
+    EXPECT_EQ(c.constructors.size(), 0u);
+}
+
+// The self-typed property must parse whether or not 'readonly' is present; the
+// readonly path already worked, the plain path did not.
+TEST(ParserTest, ClassSelfReferentialReadonlyAndPlainAgree) {
+    Parser plain(R"(namespace test; class Node { Node parent; })");
+    auto ast1 = plain.parse();
+    EXPECT_EQ(ast1.namespaces[0].classes[0].properties.size(), 1u);
+
+    Parser ro(R"(namespace test; class Node { readonly Node parent; })");
+    auto ast2 = ro.parse();
+    ASSERT_EQ(ast2.namespaces[0].classes[0].properties.size(), 1u);
+    EXPECT_TRUE(ast2.namespaces[0].classes[0].properties[0].readonly);
+}
+
+TEST(ParserTest, ClassSelfReferentialArrayProperty) {
+    Parser parser(R"(
+        namespace test;
+        class Tree { Tree[] children; }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.properties.size(), 1u);
+    EXPECT_EQ(c.properties[0].name, "children");
+    EXPECT_EQ(get_user_type(c.properties[0].type), "Tree");
+    EXPECT_TRUE(c.properties[0].type.is_array);
+}
+
+// Regression guard: a genuine constructor still parses correctly after unifying
+// the identifier-led dispatch.
+TEST(ParserTest, ClassConstructorStillParses) {
+    Parser parser(R"(
+        namespace test;
+        class Node { Node(i32 v); }
+    )");
+    auto ast = parser.parse();
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.constructors.size(), 1u);
+    EXPECT_EQ(c.constructors[0].params.size(), 1u);
+    EXPECT_EQ(c.properties.size(), 0u);
+}
+
 TEST(ParserTest, ClassWithReadonlyProperty) {
     Parser parser(R"(
         namespace test;

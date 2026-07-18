@@ -213,94 +213,105 @@ compiler::ClassDef Parser::parse_class() {
             if (prop.doc.empty()) prop.doc = member_doc;
             def.properties.push_back(std::move(prop));
         }
-        // Check for constructor (name matches class name, followed by '(')
-        else if (check(TokenType::Identifier) && m_current_token->m_value == def.name) {
-            // Need to peek ahead to distinguish constructor from method
-            // Constructor: ClassName(params);
-            // Method: identifier(params) -> type;
-            // Save position - actually we can check: if name == class name, it's constructor
-            auto ctor = parse_constructor(def.name);
-            if (ctor.doc.empty()) ctor.doc = member_doc;
-            def.constructors.push_back(std::move(ctor));
-        }
         // Check for stream/optional method
         else if (check(TokenType::KwStream) || check(TokenType::KwOptional)) {
             auto method = parse_method();
             if (method.doc.empty()) method.doc = member_doc;
             def.methods.push_back(std::move(method));
         }
-        // Could be a property (type name;) or method (name(params) -> type;)
-        // Methods start with identifier followed by '('
-        // Properties start with type followed by identifier followed by ';'
+        // Identifier-led member: a constructor (ClassName(...)), a method
+        // (name(...) -> type), or a property whose type is that identifier
+        // (Type name;). Disambiguate by consuming the leading identifier and
+        // checking whether '(' follows. Handling all three here -- rather than
+        // dispatching a constructor purely on a name match -- lets a
+        // self-referential property (ClassName field;) and a user-typed
+        // array/optional property (Point[] pts; / Point? p;) parse the same way
+        // parse_type() handles them for primitives and struct fields.
         else if (check(TokenType::Identifier)) {
-            // Check if this is a method: identifier followed by '('
-            // We need to check if current identifier is followed by '(' to distinguish
-            // Method: method_name(params) -> type;
-            // Property: TypeName property_name;
-            //
-            // Save current state and peek ahead
             std::string first_ident = m_current_token->m_value;
-            advance();  // consume first identifier
+            auto first_loc = current_loc();
+            advance();  // consume the leading identifier
 
             if (check(TokenType::LParen)) {
-                // It's a method - we already consumed the name, now parse the rest
-                compiler::Method method;
-                method.loc = current_loc();
-                method.doc = member_doc;
-                method.name = first_ident;
+                advance();  // consume '('
+                if (first_ident == def.name) {
+                    // Constructor: ClassName(params);
+                    compiler::Constructor ctor;
+                    ctor.loc = first_loc;
+                    ctor.doc = member_doc;
+                    if (!check(TokenType::RParen)) {
+                        ctor.params.push_back(parse_param());
+                        while (check(TokenType::Comma)) {
+                            advance();
+                            ctor.params.push_back(parse_param());
+                        }
+                    }
+                    expect(TokenType::RParen, "Expected ')' after parameters");
+                    expect(TokenType::Semicolon, "Expected ';' after constructor");
+                    def.constructors.push_back(std::move(ctor));
+                } else {
+                    // Method: name(params) -> type;
+                    compiler::Method method;
+                    method.loc = first_loc;
+                    method.doc = member_doc;
+                    method.name = first_ident;
 
-                expect(TokenType::LParen, "Expected '(' after method name");
-
-                // Parse parameters
-                if (!check(TokenType::RParen)) {
-                    method.params.push_back(parse_param());
-                    while (check(TokenType::Comma)) {
-                        advance();
+                    if (!check(TokenType::RParen)) {
                         method.params.push_back(parse_param());
+                        while (check(TokenType::Comma)) {
+                            advance();
+                            method.params.push_back(parse_param());
+                        }
                     }
-                }
 
-                expect(TokenType::RParen, "Expected ')' after parameters");
-                expect(TokenType::Arrow, "Expected '->' after parameters");
+                    expect(TokenType::RParen, "Expected ')' after parameters");
+                    expect(TokenType::Arrow, "Expected '->' after parameters");
+                    method.return_type = parse_type();
 
-                method.return_type = parse_type();
-
-                // Check for throws clause
-                if (check(TokenType::KwThrows)) {
-                    advance();
-                    Token error_type = expect(TokenType::Identifier, "Expected error type");
-                    method.throws.push_back(error_type.m_value);
-
-                    while (check(TokenType::Comma)) {
+                    if (check(TokenType::KwThrows)) {
                         advance();
-                        Token next_error = expect(TokenType::Identifier, "Expected error type");
-                        method.throws.push_back(next_error.m_value);
+                        Token error_type = expect(TokenType::Identifier, "Expected error type");
+                        method.throws.push_back(error_type.m_value);
+                        while (check(TokenType::Comma)) {
+                            advance();
+                            Token next_error = expect(TokenType::Identifier, "Expected error type");
+                            method.throws.push_back(next_error.m_value);
+                        }
                     }
+
+                    expect(TokenType::Semicolon, "Expected ';' after method");
+                    def.methods.push_back(std::move(method));
                 }
-
-                expect(TokenType::Semicolon, "Expected ';' after method");
-                def.methods.push_back(std::move(method));
             } else {
-                // It's a property - first_ident was the type name
-                // Now we need the property name
-                Token prop_name = expect(TokenType::Identifier, "Expected property name");
-
+                // Property whose type is first_ident (a user-defined type).
                 compiler::Property prop;
-                prop.loc = current_loc();
+                prop.loc = first_loc;
                 prop.doc = member_doc;
-                prop.name = prop_name.m_value;
-                prop.type.base = first_ident;  // user-defined type
+                prop.type.base = first_ident;
                 prop.readonly = false;
 
-                // Check for array brackets
+                // Prefix array/optional markers: Point[] pts;  Point? p;
                 while (check(TokenType::LBracket)) {
                     advance();
                     expect(TokenType::RBracket, "Expected ']' after '['");
                     prop.type.is_array = true;
                     prop.type.array_dimensions++;
                 }
+                if (check(TokenType::Question)) {
+                    advance();
+                    prop.type.is_optional = true;
+                }
 
-                // Check for optional marker
+                Token prop_name = expect(TokenType::Identifier, "Expected property name");
+                prop.name = prop_name.m_value;
+
+                // Postfix array/optional markers: C-style Point pts[];
+                while (check(TokenType::LBracket)) {
+                    advance();
+                    expect(TokenType::RBracket, "Expected ']' after '['");
+                    prop.type.is_array = true;
+                    prop.type.array_dimensions++;
+                }
                 if (check(TokenType::Question)) {
                     advance();
                     prop.type.is_optional = true;
@@ -436,29 +447,6 @@ compiler::Property Parser::parse_property() {
     expect(TokenType::Semicolon, "Expected ';' after property");
 
     return prop;
-}
-
-compiler::Constructor Parser::parse_constructor([[maybe_unused]] const std::string& class_name) {
-    compiler::Constructor ctor;
-    ctor.loc = current_loc();
-    ctor.doc = take_doc();
-
-    expect(TokenType::Identifier, "Expected constructor name");  // Already verified it matches class_name
-    expect(TokenType::LParen, "Expected '(' after constructor name");
-
-    // Parse parameters
-    if (!check(TokenType::RParen)) {
-        ctor.params.push_back(parse_param());
-        while (check(TokenType::Comma)) {
-            advance();
-            ctor.params.push_back(parse_param());
-        }
-    }
-
-    expect(TokenType::RParen, "Expected ')' after parameters");
-    expect(TokenType::Semicolon, "Expected ';' after constructor");
-
-    return ctor;
 }
 
 compiler::Method Parser::parse_method() {

@@ -41,7 +41,6 @@ private:
     compiler::Field parse_field();
     compiler::EnumItem parse_enum_item();
     compiler::Property parse_property();
-    compiler::Constructor parse_constructor(const std::string& class_name);
     compiler::Method parse_method();
     compiler::Param parse_param();
     compiler::Type parse_type();
