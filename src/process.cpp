@@ -26,9 +26,13 @@ ServiceProcess::ServiceProcess(ServiceProcess&& other) noexcept
     , from_service_(std::move(other.from_service_))
     , reusable_(other.reusable_)
     , negotiated_version_(other.negotiated_version_)
+    , peer_capabilities_(other.peer_capabilities_)
+    , negotiated_capabilities_(other.negotiated_capabilities_)
     , methods_(std::move(other.methods_)) {
     other.pid_ = -1;
     other.negotiated_version_ = 0;
+    other.peer_capabilities_ = 0;
+    other.negotiated_capabilities_ = 0;
 }
 
 ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
@@ -41,9 +45,13 @@ ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
         from_service_ = std::move(other.from_service_);
         reusable_ = other.reusable_;
         negotiated_version_ = other.negotiated_version_;
+        peer_capabilities_ = other.peer_capabilities_;
+        negotiated_capabilities_ = other.negotiated_capabilities_;
         methods_ = std::move(other.methods_);
         other.pid_ = -1;
         other.negotiated_version_ = 0;
+        other.peer_capabilities_ = 0;
+        other.negotiated_capabilities_ = 0;
     }
     return *this;
 }

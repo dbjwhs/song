@@ -23,3 +23,9 @@ target_include_directories(crash_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_executable(registry_service registry/registry_service.cpp)
 target_link_libraries(registry_service song)
 target_include_directories(registry_service PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# Capabilities service (advertises a non-zero capability set; also a fixture for
+# ServiceProcess capability-propagation tests)
+add_executable(caps_service caps/caps_service.cpp)
+target_link_libraries(caps_service song)
+target_include_directories(caps_service PRIVATE ${CMAKE_SOURCE_DIR}/include)

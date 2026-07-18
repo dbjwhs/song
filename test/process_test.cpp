@@ -153,6 +153,52 @@ TEST(ProcessTest, MoveAssignment) {
     proc2.terminate();
 }
 
+// Regression: a move must preserve negotiated capabilities, not just pid/version.
+// Before the fix, the move ctor and move-assign copied pid_, reusable_,
+// negotiated_version_, and methods_ but silently dropped peer_capabilities_ and
+// negotiated_capabilities_. Because ServiceManager builds every service via
+// make_unique<ServiceProcess>(ServiceProcess::spawn(...)) - which move-constructs
+// the heap object - any manager-started service reported zero capabilities
+// regardless of what it advertised. echo_service advertises no capabilities, so
+// the existing move tests could not observe the drop; caps_service does.
+TEST(ProcessTest, MovePreservesCapabilities) {
+    std::string caps_path = get_test_service_path("caps_service");
+    if (!std::filesystem::exists(caps_path)) {
+        GTEST_SKIP() << "caps_service not found at " << caps_path;
+    }
+
+    ServiceProcess proc1 = ServiceProcess::spawn(caps_path.c_str());
+
+    const u32 peer = proc1.peer_capabilities();
+    const u32 negotiated = proc1.negotiated_capabilities();
+    const u16 version = proc1.negotiated_version();
+    const size_t method_count = proc1.methods().size();
+    ASSERT_NE(peer, 0u) << "fixture must advertise a non-zero capability set";
+    EXPECT_TRUE(proc1.has_capability(wire::Capability::streaming));
+
+    // Move-construct: capabilities (and version/methods) must survive.
+    ServiceProcess proc2(std::move(proc1));
+    EXPECT_EQ(proc2.peer_capabilities(), peer);
+    EXPECT_EQ(proc2.negotiated_capabilities(), negotiated);
+    EXPECT_EQ(proc2.negotiated_version(), version);
+    EXPECT_EQ(proc2.methods().size(), method_count);
+    EXPECT_TRUE(proc2.has_capability(wire::Capability::streaming));
+
+    // The moved-from object must be reset so it no longer reports capabilities.
+    EXPECT_EQ(proc1.peer_capabilities(), 0u);
+    EXPECT_EQ(proc1.negotiated_capabilities(), 0u);
+
+    // Move-assign onto an already-spawned process: capabilities must survive too.
+    ServiceProcess proc3 = ServiceProcess::spawn(caps_path.c_str());
+    proc3 = std::move(proc2);
+    EXPECT_EQ(proc3.peer_capabilities(), peer);
+    EXPECT_EQ(proc3.negotiated_capabilities(), negotiated);
+    EXPECT_TRUE(proc3.has_capability(wire::Capability::streaming));
+    EXPECT_EQ(proc2.peer_capabilities(), 0u);
+
+    proc3.terminate();
+}
+
 // =============================================================================
 // Method List / Capability Exchange
 // =============================================================================
