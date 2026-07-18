@@ -44,6 +44,14 @@ namespace song {
 //                 throws ProtocolError on wire-level decoding errors
 //                 returns Buffer containing the response payload
 //
+// ServiceRuntime (service-side message loop):
+//   - handle_message()/run(): never let a decode exception escape the loop.
+//     A malformed or truncated request (call/create/prop_get/prop_set) is
+//     answered with an ErrorCode::decode_error reply; a malformed fire-and-forget
+//     message (release/subscribe/unsubscribe) is dropped silently so the reply
+//     is not mistaken for the response to the client's next request. A dispatcher
+//     that throws yields an error reply (unknown_method) instead of crashing.
+//
 // Process:
 //   - Lifecycle errors throw ServiceError (spawn_failed, service_crashed)
 //

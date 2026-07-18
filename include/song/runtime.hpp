@@ -176,6 +176,17 @@ private:
     void handle_message_fd(const wire::Header& hdr, Buffer& payload,
                           int write_fd,
                           std::unordered_set<i32>& tracked_objects);
+    // Actual dispatch bodies. The public handle_message / private
+    // handle_message_fd wrappers call these inside a try/catch so a decode
+    // failure on a malformed message becomes an error reply instead of an
+    // exception escaping into the service loop (which would std::terminate).
+    void handle_message_impl(const wire::Header& hdr, Buffer& payload,
+                            Transport& transport,
+                            std::unordered_set<i32>& tracked_objects,
+                            SubscriptionSet& subscriptions);
+    void handle_message_fd_impl(const wire::Header& hdr, Buffer& payload,
+                               int write_fd,
+                               std::unordered_set<i32>& tracked_objects);
     void client_loop(Transport& transport);
 };
 

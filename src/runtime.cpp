@@ -54,6 +54,22 @@ bool read_all(int fd, void* data, size_t len) {
     return true;
 }
 
+// Message types that carry a sequence_id and whose sender is blocked waiting on
+// a reply. Fire-and-forget types (release, subscribe, unsubscribe) must NOT get
+// an error reply on failure: that reply would be read as the response to the
+// client's next request and desynchronize the stream.
+bool message_expects_response(wire::MsgType type) {
+    switch (type) {
+        case wire::MsgType::call:
+        case wire::MsgType::create:
+        case wire::MsgType::prop_get:
+        case wire::MsgType::prop_set:
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // anonymous namespace
 
 void ServiceRuntime::register_dispatcher(u16 service_id,
@@ -207,6 +223,35 @@ void ServiceRuntime::release_connection_objects(std::unordered_set<i32>& tracked
 void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
                                        int write_fd,
                                        std::unordered_set<i32>& tracked_objects) {
+    // Decoding a malformed or truncated payload (e.g. a CALL whose payload is
+    // shorter than its method-call header) throws out of the dispatch body.
+    // This function is invoked directly from run()'s loop, which installs no
+    // handler, so an escaping exception would std::terminate the service -- a
+    // remote denial of service. Contain every failure here: reply with a decode
+    // error for request/response messages, and stay silent for fire-and-forget
+    // messages so the reply is not taken for the response to the next request.
+    // write_all() reports failure via its return value and does not throw.
+    try {
+        handle_message_fd_impl(hdr, payload, write_fd, tracked_objects);
+    } catch (const std::exception& e) {
+        if (message_expects_response(hdr.type)) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id, ErrorCode::decode_error, e.what());
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
+    } catch (...) {
+        if (message_expects_response(hdr.type)) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id, ErrorCode::decode_error,
+                "malformed message (non-standard exception)");
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
+    }
+}
+
+void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& payload,
+                                            int write_fd,
+                                            std::unordered_set<i32>& tracked_objects) {
     if (hdr.type == wire::MsgType::call) {
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
@@ -364,6 +409,36 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
                                    Transport& transport,
                                    std::unordered_set<i32>& tracked_objects,
                                    SubscriptionSet& subscriptions) {
+    // See handle_message_fd for the rationale. Decoding a malformed message must
+    // not escape into client_loop(). Reply with a decode error for
+    // request/response messages, stay silent for fire-and-forget ones. The error
+    // reply itself is guarded because transport.send() throws on a dead peer.
+    try {
+        handle_message_impl(hdr, payload, transport, tracked_objects, subscriptions);
+    } catch (const std::exception& e) {
+        if (message_expects_response(hdr.type)) {
+            try {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::decode_error, e.what());
+                transport.send(error_msg);
+            } catch (...) { /* peer gone; client_loop's next receive detects EOF */ }
+        }
+    } catch (...) {
+        if (message_expects_response(hdr.type)) {
+            try {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::decode_error,
+                    "malformed message (non-standard exception)");
+                transport.send(error_msg);
+            } catch (...) { /* peer gone */ }
+        }
+    }
+}
+
+void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payload,
+                                        Transport& transport,
+                                        std::unordered_set<i32>& tracked_objects,
+                                        SubscriptionSet& subscriptions) {
     // Property subscribe/unsubscribe (fire-and-forget, no response)
     if (hdr.type == wire::MsgType::prop_subscribe) {
         auto prop_hdr = wire::decode_property_header(payload);
