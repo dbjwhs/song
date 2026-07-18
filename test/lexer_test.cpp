@@ -206,6 +206,39 @@ TEST(LexerTest, HexIntegerUpperCase) {
     EXPECT_EQ(token->m_int_value, 0xAB);
 }
 
+// Boundary: the largest representable literals lex to exactly INT64_MAX.
+TEST(LexerTest, DecimalIntegerMaxInt64) {
+    Lexer lexer("9223372036854775807");
+    auto token = lexer.next_token();
+    ASSERT_TRUE(token.has_value());
+    EXPECT_EQ(token->m_type, TokenType::Integer);
+    EXPECT_EQ(token->m_int_value, 9223372036854775807LL);
+}
+
+TEST(LexerTest, HexIntegerMaxInt64) {
+    Lexer lexer("0x7FFFFFFFFFFFFFFF");
+    auto token = lexer.next_token();
+    ASSERT_TRUE(token.has_value());
+    EXPECT_EQ(token->m_int_value, 0x7FFFFFFFFFFFFFFFLL);
+}
+
+// An out-of-range literal must raise a LexerError (with a source location), not
+// let std::stoll's std::out_of_range escape and crash songc.
+TEST(LexerTest, DecimalIntegerOverflowThrowsLexerError) {
+    Lexer lexer("9223372036854775808");  // INT64_MAX + 1
+    EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
+TEST(LexerTest, HexIntegerOverflowThrowsLexerError) {
+    Lexer lexer("0xFFFFFFFFFFFFFFFF");  // exceeds INT64_MAX
+    EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
+TEST(LexerTest, ExtremeIntegerOverflowThrowsLexerError) {
+    Lexer lexer("999999999999999999999999999999");
+    EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
 // =============================================================================
 // Comments
 // =============================================================================

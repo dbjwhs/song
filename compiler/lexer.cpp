@@ -244,9 +244,11 @@ std::optional<Token> Lexer::lex_integer() {
     size_t start_column = m_column;
     std::string value;
     int64_t int_value = 0;
+    int base = 10;
 
     // Check for hex prefix
     if (peek() == '0' && (peek_next() == 'x' || peek_next() == 'X')) {
+        base = 16;
         value += peek(); advance(); // 0
         value += peek(); advance(); // x
 
@@ -258,15 +260,26 @@ std::optional<Token> Lexer::lex_integer() {
         if (value.length() == 2) {
             throw LexerError("Invalid hex literal: missing digits", m_line, start_column);
         }
-
-        int_value = std::stoll(value, nullptr, 16);
     } else {
         // Decimal
         while (!at_end() && std::isdigit(peek())) {
             value += peek();
             advance();
         }
-        int_value = std::stoll(value, nullptr, 10);
+    }
+
+    // std::stoll throws std::out_of_range for a literal that does not fit in
+    // int64_t. Surface that as a LexerError with a source location instead of
+    // letting an uncaught std::out_of_range escape and crash songc. (Full-width
+    // u64 values above INT64_MAX are not yet representable; they are reported as
+    // an out-of-range error rather than silently truncated.)
+    try {
+        int_value = std::stoll(value, nullptr, base);
+    } catch (const std::out_of_range&) {
+        throw LexerError("Integer literal out of range (maximum is INT64_MAX): " + value,
+                         m_line, start_column);
+    } catch (const std::invalid_argument&) {
+        throw LexerError("Invalid integer literal: " + value, m_line, start_column);
     }
 
     return Token(TokenType::Integer, value, m_line, start_column, int_value);

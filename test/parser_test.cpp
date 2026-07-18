@@ -183,6 +183,19 @@ TEST(ParserTest, FlagsWithHexValues) {
     EXPECT_EQ(*e.items[2].value, 0x04);
 }
 
+// An enum value that overflows int64_t must produce a clean compiler error
+// (LexerError, raised while lexing the literal) rather than an uncaught
+// std::out_of_range from std::stoll crashing songc.
+TEST(ParserTest, EnumValueOverflowThrowsCompilerError) {
+    Parser parser(R"(
+        namespace test;
+        enum Big {
+            huge = 99999999999999999999
+        }
+    )");
+    EXPECT_THROW(parser.parse(), LexerError);
+}
+
 TEST(ParserTest, EnumTrailingComma) {
     Parser parser(R"(
         namespace test;
