@@ -1,0 +1,79 @@
+# MIT License
+# Copyright (c) 2026 dbjwhs
+#
+# Continuous integration for Song: build under the project's strict warning
+# policy (-Wall -Wextra -Werror) and run the full test suite on Linux and
+# macOS, plus an AddressSanitizer/UndefinedBehaviorSanitizer pass.
+#
+# The Linux and macOS jobs invoke tooling/ci.sh so that CI and a developer's
+# local gate run byte-for-byte the same steps.
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (Ubuntu, GCC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # libssl-dev supplies OpenSSL for the HMAC layer. mbedTLS (TLS) and Avahi
+      # (mDNS) are intentionally omitted: the project targets mbedTLS 3.x/4.x
+      # CMake config which Ubuntu's apt does not ship, and Linux mDNS is not yet
+      # implemented. Those features compile out and their tests skip.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev
+      - name: Build and test (strict warnings, full suite)
+        run: ./tooling/ci.sh --clean
+
+  macos:
+    name: macOS (AppleClang)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # CommonCrypto (HMAC) and dns_sd/Bonjour (mDNS) are built in. mbedTLS is
+      # optional; install it so the TLS transport and its tests are exercised.
+      - name: Install optional TLS dependency
+        run: brew install mbedtls || true
+      - name: Build and test (strict warnings, full suite)
+        run: ./tooling/ci.sh --clean
+
+  sanitizers:
+    name: Sanitizers (ASan + UBSan, Debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev
+      # Debug build type avoids -O3/-flto/-march=native (Release-only in the
+      # root CMakeLists), which keeps sanitizer stack traces clean.
+      - name: Configure (Debug + ASan/UBSan)
+        run: >
+          cmake -S . -B build-asan
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-asan -j"$(nproc)"
+      # LeakSanitizer is disabled for now: Song forks service processes, and
+      # fork-without-exec paths in the process tests produce LSan noise that
+      # needs suppressions before it can gate CI. ASan (memory errors) and UBSan
+      # (undefined behavior) run and must be clean.
+      - name: Test
+        run: ctest --test-dir build-asan --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

@@ -4,6 +4,8 @@ A zero-dependency C++20 microservice framework with a custom IDL compiler, binar
 
 **705 tests (598 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~31K lines of C++20**
 
+[![CI](https://github.com/dbjwhs/song/actions/workflows/ci.yml/badge.svg)](https://github.com/dbjwhs/song/actions/workflows/ci.yml)
+
 ```song
 // calculator.song                     // Write an IDL definition...
 namespace calculator;
@@ -520,6 +522,10 @@ Every commit is expected to pass the same gate CI runs. Reproduce it locally:
 step. Because the project compiles with `-Werror`, a successful build implies
 zero warnings. Environmental skips (mDNS discovery when Bonjour/Avahi is
 unavailable, the codegen-compile test) are reported as `Skipped`, not failures.
+
+The same script runs in CI on Linux and macOS via GitHub Actions
+(`.github/workflows/ci.yml`), which also adds an AddressSanitizer +
+UndefinedBehaviorSanitizer pass.
 
 ## Performance
 
