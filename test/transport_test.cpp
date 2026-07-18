@@ -167,6 +167,45 @@ TEST(TcpTransportTest, ConnectToListener) {
     EXPECT_TRUE(connected);
 }
 
+// Coverage: sending on a TcpTransport whose peer has closed must throw
+// ServiceError, never terminate the process with SIGPIPE. The socket path is
+// already protected (MSG_NOSIGNAL on send, SO_NOSIGPIPE on the socket); this
+// guards that protection against regression. Reaching the assertion proves no
+// signal killed the process.
+TEST(TcpTransportTest, SendToClosedPeerThrowsNotSignal) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    TcpTransport client;
+    std::thread client_thread([&]() {
+        client.connect("127.0.0.1", port, 1000);
+    });
+    auto server = listener.accept(1000);
+    ASSERT_NE(server, nullptr);
+    client_thread.join();
+
+    // Drop the peer, then let the OS propagate the close.
+    server->close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    Buffer args;
+    encode_string(args, "after close");
+    Buffer msg = wire::create_call_message(1, 1, 1, args);
+
+    // The first send may still be buffered locally; a subsequent one must fail
+    // once the reset is seen. It must surface as an exception, not a signal.
+    bool threw = false;
+    try {
+        for (int ndx = 0; ndx < 1000 && !threw; ++ndx) {
+            client.send(msg);
+        }
+    } catch (const ServiceError&) {
+        threw = true;
+    }
+    EXPECT_TRUE(threw) << "send() to a closed TCP peer must throw, not raise SIGPIPE";
+}
+
 TEST(TcpTransportTest, SendReceive) {
     TcpListener listener;
     listener.listen(0);
