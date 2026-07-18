@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <song/pipe.hpp>
 #include <cstring>
+#include <cerrno>
+#include <csignal>
 #include <thread>
 #include <chrono>
 
@@ -190,4 +192,31 @@ TEST(PipeTest, ReadTimeoutFromInvalidPipe) {
     ssize_t n = pipe.read_timeout(buffer, 10, 100);
     EXPECT_EQ(n, -1);
     EXPECT_EQ(errno, EBADF);
+}
+
+// Pipe is a thin fd wrapper and provides no SIGPIPE protection of its own; the
+// caller (or, in practice, Song's spawn()/run() entry points) must ignore
+// SIGPIPE. With SIGPIPE ignored, a write to a pipe whose read end is fully
+// closed returns -1/EPIPE rather than terminating the process. This documents
+// that contract and guards it against regression.
+TEST(PipeTest, WriteToClosedReadEndReturnsEpipeWhenSigpipeIgnored) {
+    struct sigaction prev{};
+    struct sigaction ign{};
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    ASSERT_EQ(sigaction(SIGPIPE, &ign, &prev), 0);
+
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    read_pipe.close();  // fully close the read end
+
+    const char data = 'x';
+    errno = 0;
+    ssize_t n = write_pipe.write(&data, 1);
+    int saved_errno = errno;
+
+    // Restore the previous disposition so other tests are unaffected.
+    sigaction(SIGPIPE, &prev, nullptr);
+
+    EXPECT_EQ(n, -1);
+    EXPECT_EQ(saved_errno, EPIPE);
 }

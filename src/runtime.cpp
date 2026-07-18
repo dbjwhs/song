@@ -8,12 +8,28 @@
 #include <cstdlib>
 #include <iostream>
 #include <cerrno>
+#include <csignal>
 #include <thread>
 #include <algorithm>
 
 namespace song {
 
 namespace {
+
+// Ignore SIGPIPE (only if the host has not already chosen a disposition) so a
+// pipe-mode service writing a response to a parent that has gone away receives a
+// write error instead of being killed by the default SIGPIPE action. Services
+// spawned via ServiceProcess::spawn already inherit this; run() sets it too so
+// a service started standalone (e.g. its binary invoked directly) is protected.
+void install_sigpipe_ignore() {
+    struct sigaction current{};
+    if (sigaction(SIGPIPE, nullptr, &current) == 0 && current.sa_handler == SIG_DFL) {
+        struct sigaction ignore{};
+        ignore.sa_handler = SIG_IGN;
+        sigemptyset(&ignore.sa_mask);
+        sigaction(SIGPIPE, &ignore, nullptr);
+    }
+}
 
 // Write all bytes to fd, handling partial writes and EINTR
 bool write_all(int fd, const void* data, size_t len) {
@@ -659,6 +675,12 @@ void ServiceRuntime::client_loop(Transport& transport) {
 }
 
 [[noreturn]] void ServiceRuntime::run() {
+    // A pipe-mode service writes responses to its parent over stdout. If the
+    // parent dies, surface the failed write as an error rather than a fatal
+    // SIGPIPE. (Spawned services already inherit this; set it here for services
+    // started standalone.)
+    install_sigpipe_ignore();
+
     // Send init confirmation via stdout
     send_init_confirmation_fd(STDOUT_FILENO);
 

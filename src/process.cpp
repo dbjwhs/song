@@ -11,6 +11,25 @@
 
 namespace song {
 
+namespace {
+
+// Ignore SIGPIPE, but only if the host has not already chosen a disposition, so
+// a write to a pipe or socket whose peer has closed returns EPIPE to the caller
+// instead of terminating the process with the default SIGPIPE action. Song's
+// socket paths already pass MSG_NOSIGNAL / SO_NOSIGPIPE; the pipe path
+// (Pipe::write, used by ServiceProcess::send) cannot, so it relies on this.
+void install_sigpipe_ignore() {
+    struct sigaction current{};
+    if (sigaction(SIGPIPE, nullptr, &current) == 0 && current.sa_handler == SIG_DFL) {
+        struct sigaction ignore{};
+        ignore.sa_handler = SIG_IGN;
+        sigemptyset(&ignore.sa_mask);
+        sigaction(SIGPIPE, &ignore, nullptr);
+    }
+}
+
+} // namespace
+
 ServiceProcess::ServiceProcess(pid_t pid, Pipe to_service, Pipe from_service)
     : pid_(pid), to_service_(std::move(to_service)), from_service_(std::move(from_service)) {}
 
@@ -57,6 +76,12 @@ ServiceProcess& ServiceProcess::operator=(ServiceProcess&& other) noexcept {
 }
 
 ServiceProcess ServiceProcess::spawn(const char* executable) {
+    // Ensure a broken pipe surfaces as EPIPE (a thrown ServiceError from send())
+    // rather than killing this process. Set before fork so the child service
+    // inherits the ignored disposition across exec (ignored signals are
+    // preserved by execve).
+    install_sigpipe_ignore();
+
     // Create pipe pairs for bidirectional communication
     auto [parent_read, child_write] = Pipe::create_pair();
     auto [child_read, parent_write] = Pipe::create_pair();

@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 #include <song/song.hpp>
 #include <thread>
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
 
 using namespace song;
 
@@ -336,4 +339,39 @@ TEST_F(StreamE2ETest, LargeStream) {
         ASSERT_TRUE(reader.next());
         EXPECT_EQ(decode_i32(reader.chunk()), i);
     }
+}
+
+// Regression: the fd-based StreamWriter path must surface a broken pipe as a
+// ServiceError, not a fatal SIGPIPE. With SIGPIPE ignored, writing a chunk to a
+// pipe whose read end is closed fails the underlying write, which write()
+// reports and StreamWriter turns into a ServiceError.
+TEST(StreamWriterTest, FdWriteToBrokenPipeThrows) {
+    struct sigaction prev{};
+    struct sigaction ign{};
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    ASSERT_EQ(sigaction(SIGPIPE, &ign, &prev), 0);
+
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    ::close(fds[0]);  // close the read end
+
+    bool threw = false;
+    {
+        StreamWriter writer(fds[1], /*sequence_id=*/1);
+        Buffer chunk;
+        encode_i32(chunk, 42);
+        try {
+            writer.write(chunk);
+        } catch (const ServiceError&) {
+            threw = true;
+        }
+        // Destructor calls end(), which writes stream_end to the broken pipe but
+        // deliberately ignores the failure, so it does not throw during unwind.
+    }
+
+    ::close(fds[1]);
+    sigaction(SIGPIPE, &prev, nullptr);
+
+    EXPECT_TRUE(threw) << "StreamWriter fd write to a broken pipe must throw ServiceError";
 }

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <filesystem>
 #include <cstdlib>
+#include <csignal>
 
 using namespace song;
 
@@ -197,6 +198,47 @@ TEST(ProcessTest, MovePreservesCapabilities) {
     EXPECT_EQ(proc2.peer_capabilities(), 0u);
 
     proc3.terminate();
+}
+
+// Regression: writing to a service that has died must throw ServiceError, not
+// raise SIGPIPE and kill this (host) process. ServiceProcess::spawn() installs a
+// SIGPIPE-ignore so Pipe::write surfaces the broken pipe as -1/EPIPE, which
+// send() turns into a ServiceError. Reaching the assertion at all proves the
+// process was not terminated by a signal.
+TEST(ProcessTest, SendToDeadServiceThrowsNotSignal) {
+    std::string echo_path = get_test_service_path("echo_service");
+    if (!std::filesystem::exists(echo_path)) {
+        GTEST_SKIP() << "echo_service not found";
+    }
+
+    ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+
+    // Kill the service outright; proc still believes pid_ > 0 (not yet reaped).
+    ::kill(proc.pid(), SIGKILL);
+
+    // Wait until the OS has reaped the child so its pipe read end is closed.
+    // alive() performs the waitpid() reap.
+    for (int ndx = 0; ndx < 200 && proc.alive(); ++ndx) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    Buffer args;
+    encode_string(args, "hello");
+    Buffer msg = wire::create_call_message(1, 1, 1, args);
+
+    bool threw = false;
+    try {
+        // The read end is gone; a write must fail. Loop a few times in case the
+        // very first write still lands in a not-yet-torn-down buffer.
+        for (int ndx = 0; ndx < 100 && !threw; ++ndx) {
+            proc.send(msg);
+        }
+    } catch (const ServiceError&) {
+        threw = true;
+    }
+    EXPECT_TRUE(threw) << "send() to a dead service must throw, not raise SIGPIPE";
+
+    proc.terminate();
 }
 
 // =============================================================================

@@ -54,6 +54,10 @@ namespace song {
 //
 // Process:
 //   - Lifecycle errors throw ServiceError (spawn_failed, service_crashed)
+//   - SIGPIPE is ignored (only if the host has not already set its own
+//     disposition) when a service is spawned or run, so a write to a peer that
+//     has gone away surfaces as a ServiceError/EPIPE instead of terminating the
+//     process. The socket transports additionally pass MSG_NOSIGNAL/SO_NOSIGPIPE.
 //
 // Buffer:
 //   - encode_*:   throws std::runtime_error on capacity overflow
