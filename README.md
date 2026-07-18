@@ -26,6 +26,14 @@ CalculatorProxy calc(conn);
 std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 ```
 
+## About This Project
+
+Song is a personal learning codebase and a case study in AI-assisted systems engineering — an exploration of how far one developer working closely with [Claude Code](https://claude.com/claude-code) can push a non-trivial C++ systems project through sustained collaboration. The goal is to probe the 2026 state of AI-assisted development on something ambitious: a hand-rolled IDL compiler, custom binary wire protocol, process lifecycle management, TLS integration, and multi-transport RPC.
+
+Engineering discipline is real — zero warnings under `-Wall -Wextra -Werror`, 705 tests, documented error contracts, consistent code style. But this is not a framework seeking production adoption. Some self-imposed constraints drove choices a product team wouldn't pick, notably zero-dependency as a hard rule for the core runtime. Some advertised features are more polished than others.
+
+The value of this repo as a portfolio artifact isn't "built with AI" — it's the judgment visible in the result: architecture, scope management, reviewing AI output critically, and shipping honest caveats over aspirational marketing. What one engineer working closely with Claude Code can produce on a sustained multi-month effort in modern C++ is the question this repo answers.
+
 ## Features
 
 - **Zero Dependencies**: No protobuf, no gRPC, no reflection library. Just POSIX and platform crypto.

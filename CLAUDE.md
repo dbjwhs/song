@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## About This Project
+
+Song is a personal learning codebase — the user is exploring what sustained collaboration with Claude Code can produce on a non-trivial C++ systems project, and using this repo as a portfolio artifact demonstrating effective AI-assisted development. Engineering is taken seriously (zero warnings, documented contracts, extensive tests), but production adoption is not the goal.
+
+When making suggestions: prioritize engineering clarity, honest communication, and real bug fixes over feature expansion. Flag aspirational-doc drift — README or header-comment claims that exceed current implementation — when you spot it. The user values being able to demonstrate sound judgment (architecture, scope, AI output review) more than feature breadth.
+
 **IMPORTANT**: Always read the design document at `../new-world/SONG_DESIGN.md` when starting work on this project. It contains the complete architecture specification, wire protocol details, IDL grammar, testing strategy, and a prioritized punch list of 55+ implementation tasks.
 
 ## Reference Codebases
