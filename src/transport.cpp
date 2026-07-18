@@ -68,23 +68,29 @@ bool PipeTransport::receive(Buffer& msg, int timeout_ms) {
 
     msg.reset();
 
-    // Read header (16 bytes)
+    // Read the 16-byte header, accumulating across partial reads. A single
+    // read()/read_timeout() may return fewer than 16 bytes when the header is
+    // split across writes; loop here as TcpTransport and the payload path below
+    // do, rather than throwing a spurious "incomplete header" error. The timeout
+    // bounds the wait for the first bytes; once data is flowing the remaining
+    // header bytes are read blocking.
     std::byte header_buf[16];
-    ssize_t n = timeout_ms >= 0
-        ? from_peer_.read_timeout(header_buf, 16, timeout_ms)
-        : from_peer_.read(header_buf, 16);
-
-    if (n == 0) {
-        return false;  // EOF - peer disconnected
-    }
-    if (n < 0) {
-        if (errno == ETIMEDOUT) {
-            throw ServiceError("PipeTransport: read timeout");
+    size_t header_offset = 0;
+    ssize_t n = 0;
+    while (header_offset < 16) {
+        n = (header_offset == 0 && timeout_ms >= 0)
+            ? from_peer_.read_timeout(header_buf, 16, timeout_ms)
+            : from_peer_.read(header_buf + header_offset, 16 - header_offset);
+        if (n == 0) {
+            return false;  // EOF - peer disconnected
         }
-        throw ServiceError("PipeTransport: read failed: " + std::string(strerror(errno)));
-    }
-    if (n != 16) {
-        throw ProtocolError("PipeTransport: incomplete header received");
+        if (n < 0) {
+            if (errno == ETIMEDOUT) {
+                throw ServiceError("PipeTransport: read timeout");
+            }
+            throw ServiceError("PipeTransport: read failed: " + std::string(strerror(errno)));
+        }
+        header_offset += static_cast<size_t>(n);
     }
 
     msg.write(header_buf, 16);

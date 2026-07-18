@@ -42,6 +42,45 @@ TEST(PipeTransportTest, SendReceive) {
     EXPECT_EQ(hdr.sequence_id, 1u);
 }
 
+// Regression: receive() must accumulate a header that arrives split across
+// multiple writes, not throw a spurious "incomplete header" ProtocolError. A
+// single pipe read can return fewer than 16 bytes; TcpTransport already loops,
+// and this proves PipeTransport now does too.
+TEST(PipeTransportTest, ReceiveAccumulatesSplitHeader) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+
+    Buffer args;
+    encode_string(args, "split");
+    Buffer msg = wire::create_call_message(7, 1, 1, args);
+    ASSERT_GE(msg.size(), 16u);
+
+    // Write the first 8 header bytes, pause, then the remaining header + payload.
+    std::thread writer([&]() {
+        const auto* bytes = reinterpret_cast<const char*>(msg.data());
+        write_pipe.write(bytes, 8);
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        write_pipe.write(bytes + 8, msg.size() - 8);
+    });
+
+    Buffer received;
+    bool ok = receiver.receive(received, 1000);
+    writer.join();
+
+    EXPECT_TRUE(ok) << "receive() must accumulate a split header, not throw";
+    if (ok) {
+        auto hdr = wire::decode_header_validated(received);
+        EXPECT_EQ(hdr.type, wire::MsgType::call);
+        EXPECT_EQ(hdr.sequence_id, 7u);
+        // Payload is a method call: service_id, method_id, then the string arg.
+        auto [service_id, method_id] = wire::decode_method_call_header(received);
+        EXPECT_EQ(service_id, 1u);
+        EXPECT_EQ(method_id, 1u);
+        EXPECT_EQ(decode_string(received), "split");
+    }
+}
+
 TEST(PipeTransportTest, IsConnected) {
     auto [read_pipe, write_pipe] = Pipe::create_pair();
     auto [read_pipe2, write_pipe2] = Pipe::create_pair();
