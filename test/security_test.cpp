@@ -486,6 +486,56 @@ TEST(SecureTransportTest, OversizedPayloadRejected) {
     EXPECT_THROW(sender.send(oversized), SecurityError);
 }
 
+// A 16-byte header that declares a moderate payload the buffer does not contain.
+// payload_size is well under kMaxPayloadSize - kHmacTagSize, so it passes the
+// overflow check; before the buffer-size check was added, send() copied
+// payload_size bytes from msg.data()+16, reading far past the message (an
+// out-of-bounds read that leaks adjacent memory into the authenticated output).
+// Under AddressSanitizer this test would trip a heap/stack overflow without the
+// fix; with it, send() rejects cleanly.
+TEST(SecureTransportTest, DeclaredPayloadLargerThanBufferRejected) {
+    auto inner = std::make_unique<PipeTransport>(Pipe{}, Pipe{});
+    SecurityConfig config("test-shared-secret-key-32bytes!!");
+    SecureTransport sender(std::move(inner), std::move(config));
+
+    wire::Header hdr{};
+    hdr.magic        = wire::kMagic;
+    hdr.type         = wire::MsgType::call;
+    hdr.sequence_id  = 1;
+    hdr.payload_size = 5000;  // the buffer will carry no payload
+
+    Buffer msg;
+    wire::encode_header(msg, hdr);
+    ASSERT_EQ(msg.size(), 16u);
+
+    EXPECT_THROW(sender.send(msg), SecurityError);
+}
+
+// An empty buffer has no header at all; send() must reject it rather than read
+// msg.data()+8 (uninitialized) and copy 16 bytes it does not have.
+TEST(SecureTransportTest, EmptyBufferRejected) {
+    auto inner = std::make_unique<PipeTransport>(Pipe{}, Pipe{});
+    SecurityConfig config("test-shared-secret-key-32bytes!!");
+    SecureTransport sender(std::move(inner), std::move(config));
+
+    Buffer empty;
+    EXPECT_THROW(sender.send(empty), SecurityError);
+}
+
+// A buffer shorter than the 16-byte header must be rejected, not partially read.
+TEST(SecureTransportTest, SubHeaderBufferRejected) {
+    auto inner = std::make_unique<PipeTransport>(Pipe{}, Pipe{});
+    SecurityConfig config("test-shared-secret-key-32bytes!!");
+    SecureTransport sender(std::move(inner), std::move(config));
+
+    Buffer short_buf;
+    const char junk[10] = {0};
+    short_buf.write(junk, sizeof(junk));
+    ASSERT_LT(short_buf.size(), 16u);
+
+    EXPECT_THROW(sender.send(short_buf), SecurityError);
+}
+
 // A message delivered over the wire whose payload_size is smaller than
 // kHmacTagSize (8 bytes) cannot be split into data + tag, so receive()
 // must throw SecurityError before attempting the split.

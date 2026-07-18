@@ -93,6 +93,13 @@ void SecureTransport::send(const Buffer& msg) {
         return;
     }
 
+    // A hand-built or corrupt Buffer must not drive out-of-bounds reads. Require
+    // a full 16-byte wire header before reading the payload_size field at
+    // offset 8 or copying the header.
+    if (msg.size() < 16) {
+        throw SecurityError("SecureTransport: message smaller than the 16-byte wire header");
+    }
+
     // Compute HMAC over the raw wire bytes of the original message
     HmacTag tag = compute_hmac(config_.key(), msg);
 
@@ -103,6 +110,13 @@ void SecureTransport::send(const Buffer& msg) {
     // Validate payload_size won't overflow when adding HMAC tag
     if (payload_size > wire::kMaxPayloadSize - kHmacTagSize) {
         throw SecurityError("payload too large for HMAC authentication");
+    }
+
+    // The buffer must actually contain the payload its header declares; otherwise
+    // the copy below would read past the end of the message (out-of-bounds read /
+    // information leak into the authenticated output).
+    if (msg.size() - 16 < payload_size) {
+        throw SecurityError("SecureTransport: message shorter than its declared payload_size");
     }
 
     // Build secure message: copy original header, patch payload_size, append payload + tag
