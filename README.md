@@ -504,6 +504,23 @@ All core features are complete and tested:
 - MIT License headers on all source files (enforced by pre-commit hook)
 - Trailing newlines enforced (pre-commit hook)
 
+## Continuous Integration
+
+Every commit is expected to pass the same gate CI runs. Reproduce it locally:
+
+```bash
+# Clean from-scratch build (strict -Wall -Wextra -Werror) + full test suite
+./tooling/ci.sh --clean
+
+# Or reuse an existing build directory
+./tooling/ci.sh
+```
+
+`tooling/ci.sh` configures, builds, and runs the full `ctest` suite in one
+step. Because the project compiles with `-Werror`, a successful build implies
+zero warnings. Environmental skips (mDNS discovery when Bonjour/Avahi is
+unavailable, the codegen-compile test) are reported as `Skipped`, not failures.
+
 ## Performance
 
 Measured on Apple M4 (macOS, Release build with `-O3 -march=native -flto`):
