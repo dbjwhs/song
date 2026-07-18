@@ -15,6 +15,21 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest)
 
+# GoogleTest is a third-party dependency fetched via FetchContent. The root
+# CMakeLists applies -Wall -Wextra -Werror project-wide, and those flags also
+# land on GoogleTest's own translation units. Newer compilers emit warnings
+# inside GoogleTest's headers (e.g. AppleClang 21 raises -Wcharacter-conversion
+# in gtest-printers.h) which -Werror then promotes to hard errors, breaking a
+# clean from-scratch build of the test targets. Song's strict warning policy is
+# for Song's own code, not vendored third-party sources, so silence warnings on
+# the GoogleTest/GoogleMock targets. First-party targets (song, songc, the test
+# executables, sing, examples, fuzz) keep -Wall -Wextra -Werror unchanged.
+foreach(_gtest_target gtest gtest_main gmock gmock_main)
+    if(TARGET ${_gtest_target})
+        target_compile_options(${_gtest_target} PRIVATE -w)
+    endif()
+endforeach()
+
 # Enable testing
 include(GoogleTest)
 
