@@ -209,6 +209,42 @@ TEST_F(ObjectRegistryTest, CreateUnknownType) {
     EXPECT_THROW(registry.create_object(999, 0, empty), ServiceError);
 }
 
+// A factory that returns null must raise ServiceError WITHOUT mutating registry
+// state: the null check runs before next_id_-- and the objects_ insert, so a
+// failed create must not consume an object id or leave a partial entry.
+TEST_F(ObjectRegistryTest, CreateFactoryReturnsNull) {
+    registry.register_factory(1, [](u16 constructor_id, Buffer& args) -> Object* {
+        (void)args;
+        if (constructor_id == 9) {
+            return nullptr;
+        }
+        return new TestObject(0);
+    });
+
+    Buffer empty;
+    i32 id1 = registry.create_object(1, 0, empty);
+    EXPECT_EQ(id1, -1);
+    EXPECT_EQ(registry.size(), 1u);
+
+    try {
+        registry.create_object(1, 9, empty);
+        FAIL() << "expected ServiceError when the factory returns null";
+    } catch (const ServiceError& e) {
+        const std::string what = e.what();
+        // Distinguish the factory-null message from the unknown-type message,
+        // and confirm it names the type_id.
+        EXPECT_NE(what.find("null"), std::string::npos);
+        EXPECT_NE(what.find("1"), std::string::npos);
+    }
+    EXPECT_EQ(registry.size(), 1u);  // nothing inserted by the failed create
+
+    // The next valid create gets id -2, proving next_id_ was not decremented by
+    // the failed create.
+    i32 id2 = registry.create_object(1, 0, empty);
+    EXPECT_EQ(id2, -2);
+    EXPECT_EQ(registry.size(), 2u);
+}
+
 // =============================================================================
 // Object Tests
 // =============================================================================
