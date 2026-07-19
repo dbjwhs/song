@@ -609,3 +609,52 @@ TEST(ResolverTest, DuplicateClassMethod) {
     EXPECT_TRUE(any_error_contains(resolver, "Duplicate method"));
 }
 
+// =============================================================================
+// Enum value collisions and inherited-field shadowing
+// (These validation paths existed but had no test coverage.)
+// =============================================================================
+
+// Two enum items with the same explicit value collide.
+TEST(ResolverTest, DuplicateEnumValueExplicit) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        enum E { a = 1, b = 1 }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "collides"));
+}
+
+// Auto-increment interacts with explicit values: 'a' auto-assigns 0, then 'b'
+// explicitly takes 0 -> collision.
+TEST(ResolverTest, DuplicateEnumValueAutoIncrement) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        enum E { a, b = 0 }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "collides"));
+}
+
+// A derived struct field that shadows an inherited base field is rejected.
+TEST(ResolverTest, InheritedFieldShadowingStruct) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        struct Base { i32 x; }
+        struct Derived : Base { i32 x; }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "shadows inherited field"));
+}
+
+// The same detection applies to error types (the error branch of the ancestor
+// walk in check_duplicate_fields).
+TEST(ResolverTest, InheritedFieldShadowingError) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        error B { string m; }
+        error S : B { string m; }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "shadows inherited field"));
+}
+
