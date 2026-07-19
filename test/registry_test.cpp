@@ -6,6 +6,8 @@
 #include <song/transport.hpp>
 #include <song/wire.hpp>
 #include <thread>
+#include <chrono>
+#include <vector>
 
 using namespace song;
 
@@ -453,4 +455,86 @@ TEST_F(RegistryE2ETest, ConnectionFailure) {
 
     // Operations should fail gracefully
     EXPECT_FALSE(client.register_service({"test", "localhost", 8080}));
+}
+
+// =============================================================================
+// RegistryClient hardening: a malformed/hostile registry response must not
+// crash the client (uncaught buffer underflow) or trigger a huge allocation.
+// =============================================================================
+
+// Runs a one-shot mock registry: accept a connection, read the client's request,
+// and reply with a result message carrying the given (possibly hostile) payload.
+static void serve_one_reply(TcpListener& listener, const Buffer& payload) {
+    auto conn = listener.accept(5000);
+    if (!conn) {
+        return;
+    }
+    Buffer req;
+    if (!conn->receive(req, 5000)) {
+        return;
+    }
+    auto hdr = wire::decode_header(req);
+    Buffer result = wire::create_result_message(hdr.sequence_id, payload);
+    conn->send(result);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    conn->close();
+}
+
+TEST(RegistryClientHardeningTest, ListAllOversizedCountReturnsEmpty) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    // ListAll result claiming 0xFFFFFFFF entries but carrying no element data.
+    Buffer payload;
+    encode_u32(payload, 0xFFFFFFFFu);
+    std::thread server([&]() { serve_one_reply(listener, payload); });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    std::vector<ServiceInfo> services;
+    EXPECT_NO_THROW(services = client.list_all());
+    EXPECT_TRUE(services.empty());
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+TEST(RegistryClientHardeningTest, RegisterEmptyReplyReturnsFalse) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    Buffer empty;  // result with a zero-length payload
+    std::thread server([&]() { serve_one_reply(listener, empty); });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    bool ok = true;
+    EXPECT_NO_THROW(ok = client.register_service({"svc", "127.0.0.1", 8080}));
+    EXPECT_FALSE(ok);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+TEST(RegistryClientHardeningTest, DiscoverTruncatedReplyReturnsInvalid) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    // Three bytes: far too short for a ServiceInfo (needs >= 10).
+    Buffer payload;
+    const unsigned char junk[3] = {1, 2, 3};
+    payload.write(junk, sizeof(junk));
+    std::thread server([&]() { serve_one_reply(listener, payload); });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    ServiceInfo info{"placeholder", "placeholder", 1};
+    EXPECT_NO_THROW(info = client.discover("svc"));
+    EXPECT_FALSE(info.is_valid());
+
+    client.close();
+    listener.close();
+    server.join();
 }

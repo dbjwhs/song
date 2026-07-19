@@ -4,6 +4,7 @@
 #include "song/registry.hpp"
 #include "song/wire.hpp"
 #include "song/error.hpp"
+#include <algorithm>
 
 namespace song {
 
@@ -144,7 +145,11 @@ bool RegistryClient::register_service(const ServiceInfo& info) {
         return false;
     }
 
-    return decode_u8(response) != 0;
+    try {
+        return decode_u8(response) != 0;
+    } catch (const std::exception&) {
+        return false;  // Malformed or short response from the registry.
+    }
 }
 
 bool RegistryClient::unregister_service(const std::string& name) {
@@ -156,7 +161,11 @@ bool RegistryClient::unregister_service(const std::string& name) {
         return false;
     }
 
-    return decode_u8(response) != 0;
+    try {
+        return decode_u8(response) != 0;
+    } catch (const std::exception&) {
+        return false;  // Malformed or short response from the registry.
+    }
 }
 
 ServiceInfo RegistryClient::discover(const std::string& name) {
@@ -168,7 +177,11 @@ ServiceInfo RegistryClient::discover(const std::string& name) {
         return {};
     }
 
-    return ServiceInfo::decode(response);
+    try {
+        return ServiceInfo::decode(response);
+    } catch (const std::exception&) {
+        return {};  // Truncated/malformed response -> invalid ServiceInfo.
+    }
 }
 
 std::vector<ServiceInfo> RegistryClient::list_all() {
@@ -179,15 +192,22 @@ std::vector<ServiceInfo> RegistryClient::list_all() {
         return {};
     }
 
-    u32 count = decode_u32(response);
-    std::vector<ServiceInfo> services;
-    services.reserve(count);
+    try {
+        u32 count = decode_u32(response);
+        std::vector<ServiceInfo> services;
+        // Bound the reservation by what the payload could actually contain. Each
+        // ServiceInfo is at least 10 bytes (two 4-byte length prefixes + a 2-byte
+        // port), so a hostile or corrupt count cannot drive a huge allocation.
+        size_t max_possible = response.remaining() / 10 + 1;
+        services.reserve(std::min<size_t>(count, max_possible));
 
-    for (u32 i = 0; i < count; ++i) {
-        services.push_back(ServiceInfo::decode(response));
+        for (u32 i = 0; i < count; ++i) {
+            services.push_back(ServiceInfo::decode(response));
+        }
+        return services;
+    } catch (const std::exception&) {
+        return {};  // Truncated or malformed ListAll response.
     }
-
-    return services;
 }
 
 bool RegistryClient::heartbeat(const std::string& name) {
@@ -199,7 +219,11 @@ bool RegistryClient::heartbeat(const std::string& name) {
         return false;
     }
 
-    return decode_u8(response) != 0;
+    try {
+        return decode_u8(response) != 0;
+    } catch (const std::exception&) {
+        return false;  // Malformed or short response from the registry.
+    }
 }
 
 // =============================================================================
