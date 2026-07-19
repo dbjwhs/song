@@ -77,17 +77,78 @@ TEST(CodegenTest, StructWithArrayField) {
     EXPECT_NE(code.find("std::vector<i32> values;"), std::string::npos);
 }
 
-TEST(CodegenTest, StructWithOptionalField) {
-    std::string code = parse_and_generate(R"(
+// Optional codegen is not implemented. songc must reject a struct with an
+// optional field with a clear CodegenError rather than emitting code that
+// references the nonexistent encode_optional/decode_optional runtime helpers.
+TEST(CodegenTest, OptionalFieldRejected) {
+    EXPECT_THROW(parse_and_generate(R"(
         namespace test;
         struct Person {
             string name;
             string? nickname;
         }
-    )");
+    )"), CodegenError);
+}
 
-    EXPECT_NE(code.find("std::string name;"), std::string::npos);
-    EXPECT_NE(code.find("std::optional<std::string> nickname;"), std::string::npos);
+// An enum used as a value type has no generated serializer (only the enum class
+// definition is emitted), so it must be rejected rather than emit calls to a
+// nonexistent encode_<Enum>/decode_<Enum>.
+TEST(CodegenTest, EnumTypedFieldRejected) {
+    EXPECT_THROW(parse_and_generate(R"(
+        namespace test;
+        enum Status { idle, running }
+        struct Job {
+            Status state;
+        }
+    )"), CodegenError);
+}
+
+TEST(CodegenTest, ArrayOfEnumRejected) {
+    EXPECT_THROW(parse_and_generate(R"(
+        namespace test;
+        enum Status { idle, running }
+        struct Log {
+            Status[] history;
+        }
+    )"), CodegenError);
+}
+
+// A multi-dimensional array of a struct would route to
+// encode_array<std::vector<Point>>, which recurses to encode_array<Point> and
+// trips a runtime static_assert. Reject it at generate time.
+TEST(CodegenTest, MultiDimStructArrayRejected) {
+    EXPECT_THROW(parse_and_generate(R"(
+        namespace test;
+        struct Point { i32 x; i32 y; }
+        struct Grid {
+            Point[][] cells;
+        }
+    )"), CodegenError);
+}
+
+// Contrast: a primitive multi-dimensional array remains supported; it routes to
+// the runtime template, which handles primitive element types.
+TEST(CodegenTest, PrimitiveMultiDimArrayStillGenerates) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Matrix {
+            f64[][] data;
+        }
+    )");
+    EXPECT_NE(code.find("struct Matrix"), std::string::npos);
+}
+
+// Contrast: a one-dimensional array of a struct remains supported via the
+// generated encode_array_<T> helper.
+TEST(CodegenTest, StructArrayStillGenerates) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Point { i32 x; i32 y; }
+        struct Path {
+            Point[] points;
+        }
+    )");
+    EXPECT_NE(code.find("encode_array_Point"), std::string::npos);
 }
 
 TEST(CodegenTest, StructWith2DArray) {

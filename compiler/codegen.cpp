@@ -10,6 +10,13 @@ namespace song::compiler {
 
 using u16 = std::uint16_t;
 
+void CodeGenerator::collect_enum_names(const Namespace& ns) {
+    m_enum_names.clear();
+    for (const auto& e : ns.enums) {
+        m_enum_names.insert(e.name);
+    }
+}
+
 // Generate encode call for a type
 std::string CodeGenerator::encode_call(const Type& t, const std::string& expr,
                                        const std::string& buf_name) {
@@ -23,18 +30,34 @@ std::string CodeGenerator::encode_call(const Type& t, const std::string& expr,
         // For user-defined types (structs), use generated helpers
         // For primitives and nested arrays, use template
         if (!elem.is_array && !is_primitive(elem)) {
-            return "encode_array_" + get_user_type(elem) + "(" + buf_name + ", " + expr + ")";
+            const std::string& ut = get_user_type(elem);
+            if (m_enum_names.count(ut)) {
+                throw CodegenError("cannot serialize array of enum '" + ut +
+                    "': enum-typed values are not supported by the C++ code generator "
+                    "(use the enum's underlying integer type in the IDL)");
+            }
+            return "encode_array_" + ut + "(" + buf_name + ", " + expr + ")";
+        } else if (elem.is_array && !is_primitive(elem)) {
+            // Multi-dimensional array of a user type routes to
+            // encode_array<std::vector<T>>, which recurses to encode_array<T> and
+            // trips a static_assert in the runtime for non-primitive T.
+            throw CodegenError("multi-dimensional arrays of user-defined types (e.g. '" +
+                get_user_type(elem) + "[][]') are not supported by the C++ code generator");
         } else {
-            // Use template with element type (handles primitives and nested vectors)
+            // Primitive element (possibly nested): the runtime template handles it.
             return "encode_array<" + type_to_cpp(elem) + ">(" + buf_name + ", " + expr + ")";
         }
     }
 
     if (t.is_optional) {
+        // The generator would emit encode_optional(), which the runtime does not
+        // provide. Optional codegen is not implemented; fail clearly rather than
+        // emitting code that will not compile.
         Type inner = t;
         inner.is_optional = false;
-        return "encode_optional(" + buf_name + ", " + expr + ", [&](const auto& v) { " +
-               encode_call(inner, "v", buf_name) + "; })";
+        throw CodegenError("optional type '" + type_to_cpp(inner) +
+            "?' is not supported by the C++ code generator "
+            "(no encode_optional runtime helper exists)");
     }
 
     if (is_primitive(t)) {
@@ -58,7 +81,12 @@ std::string CodeGenerator::encode_call(const Type& t, const std::string& expr,
     }
 
     // User-defined type
-    return "encode_" + get_user_type(t) + "(" + buf_name + ", " + expr + ")";
+    const std::string& ut = get_user_type(t);
+    if (m_enum_names.count(ut)) {
+        throw CodegenError("enum-typed value '" + ut + "' is not supported by the C++ "
+            "code generator (use the enum's underlying integer type in the IDL)");
+    }
+    return "encode_" + ut + "(" + buf_name + ", " + expr + ")";
 }
 
 // Generate decode call for a type
@@ -73,7 +101,16 @@ std::string CodeGenerator::decode_call(const Type& t, const std::string& buf_nam
         // For user-defined types (structs), use generated helpers
         // For primitives and nested arrays, use template
         if (!elem.is_array && !is_primitive(elem)) {
-            return "decode_array_" + get_user_type(elem) + "(" + buf_name + ")";
+            const std::string& ut = get_user_type(elem);
+            if (m_enum_names.count(ut)) {
+                throw CodegenError("cannot serialize array of enum '" + ut +
+                    "': enum-typed values are not supported by the C++ code generator "
+                    "(use the enum's underlying integer type in the IDL)");
+            }
+            return "decode_array_" + ut + "(" + buf_name + ")";
+        } else if (elem.is_array && !is_primitive(elem)) {
+            throw CodegenError("multi-dimensional arrays of user-defined types (e.g. '" +
+                get_user_type(elem) + "[][]') are not supported by the C++ code generator");
         } else {
             // Use template with element type (handles primitives and nested vectors)
             return "decode_array<" + type_to_cpp(elem) + ">(" + buf_name + ")";
@@ -81,10 +118,12 @@ std::string CodeGenerator::decode_call(const Type& t, const std::string& buf_nam
     }
 
     if (t.is_optional) {
+        // Symmetric with encode_call: decode_optional has no runtime helper.
         Type inner = t;
         inner.is_optional = false;
-        return "decode_optional<" + type_to_cpp(inner) + ">(" + buf_name + ", [&]() { return " +
-               decode_call(inner, buf_name) + "; })";
+        throw CodegenError("optional type '" + type_to_cpp(inner) +
+            "?' is not supported by the C++ code generator "
+            "(no decode_optional runtime helper exists)");
     }
 
     if (is_primitive(t)) {
@@ -108,7 +147,12 @@ std::string CodeGenerator::decode_call(const Type& t, const std::string& buf_nam
     }
 
     // User-defined type
-    return "decode_" + get_user_type(t) + "(" + buf_name + ")";
+    const std::string& ut = get_user_type(t);
+    if (m_enum_names.count(ut)) {
+        throw CodegenError("enum-typed value '" + ut + "' is not supported by the C++ "
+            "code generator (use the enum's underlying integer type in the IDL)");
+    }
+    return "decode_" + ut + "(" + buf_name + ")";
 }
 
 // =============================================================================
@@ -785,6 +829,7 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
 // =============================================================================
 
 std::string CodeGenerator::generate_header(const Namespace& ns) {
+    collect_enum_names(ns);
     std::ostringstream out;
 
     out << "// Generated by songc - DO NOT EDIT\n";
@@ -894,6 +939,7 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
 }
 
 std::string CodeGenerator::generate_types_header(const Namespace& ns) {
+    collect_enum_names(ns);
     std::ostringstream out;
 
     out << "// Generated by songc - DO NOT EDIT\n";
@@ -938,6 +984,7 @@ std::string CodeGenerator::generate_types_header(const Namespace& ns) {
 }
 
 std::string CodeGenerator::generate_wire_impl(const Namespace& ns) {
+    collect_enum_names(ns);
     std::ostringstream out;
 
     out << "// Generated by songc - DO NOT EDIT\n";
@@ -959,6 +1006,7 @@ std::string CodeGenerator::generate_wire_impl(const Namespace& ns) {
 }
 
 std::string CodeGenerator::generate_client_header(const Namespace& ns) {
+    collect_enum_names(ns);
     std::ostringstream out;
     out << "// Generated by songc - DO NOT EDIT\n";
     out << "// Client proxies for " << ns.name << "\n";
@@ -979,6 +1027,7 @@ std::string CodeGenerator::generate_client_header(const Namespace& ns) {
 }
 
 std::string CodeGenerator::generate_server_header(const Namespace& ns) {
+    collect_enum_names(ns);
     std::ostringstream out;
     out << "// Generated by songc - DO NOT EDIT\n";
     out << "// Server skeletons for " << ns.name << "\n";

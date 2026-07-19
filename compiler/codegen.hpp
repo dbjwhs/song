@@ -5,12 +5,24 @@
 
 #include "ast.hpp"
 #include <string>
+#include <set>
+#include <stdexcept>
 
 namespace song::compiler {
 
+// Thrown when the IDL uses a construct the C++ code generator does not support
+// (e.g. optional types, enum-typed values, or multi-dimensional arrays of
+// user-defined types). Reported by songc as a normal compiler error instead of
+// silently emitting C++ that will not compile.
+class CodegenError : public std::runtime_error {
+public:
+    explicit CodegenError(const std::string& message) : std::runtime_error(message) {}
+};
+
 // Code generator for Song IDL
 class CodeGenerator {
-    std::string m_namespace;  // Current namespace being generated
+    std::string m_namespace;             // Current namespace being generated
+    std::set<std::string> m_enum_names;  // Enum type names in the current namespace
 
 public:
     // Generate complete header (all-in-one for simplicity)
@@ -54,6 +66,10 @@ private:
     std::string generate_method_params(const std::vector<Param>& params);
     std::string generate_encode_params(const std::vector<Param>& params);
     std::string generate_decode_params(const std::vector<Param>& params);
+
+    // Record the enum type names of a namespace so encode_call/decode_call can
+    // reject enum-typed values (no enum serializers are generated).
+    void collect_enum_names(const Namespace& ns);
 
     // Type-specific helpers (type_to_cpp/type_to_param are free functions in ast.hpp)
     std::string encode_call(const Type& t, const std::string& expr,

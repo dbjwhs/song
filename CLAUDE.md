@@ -125,8 +125,12 @@ Buffer resp = conn.call(service_id, method_id, request);
 
 Not yet implemented:
 - Streaming support, property support
-- Multi-dimensional arrays in codegen
-- Optional types in codegen
+- Optional types (`T?`) in C++ codegen -- songc rejects these with a CodegenError
+- Enum types used as a value (field/parameter/return) in C++ codegen -- rejected
+  with a CodegenError; use the enum's underlying integer type in the IDL instead
+- Multi-dimensional arrays of user-defined types (`Struct[][]`) in C++ codegen --
+  rejected with a CodegenError (primitive multi-dimensional arrays and
+  one-dimensional arrays of structs are supported)
 
 ## Pre-commit Hooks
 
