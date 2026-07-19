@@ -5,6 +5,9 @@
 #include <song/logging.hpp>
 #include <vector>
 #include <string>
+#include <thread>
+#include <atomic>
+#include <chrono>
 
 using namespace song;
 
@@ -393,4 +396,65 @@ TEST_F(LoggingTest, UserHandlerSameAsBuiltIn) {
 
     ASSERT_EQ(messages.size(), 1);
     EXPECT_EQ(messages[0], "user message");
+}
+
+// =============================================================================
+// Reentrancy: a handler may call Log APIs without deadlocking
+// =============================================================================
+
+// A handler that logs used to re-lock the registry mutex (handlers ran while it
+// was held) and self-deadlock. The nested message is now dropped and the handler
+// runs exactly once. A watchdog makes a regression fail rather than hang CI.
+TEST_F(LoggingTest, ReentrantHandlerDoesNotDeadlock) {
+    std::atomic<int> handler_calls{0};
+    Log::add_handler("reenter", [&](const LogEntry&) {
+        ++handler_calls;
+        Log::info("nested message from within a handler");
+    });
+
+    std::atomic<bool> done{false};
+    std::thread worker([&] {
+        Log::warn("outer");
+        done = true;
+    });
+
+    for (int i = 0; i < 300 && !done.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const bool completed = done.load();
+    if (completed) {
+        worker.join();
+    } else {
+        worker.detach();  // deadlocked; leak the thread so the assert can report
+    }
+
+    ASSERT_TRUE(completed) << "logging deadlocked on a reentrant handler";
+    // The nested Log::info was dropped, so the handler ran once, not recursively.
+    EXPECT_EQ(handler_calls.load(), 1);
+}
+
+// A handler that adds/removes handlers must not deadlock either: add_handler
+// locks the same mutex that used to be held during dispatch.
+TEST_F(LoggingTest, HandlerCanModifyHandlerSetWithoutDeadlock) {
+    Log::add_handler("mutator", [&](const LogEntry&) {
+        Log::add_handler("added_from_handler", [](const LogEntry&) {});
+    });
+
+    std::atomic<bool> done{false};
+    std::thread worker([&] {
+        Log::warn("trigger");
+        done = true;
+    });
+
+    for (int i = 0; i < 300 && !done.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const bool completed = done.load();
+    if (completed) {
+        worker.join();
+    } else {
+        worker.detach();
+    }
+
+    EXPECT_TRUE(completed) << "logging deadlocked when a handler modified the handler set";
 }

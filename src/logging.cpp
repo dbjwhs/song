@@ -3,6 +3,7 @@
 
 #include <song/logging.hpp>
 #include <unordered_map>
+#include <vector>
 #include <mutex>
 #include <atomic>
 #include <cstdio>
@@ -141,24 +142,47 @@ void Log::emit(LogLevel level, std::string_view msg, const std::source_location&
         return;
     }
 
+    // A handler that itself calls a Log method would re-enter emit(). Handlers
+    // previously ran while the registry mutex was held, so such a handler would
+    // deadlock re-locking the non-recursive mutex (and could recurse without
+    // bound). Drop log messages emitted from within a handler on this thread.
+    static thread_local bool in_dispatch = false;
+    if (in_dispatch) {
+        return;
+    }
+
     // Ensure initialized (registers default console handler)
     ensure_init();
 
     // Build entry
     LogEntry entry{level, msg, loc};
 
-    // Dispatch to all handlers
-    auto& s = state();
-    std::lock_guard<std::mutex> lock(s.mutex);
-
-    for (const auto& [name, handler] : s.handlers) {
-        if (handler) {
-            try {
-                handler(entry);
-            } catch (...) {
-                // Don't let handler exceptions crash the app
-                // Could log to stderr here, but that might cause recursion
+    // Snapshot the handlers under the lock, then invoke them WITHOUT holding it,
+    // so a handler may safely call other Log APIs -- including add_handler() and
+    // remove_handler() -- without deadlocking on the same non-recursive mutex.
+    std::vector<LogHandler> snapshot;
+    {
+        auto& s = state();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        snapshot.reserve(s.handlers.size());
+        for (const auto& [name, handler] : s.handlers) {
+            if (handler) {
+                snapshot.push_back(handler);
             }
+        }
+    }
+
+    in_dispatch = true;
+    struct ResetGuard {
+        bool& flag;
+        ~ResetGuard() { flag = false; }
+    } reset_guard{in_dispatch};
+
+    for (const auto& handler : snapshot) {
+        try {
+            handler(entry);
+        } catch (...) {
+            // Don't let handler exceptions crash the app.
         }
     }
 }
