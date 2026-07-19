@@ -189,6 +189,9 @@ void Resolver::validate_class(const compiler::ClassDef& c) {
 
     // Check for duplicate method names
     check_duplicate_methods(c.methods, c.name);
+
+    // Check for duplicate property names (symmetric with struct field checking)
+    check_duplicate_properties(c.properties, c.name);
 }
 
 void Resolver::validate_service(const compiler::ServiceDef& s) {
@@ -348,6 +351,18 @@ void Resolver::check_duplicate_methods(const std::vector<compiler::Method>& meth
                   "' in " + parent_name);
         }
         seen.insert(method.name);
+    }
+}
+
+void Resolver::check_duplicate_properties(const std::vector<compiler::Property>& properties,
+                                          const std::string& parent_name) {
+    std::unordered_set<std::string> seen;
+    for (const auto& prop : properties) {
+        if (seen.count(prop.name)) {
+            error(prop.loc, "Duplicate property '" + prop.name +
+                  "' in " + parent_name);
+        }
+        seen.insert(prop.name);
     }
 }
 

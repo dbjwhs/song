@@ -24,6 +24,16 @@ static bool parse_and_resolve(const std::string& source, Resolver** out_resolver
     return resolver->resolve();
 }
 
+// True if any reported resolver error message contains the given substring.
+static bool any_error_contains(Resolver* resolver, const std::string& needle) {
+    for (const auto& err : resolver->errors()) {
+        if (std::string(err.what()).find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // =============================================================================
 // Valid Cases
 // =============================================================================
@@ -565,5 +575,37 @@ TEST(ResolverTest, ErrorHasLocation) {
     ASSERT_FALSE(resolver->errors().empty());
     EXPECT_GT(resolver->errors()[0].line(), 0);
     EXPECT_GT(resolver->errors()[0].column(), 0);
+}
+
+// =============================================================================
+// Class member duplicate detection
+// =============================================================================
+
+// Regression: duplicate property names in a class were not detected, unlike
+// struct fields. validate_class now checks them.
+TEST(ResolverTest, DuplicateClassProperty) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        class C {
+            i32 x;
+            i32 x;
+        }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "Duplicate property"));
+}
+
+// Coverage: the class path of check_duplicate_methods (previously only exercised
+// for services).
+TEST(ResolverTest, DuplicateClassMethod) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        class C {
+            foo() -> void;
+            foo() -> void;
+        }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "Duplicate method"));
 }
 

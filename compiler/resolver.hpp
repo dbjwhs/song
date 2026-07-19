@@ -112,6 +112,8 @@ private:
                                 const std::string& parent_name);
     void check_duplicate_methods(const std::vector<compiler::Method>& methods,
                                  const std::string& parent_name);
+    void check_duplicate_properties(const std::vector<compiler::Property>& properties,
+                                    const std::string& parent_name);
     void check_duplicate_enum_items(const std::vector<compiler::EnumItem>& items,
                                     const std::string& parent_name);
 
