@@ -315,11 +315,19 @@ bool TlsTransport::receive(Buffer& msg, int timeout_ms) {
         return false;
     }
 
-    // Set read timeout
-    if (timeout_ms >= 0) {
+    // Set read timeout. Song's Transport contract uses timeout_ms == -1 for a
+    // blocking read and timeout_ms == 0 for "return immediately if nothing is
+    // ready" (as TcpTransport does with poll(...,0)). mbedTLS, however, overloads
+    // a read timeout of 0 to mean "block indefinitely", so a naive 0 -> 0 mapping
+    // makes receive(msg, 0) block forever, diverging from every other transport.
+    // Map 0 to the smallest positive poll interval (1 ms) to approximate a
+    // non-blocking check without blocking.
+    if (timeout_ms > 0) {
         mbedtls_ssl_conf_read_timeout(&impl_->conf, static_cast<uint32_t>(timeout_ms));
+    } else if (timeout_ms == 0) {
+        mbedtls_ssl_conf_read_timeout(&impl_->conf, 1);
     } else {
-        mbedtls_ssl_conf_read_timeout(&impl_->conf, 0);  // Blocking
+        mbedtls_ssl_conf_read_timeout(&impl_->conf, 0);  // timeout_ms < 0: blocking
     }
 
     msg.reset();

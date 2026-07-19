@@ -9,6 +9,8 @@
 #include <song/transport.hpp>
 #include <song/wire.hpp>
 #include <thread>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <netinet/tcp.h>
 
@@ -159,6 +161,68 @@ TEST_F(TlsCertTest, BasicRoundTrip) {
     EXPECT_TRUE(wire::has_flag(hdr.flags, wire::MsgFlags::encrypted));
     EXPECT_EQ(hdr.type, wire::MsgType::call);
     EXPECT_EQ(hdr.sequence_id, 1u);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+// receive(msg, 0) must return promptly when nothing is pending -- matching
+// TcpTransport -- rather than blocking indefinitely (a 0 mbedTLS read-timeout
+// means "block forever"). A watchdog makes a regression fail rather than hang.
+TEST_F(TlsCertTest, ReceiveZeroTimeoutDoesNotBlockForever) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> accepted{false};
+    std::thread server([&]() {
+        auto conn = listener.accept(5000);
+        if (!conn) return;
+        accepted = true;
+        // Keep the connection open but send nothing.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        conn->close();
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::none);
+    auto client = make_tls_client(port, std::move(cli_config));
+
+    for (int i = 0; i < 500 && !accepted.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // With no data pending, receive(0) must return promptly (throwing a read
+    // timeout), not hang. Run it in a worker guarded by a watchdog.
+    std::atomic<bool> returned{false};
+    std::atomic<bool> threw_timeout{false};
+    std::thread worker([&]() {
+        try {
+            Buffer resp;
+            client.receive(resp, 0);
+        } catch (const ServiceError&) {
+            threw_timeout = true;
+        } catch (...) {
+        }
+        returned = true;
+    });
+
+    for (int i = 0; i < 200 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const bool completed = returned.load();
+    if (completed) {
+        worker.join();
+    } else {
+        worker.detach();  // blocked forever; leak so the assert can report
+    }
+
+    ASSERT_TRUE(completed) << "receive(msg, 0) blocked instead of returning promptly";
+    EXPECT_TRUE(threw_timeout.load()) << "receive(msg, 0) with no data should throw a read timeout";
 
     client.close();
     listener.close();
