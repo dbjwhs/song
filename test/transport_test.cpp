@@ -650,3 +650,127 @@ TEST(TcpServiceConnectionTest, MultipleCallsViaTcp) {
     server_thread.join();
     EXPECT_EQ(call_count, 3);
 }
+
+// =============================================================================
+// Receive framing error paths (oversized payload, mid-payload EOF)
+// =============================================================================
+
+// A header claiming a payload above the maximum is rejected at the transport
+// layer before any large allocation, on both pipe and TCP.
+TEST(PipeTransportTest, ReceiveOversizedPayloadRejected) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+
+    wire::Header hdr{};
+    hdr.magic = wire::kMagic;
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = static_cast<u32>(wire::kMaxPayloadSize + 1);
+    Buffer header_only;
+    wire::encode_header(header_only, hdr);
+    write_pipe.write(header_only.data(), header_only.size());
+
+    Buffer msg;
+    EXPECT_THROW(receiver.receive(msg, 1000), ProtocolError);
+}
+
+// A header whose declared payload never fully arrives (peer closes mid-payload)
+// throws ServiceError rather than hanging or returning a partial message.
+TEST(PipeTransportTest, ReceiveMidPayloadEofThrows) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+
+    wire::Header hdr{};
+    hdr.magic = wire::kMagic;
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = 100;
+    Buffer header_buf;
+    wire::encode_header(header_buf, hdr);
+    write_pipe.write(header_buf.data(), header_buf.size());
+    std::vector<char> partial(40, 'x');
+    write_pipe.write(partial.data(), partial.size());
+    write_pipe.close_write();  // EOF mid-payload
+
+    Buffer msg;
+    EXPECT_THROW(receiver.receive(msg, 1000), ServiceError);
+}
+
+TEST(TcpTransportTest, ReceiveOversizedPayloadRejected) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> threw{false};
+    std::thread client_thread([&]() {
+        TcpTransport client;
+        client.connect("127.0.0.1", port, 1000);
+        Buffer msg;
+        try {
+            client.receive(msg, 2000);
+        } catch (const ProtocolError&) {
+            threw = true;
+        } catch (...) {
+        }
+    });
+
+    auto server = listener.accept(2000);
+    ASSERT_NE(server, nullptr);
+
+    wire::Header hdr{};
+    hdr.magic = wire::kMagic;
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = static_cast<u32>(wire::kMaxPayloadSize + 1);
+    Buffer header_only;
+    wire::encode_header(header_only, hdr);
+    server->send(header_only);
+
+    client_thread.join();
+    EXPECT_TRUE(threw);
+
+    server->close();
+    listener.close();
+}
+
+TEST(TcpTransportTest, ReceiveMidPayloadEofThrows) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> threw{false};
+    std::thread client_thread([&]() {
+        TcpTransport client;
+        client.connect("127.0.0.1", port, 1000);
+        Buffer msg;
+        try {
+            client.receive(msg, 2000);
+        } catch (const ServiceError&) {
+            threw = true;
+        } catch (...) {
+        }
+    });
+
+    auto server = listener.accept(2000);
+    ASSERT_NE(server, nullptr);
+
+    // Header claims a 100-byte payload; send only 40 bytes then close.
+    wire::Header hdr{};
+    hdr.magic = wire::kMagic;
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = 100;
+    Buffer buf;
+    wire::encode_header(buf, hdr);
+    std::vector<char> partial(40, 'x');
+    buf.write(partial.data(), partial.size());
+    server->send(buf);
+    server->close();  // EOF mid-payload
+
+    client_thread.join();
+    EXPECT_TRUE(threw);
+
+    listener.close();
+}
