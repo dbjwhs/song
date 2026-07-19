@@ -375,3 +375,75 @@ TEST(StreamWriterTest, FdWriteToBrokenPipeThrows) {
 
     EXPECT_TRUE(threw) << "StreamWriter fd write to a broken pipe must throw ServiceError";
 }
+
+// Read one complete wire message (16-byte header + payload) from a raw fd.
+static bool read_one_message(int fd, wire::Header& hdr_out, Buffer& payload_out) {
+    std::byte hdr_buf[16];
+    size_t off = 0;
+    while (off < 16) {
+        ssize_t n = ::read(fd, hdr_buf + off, 16 - off);
+        if (n <= 0) {
+            return false;
+        }
+        off += static_cast<size_t>(n);
+    }
+    Buffer hb;
+    hb.write(hdr_buf, 16);
+    hb.reset_read();
+    hdr_out = wire::decode_header(hb);
+
+    payload_out.reset();
+    if (hdr_out.payload_size > 0) {
+        std::vector<std::byte> pl(hdr_out.payload_size);
+        size_t poff = 0;
+        while (poff < hdr_out.payload_size) {
+            ssize_t n = ::read(fd, pl.data() + poff, hdr_out.payload_size - poff);
+            if (n <= 0) {
+                return false;
+            }
+            poff += static_cast<size_t>(n);
+        }
+        payload_out.write(pl.data(), hdr_out.payload_size);
+        payload_out.reset_read();
+    }
+    return true;
+}
+
+// The fd-based StreamWriter path (used by run()'s streaming dispatch) emits one
+// MSG_STREAM per write() and a MSG_STREAM_END on end()/destruction, all carrying
+// the sequence id. Only the Transport-based path was tested previously.
+TEST(StreamWriterTest, FdModeWritesStreamThenEnd) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+
+    {
+        StreamWriter writer(fds[1], /*sequence_id=*/7);
+        for (i32 value : {0, 100, 200}) {
+            Buffer chunk;
+            encode_i32(chunk, value);
+            writer.write(chunk);
+        }
+        writer.end();
+    }
+    ::close(fds[1]);
+
+    // Three stream chunks with the sequence id, in order.
+    for (i32 expected : {0, 100, 200}) {
+        wire::Header hdr{};
+        Buffer payload;
+        ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+        EXPECT_EQ(hdr.type, wire::MsgType::stream);
+        EXPECT_EQ(hdr.sequence_id, 7u);
+        EXPECT_EQ(decode_i32(payload), expected);
+    }
+
+    // Then the stream-end marker (empty payload, same sequence id).
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 7u);
+    EXPECT_EQ(end_hdr.payload_size, 0u);
+
+    ::close(fds[0]);
+}
