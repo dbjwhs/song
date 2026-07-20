@@ -209,12 +209,12 @@ std::optional<Token> Lexer::next_token() {
     }
 
     // Integer literals
-    if (std::isdigit(c)) {
+    if (std::isdigit(static_cast<unsigned char>(c))) {
         return lex_integer();
     }
 
     // Identifiers and keywords
-    if (std::isalpha(c) || c == '_') {
+    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
         return lex_identifier_or_keyword();
     }
 
@@ -226,7 +226,7 @@ std::optional<Token> Lexer::lex_identifier_or_keyword() {
     size_t start_column = m_column;
     std::string value;
 
-    while (!at_end() && (std::isalnum(peek()) || peek() == '_')) {
+    while (!at_end() && (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
         value += peek();
         advance();
     }
@@ -252,7 +252,7 @@ std::optional<Token> Lexer::lex_integer() {
         value += peek(); advance(); // 0
         value += peek(); advance(); // x
 
-        while (!at_end() && std::isxdigit(peek())) {
+        while (!at_end() && std::isxdigit(static_cast<unsigned char>(peek()))) {
             value += peek();
             advance();
         }
@@ -262,7 +262,7 @@ std::optional<Token> Lexer::lex_integer() {
         }
     } else {
         // Decimal
-        while (!at_end() && std::isdigit(peek())) {
+        while (!at_end() && std::isdigit(static_cast<unsigned char>(peek()))) {
             value += peek();
             advance();
         }

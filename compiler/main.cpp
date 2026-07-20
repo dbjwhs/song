@@ -142,6 +142,14 @@ int main(int argc, char** argv) {
     AST ast;
     try {
         ast = parser.parse();
+    } catch (const LexerError& e) {
+        // parser.parse() drives the lexer, which throws LexerError -- a distinct
+        // type from ParserError. Catch it here too; otherwise it escapes to
+        // main() with no handler and std::terminate()s songc (SIGABRT) on
+        // malformed input instead of reporting a clean error.
+        std::cerr << input_path << ":" << e.line() << ":" << e.column()
+                  << ": error: " << e.what() << "\n";
+        return 1;
     } catch (const ParserError& e) {
         std::cerr << input_path << ":" << e.line() << ":" << e.column()
                   << ": error: " << e.what() << "\n";

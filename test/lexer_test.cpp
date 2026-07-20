@@ -444,6 +444,19 @@ TEST(LexerTest, InvalidCharacterThrows) {
     EXPECT_THROW(lexer.next_token(), LexerError);
 }
 
+// A byte >= 0x80 is a negative value in a signed char; passing it to std::isXXX
+// without an unsigned cast is undefined behavior. The lexer must classify it
+// safely and raise a clean LexerError rather than invoking UB or crashing.
+TEST(LexerTest, HighBitByteThrowsLexerErrorNotUB) {
+    std::string src = "struct ";
+    src.push_back(static_cast<char>(0x80));
+    Lexer lexer(src);
+
+    lexer.next_token();  // struct
+
+    EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
 TEST(LexerTest, InvalidHexLiteralThrows) {
     Lexer lexer("0x");
 
