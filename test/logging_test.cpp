@@ -8,6 +8,9 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
+#include <cstdio>
+#include <unistd.h>
 
 using namespace song;
 
@@ -457,4 +460,264 @@ TEST_F(LoggingTest, HandlerCanModifyHandlerSetWithoutDeadlock) {
     }
 
     EXPECT_TRUE(completed) << "logging deadlocked when a handler modified the handler set";
+}
+
+
+// =============================================================================
+// Console Handler Output Format Tests
+// =============================================================================
+
+namespace {
+
+// Capture whatever the callable writes to stderr and return it as a string.
+// POSIX-only (this suite already relies on the POSIX toolchain elsewhere).
+template <typename Fn>
+std::string capture_stderr(Fn&& fn) {
+  std::fflush(stderr);
+  int saved_fd = ::dup(STDERR_FILENO);
+  FILE* tmp = std::tmpfile();
+  int tmp_fd = ::fileno(tmp);
+  ::dup2(tmp_fd, STDERR_FILENO);
+
+  fn();
+
+  std::fflush(stderr);
+  ::dup2(saved_fd, STDERR_FILENO);
+  ::close(saved_fd);
+
+  std::rewind(tmp);
+  std::string out;
+  char buf[512];
+  size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof(buf), tmp)) > 0) {
+    out.append(buf, n);
+  }
+  std::fclose(tmp);
+  return out;
+}
+
+}  // namespace
+
+TEST_F(LoggingTest, ConsoleHandlerFormatNoColor) {
+  LogHandler handler = handlers::make_console_handler(false);
+
+  std::string output = capture_stderr([&handler] {
+    LogEntry entry{LogLevel::info, "hello", std::source_location::current()};
+    handler(entry);
+  });
+
+  // Level padded to 5 chars (" INFO"), message verbatim, open paren for location.
+  EXPECT_NE(output.find("[ INFO] hello ("), std::string::npos);
+  // Path is stripped to a basename, so no directory separators remain.
+  EXPECT_EQ(output.find('/'), std::string::npos);
+  EXPECT_NE(output.find("logging_test.cpp:"), std::string::npos);
+  // use_colors=false must emit no ANSI escape sequences.
+  EXPECT_EQ(output.find('\033'), std::string::npos);
+  ASSERT_FALSE(output.empty());
+  EXPECT_EQ(output.back(), '\n');
+}
+
+TEST_F(LoggingTest, ConsoleHandlerColorGuardWhenNotTty) {
+  // stderr is redirected to a regular file inside capture_stderr, so
+  // isatty() is false and colors must stay disabled even with use_colors=true.
+  std::string output = capture_stderr([] {
+    LogHandler handler = handlers::make_console_handler(true);
+    LogEntry entry{LogLevel::error, "boom", std::source_location::current()};
+    handler(entry);
+  });
+
+  EXPECT_NE(output.find("[ERROR] boom"), std::string::npos);
+  EXPECT_EQ(output.find('\033'), std::string::npos);
+}
+
+TEST_F(LoggingTest, ConsoleHandlerPercentIsLiteral) {
+  LogHandler handler = handlers::make_console_handler(false);
+
+  std::string output = capture_stderr([&handler] {
+    LogEntry entry{LogLevel::warn, "100% done %d", std::source_location::current()};
+    handler(entry);
+  });
+
+  // Message flows through %.*s, so '%' must appear literally, not as a format spec.
+  EXPECT_NE(output.find("[ WARN] 100% done %d"), std::string::npos);
+}
+
+TEST_F(LoggingTest, ConsoleHandlerOutOfRangeLevelDoesNotCrash) {
+  LogHandler handler = handlers::make_console_handler(false);
+
+  std::string output = capture_stderr([&handler] {
+    LogEntry entry{static_cast<LogLevel>(9), "weird", std::source_location::current()};
+    handler(entry);
+  });
+
+  // log_level_name() falls through to its default branch for an unknown level.
+  EXPECT_NE(output.find("[UNKNOWN] weird"), std::string::npos);
+}
+
+// =============================================================================
+// Concurrency Tests
+// =============================================================================
+
+TEST_F(LoggingTest, ConcurrentEmitAndHandlerMutation) {
+  std::atomic<int> counter{0};
+  Log::add_handler("counter", [&counter](const LogEntry&) {
+    counter.fetch_add(1, std::memory_order_relaxed);
+  });
+
+  constexpr int kEmitThreads = 4;
+  constexpr int kMutatorThreads = 4;
+  constexpr int kIterations = 500;
+
+  std::vector<std::thread> threads;
+
+  for (int t = 0; t < kEmitThreads; ++t) {
+    threads.emplace_back([] {
+      for (int ndx = 0; ndx < kIterations; ++ndx) {
+        Log::info("concurrent");
+      }
+    });
+  }
+  for (int t = 0; t < kMutatorThreads; ++t) {
+    threads.emplace_back([t] {
+      std::string name = "h" + std::to_string(t);
+      for (int ndx = 0; ndx < kIterations; ++ndx) {
+        Log::add_handler(name, [](const LogEntry&) {});
+        Log::remove_handler(name);
+      }
+    });
+  }
+
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  // The "counter" handler is never removed, so every emit must reach it exactly
+  // once -- a lost or double increment would indicate a torn dispatch snapshot.
+  EXPECT_EQ(counter.load(), kEmitThreads * kIterations);
+}
+
+// =============================================================================
+// Callback Handler Fidelity Tests
+// =============================================================================
+
+TEST_F(LoggingTest, CallbackHandlerTruncatesAtEmbeddedNull) {
+  install_capture_handler();
+
+  std::string cb_message = "unset";
+  Log::add_handler("callback", handlers::make_callback_handler(
+      [&cb_message](LogLevel, const char* msg) {
+        cb_message = msg;  // C-string assignment stops at the first NUL
+      }));
+
+  std::string with_null("ab\0cd", 5);
+  Log::info(std::string_view(with_null.data(), with_null.size()));
+
+  ASSERT_EQ(captured_.size(), 1);
+  // The raw LogEntry view preserves all five bytes...
+  EXPECT_EQ(captured_[0].message.size(), 5);
+  // ...but the c-string callback bridge truncates at the embedded NUL.
+  EXPECT_EQ(cb_message, "ab");
+}
+
+TEST_F(LoggingTest, CallbackHandlerEmptyMessage) {
+  bool called = false;
+  std::string cb_message = "unset";
+  Log::add_handler("callback", handlers::make_callback_handler(
+      [&called, &cb_message](LogLevel, const char* msg) {
+        called = true;
+        cb_message = msg;  // valid pointer to a lone '\0'
+      }));
+
+  Log::info("");
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(cb_message, "");
+}
+
+// =============================================================================
+// Level Name / Disable-All Tests
+// =============================================================================
+
+TEST_F(LoggingTest, LogLevelNameUnknownForOutOfRange) {
+  EXPECT_STREQ(log_level_name(static_cast<LogLevel>(99)), "UNKNOWN");
+  EXPECT_STREQ(log_level_name(static_cast<LogLevel>(-1)), "UNKNOWN");
+  EXPECT_STREQ(log_level_name(static_cast<LogLevel>(5)), "UNKNOWN");
+}
+
+TEST_F(LoggingTest, AboveFatalSentinelSuppressesAllLevels) {
+  install_capture_handler();
+
+  // The header documents disabling everything via an above-fatal sentinel.
+  Log::set_level(static_cast<LogLevel>(static_cast<int>(LogLevel::fatal) + 1));
+
+  EXPECT_FALSE(Log::is_enabled(LogLevel::fatal));
+
+  Log::debug("d");
+  Log::info("i");
+  Log::warn("w");
+  Log::error("e");
+  Log::fatal("f");
+
+  EXPECT_EQ(captured_.size(), 0);
+}
+
+// =============================================================================
+// Null / Empty Handler Tests
+// =============================================================================
+
+TEST_F(LoggingTest, EmptyFunctionHandlerIsSkipped) {
+  Log::add_handler("empty", LogHandler{});
+  install_capture_handler();
+
+  Log::info("x");
+
+  EXPECT_TRUE(Log::has_handler("empty"));
+  // The if(handler) guard skips the empty function; the real handler still fires.
+  ASSERT_EQ(captured_.size(), 1);
+}
+
+TEST_F(LoggingTest, NullCallbackHandlerDoesNotCrash) {
+  Log::add_handler("cb", handlers::make_callback_handler(nullptr));
+  install_capture_handler();
+
+  // The callback wrapper is a valid function that invokes a null SimpleCallback,
+  // throwing std::bad_function_call, which emit()'s catch(...) must swallow.
+  Log::info("x");
+
+  ASSERT_EQ(captured_.size(), 1);
+}
+
+// =============================================================================
+// Exception Continuation Tests
+// =============================================================================
+
+TEST_F(LoggingTest, DispatchContinuesPastThrowingHandlerRegardlessOfOrder) {
+  int cap_a = 0;
+  int cap_b = 0;
+  Log::add_handler("cap_a", [&cap_a](const LogEntry&) { ++cap_a; });
+  Log::add_handler("thrower", [](const LogEntry&) {
+    throw std::runtime_error("boom");
+  });
+  Log::add_handler("cap_b", [&cap_b](const LogEntry&) { ++cap_b; });
+
+  Log::info("x");
+
+  // Whatever the unordered traversal order, at least one capture handler is
+  // dispatched after the thrower, and catch(...) lets the loop continue to both.
+  EXPECT_EQ(cap_a, 1);
+  EXPECT_EQ(cap_b, 1);
+}
+
+TEST_F(LoggingTest, DispatchSurvivesMultipleThrowingHandlers) {
+  int captures = 0;
+  Log::add_handler("thrower1", [](const LogEntry&) {
+    throw std::runtime_error("boom1");
+  });
+  Log::add_handler("thrower2", [](const LogEntry&) {
+    throw std::runtime_error("boom2");
+  });
+  Log::add_handler("capture", [&captures](const LogEntry&) { ++captures; });
+
+  EXPECT_NO_THROW(Log::info("x"));
+  EXPECT_EQ(captures, 1);
 }
