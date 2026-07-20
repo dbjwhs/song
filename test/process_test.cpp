@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <song/process.hpp>
+#include <song/transport.hpp>
 #include <song/wire.hpp>
 #include <thread>
 #include <chrono>
@@ -355,4 +356,224 @@ TEST(ProcessTest, ConnectionMultipleCalls) {
     }
 
     proc.terminate();
+}
+
+// =============================================================================
+// ServiceProcess: alive()/terminate() after a natural (unreaped) death
+// =============================================================================
+
+// Characterization: alive() is const and performs the waitpid() reap when it
+// observes the child has exited, but it cannot clear pid_. A reaped process
+// therefore keeps reporting its original pid until terminate() runs, and
+// repeated alive() calls must stay false (no ECHILD-driven flip back to true /
+// double-reap misbehavior). terminate() must still complete and clear the
+// handle even though the child was already reaped.
+TEST(ProcessTest, AliveIsStableAfterNaturalDeath) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  const pid_t original_pid = proc.pid();
+  ASSERT_GT(original_pid, 0);
+
+  // Kill the child out from under proc. The first alive() that observes the
+  // exit performs the reap.
+  ::kill(original_pid, SIGKILL);
+  for (int ndx = 0; ndx < 200 && proc.alive(); ++ndx) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  EXPECT_FALSE(proc.alive());
+  EXPECT_FALSE(proc.alive());  // double-reap must not misbehave
+  EXPECT_EQ(proc.pid(), original_pid);  // alive() cannot clear pid_
+
+  proc.terminate();
+  EXPECT_EQ(proc.pid(), -1);
+  EXPECT_FALSE(proc.alive());
+}
+
+// =============================================================================
+// ServiceProcess: dead-service send/receive contracts
+// =============================================================================
+
+// After terminate(), pid_ is -1: send() must throw (not silently no-op) and
+// receive() must return false immediately without blocking on the (default -1)
+// timeout.
+TEST(ProcessTest, SendAndReceiveAfterTerminate) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  proc.terminate();
+  ASSERT_EQ(proc.pid(), -1);
+
+  Buffer args;
+  encode_string(args, "hello");
+  Buffer msg = wire::create_call_message(1, 1, 1, args);
+
+  EXPECT_THROW(proc.send(msg), ServiceError);
+
+  Buffer resp;
+  EXPECT_FALSE(proc.receive(resp));  // pid_ <= 0 -> false, no block
+}
+
+// =============================================================================
+// ServiceConnection: move ctor / move assignment (local, proc-backed)
+// =============================================================================
+
+// Move-construct a local connection: the process pointer transfers to the
+// destination, the source is nulled out and reports is_remote()==false, and the
+// destination remains fully usable.
+TEST(ProcessTest, MoveConstructLocalConnection) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  ServiceConnection src(&proc);
+
+  // Advance internal state with a real call before moving.
+  Buffer warm;
+  encode_string(warm, "warm");
+  Buffer warm_result = src.call(1, 1, warm);
+  EXPECT_EQ(decode_string(warm_result), "warm");
+
+  ServiceConnection dst(std::move(src));
+
+  EXPECT_EQ(dst.process(), &proc);
+  EXPECT_FALSE(dst.is_remote());
+  EXPECT_EQ(src.process(), nullptr);
+  EXPECT_FALSE(src.is_remote());
+
+  // Destination must still be able to talk to the service.
+  Buffer args;
+  encode_string(args, "moved");
+  Buffer result = dst.call(1, 1, args);
+  EXPECT_EQ(decode_string(result), "moved");
+
+  proc.terminate();
+}
+
+// Move-assign one local connection over another: destination adopts the source
+// process pointer, source is nulled, and the destination talks to the moved-in
+// process.
+TEST(ProcessTest, MoveAssignLocalConnection) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc1 = ServiceProcess::spawn(echo_path.c_str());
+  ServiceProcess proc2 = ServiceProcess::spawn(echo_path.c_str());
+
+  ServiceConnection src(&proc1);
+  ServiceConnection dst(&proc2);
+
+  dst = std::move(src);
+
+  EXPECT_EQ(dst.process(), &proc1);
+  EXPECT_EQ(src.process(), nullptr);
+
+  Buffer args;
+  encode_string(args, "reassigned");
+  Buffer result = dst.call(1, 1, args);  // routed to proc1
+  EXPECT_EQ(decode_string(result), "reassigned");
+
+  proc1.terminate();
+  proc2.terminate();
+}
+
+// Self-move-assignment is guarded by `if (this != &other)` and must leave the
+// connection fully usable. The pointer indirection keeps the syntactic form
+// clear of -Wself-move while still exercising the self-assignment guard.
+TEST(ProcessTest, SelfMoveAssignLocalConnection) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  ServiceConnection conn(&proc);
+
+  ServiceConnection* self = &conn;
+  conn = std::move(*self);
+
+  EXPECT_EQ(conn.process(), &proc);
+  EXPECT_FALSE(conn.is_remote());
+
+  Buffer args;
+  encode_string(args, "still-here");
+  Buffer result = conn.call(1, 1, args);
+  EXPECT_EQ(decode_string(result), "still-here");
+
+  proc.terminate();
+}
+
+// =============================================================================
+// ServiceConnection: empty / dead connection contracts
+// =============================================================================
+
+// A default-constructed connection has neither a process nor a transport: it is
+// not remote, exposes no process, and every RPC entry point throws ServiceError
+// via the "no transport or process" guard.
+TEST(ProcessTest, DefaultConnectionRejectsCalls) {
+  ServiceConnection conn;
+
+  EXPECT_FALSE(conn.is_remote());
+  EXPECT_EQ(conn.process(), nullptr);
+
+  Buffer args;
+  encode_i32(args, 1);
+
+  EXPECT_THROW(conn.call(1, 1, args), ServiceError);
+  EXPECT_THROW(conn.call_oneway(1, 1, args), ServiceError);
+  EXPECT_THROW(conn.call_streaming(1, 1, args), ServiceError);
+}
+
+// A connection whose backing process has been terminated must reject calls via
+// the proc_->alive() guard ("Service not running"), rather than blocking or
+// crashing.
+TEST(ProcessTest, DeadProcessConnectionRejectsCall) {
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  ServiceConnection conn(&proc);
+  proc.terminate();
+
+  Buffer args;
+  encode_i32(args, 1);
+  EXPECT_THROW(conn.call(1, 1, args), ServiceError);
+}
+
+// release_object is fire-and-forget: a null (object_id == 0) reference is a
+// no-op, a live reference with no transport/process quietly does nothing, and a
+// dead-process reference is best-effort (the guard skips the send). None of
+// these may throw.
+TEST(ProcessTest, ReleaseObjectIsBestEffort) {
+  // Null reference on an empty connection: early-return no-op.
+  ServiceConnection empty;
+  EXPECT_NO_THROW(empty.release_object(1, 0));
+  // Non-null reference with no transport/process: builds the message, sends
+  // nothing, does not throw.
+  EXPECT_NO_THROW(empty.release_object(1, 5));
+
+  std::string echo_path = get_test_service_path("echo_service");
+  if (!std::filesystem::exists(echo_path)) {
+    GTEST_SKIP() << "echo_service not found";
+  }
+
+  ServiceProcess proc = ServiceProcess::spawn(echo_path.c_str());
+  ServiceConnection conn(&proc);
+  proc.terminate();
+
+  // Dead process: alive() guard skips the send, best-effort try/catch swallows.
+  EXPECT_NO_THROW(conn.release_object(1, 5));
 }
