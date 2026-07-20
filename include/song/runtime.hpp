@@ -37,6 +37,7 @@ class ServiceRuntime {
     std::array<std::string, 8> extension_names_{};
     u8 next_extension_slot_ = 0;
     int max_concurrent_clients_ = 128;  // Cap for run_tcp_multi thread-per-client
+    size_t max_subscriptions_per_connection_ = 4096;  // Cap for prop_subscribe growth
 
 public:
     /// Register a service dispatcher
@@ -156,6 +157,17 @@ public:
         max_concurrent_clients_ = (limit < 1) ? 1 : limit;
     }
     int max_concurrent_clients() const { return max_concurrent_clients_; }
+
+    /// Maximum number of active property subscriptions a single connection may
+    /// hold. A prop_subscribe past this cap is dropped so an untrusted peer
+    /// cannot grow the per-connection set and the shared registry without bound.
+    /// Must be >= 1.
+    void set_max_subscriptions_per_connection(size_t limit) {
+        max_subscriptions_per_connection_ = (limit < 1) ? 1 : limit;
+    }
+    size_t max_subscriptions_per_connection() const {
+        return max_subscriptions_per_connection_;
+    }
 
     /// Get the subscription registry (for external notification triggers)
     SubscriptionRegistry& subscriptions() { return sub_registry_; }

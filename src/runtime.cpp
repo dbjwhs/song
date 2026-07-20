@@ -458,7 +458,17 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
     // Property subscribe/unsubscribe (fire-and-forget, no response)
     if (hdr.type == wire::MsgType::prop_subscribe) {
         auto prop_hdr = wire::decode_property_header(payload);
-        subscriptions.insert({prop_hdr.object_id, prop_hdr.property_id});
+        SubscriptionKey key{prop_hdr.object_id, prop_hdr.property_id};
+
+        // Cap active subscriptions per connection so an untrusted peer cannot
+        // grow this set and the shared registry without bound by subscribing to
+        // arbitrary (including non-existent) object/property ids. Re-subscribing
+        // to an already-tracked key is idempotent and always allowed.
+        if (subscriptions.size() >= max_subscriptions_per_connection_ &&
+            subscriptions.find(key) == subscriptions.end()) {
+            return;  // fire-and-forget: silently drop past the cap
+        }
+        subscriptions.insert(key);
 
         auto subscriber_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(&transport);
         sub_registry_.subscribe(subscriber_id, prop_hdr.object_id,

@@ -219,7 +219,34 @@ protected:
     void handle(const wire::Header& hdr, Buffer& payload) {
         runtime_.handle_message(hdr, payload, transport_, tracked_, subs_);
     }
+
+    // Deliver a prop_subscribe for (object_id, 1) through handle_message.
+    void subscribe(i32 object_id) {
+        Buffer msg = wire::create_property_subscribe_message(1, object_id, 1);
+        msg.reset_read();
+        wire::Header hdr = wire::decode_header(msg);  // cursor now at the body
+        handle(hdr, msg);
+    }
 };
+
+// prop_subscribe must stop growing the per-connection set and the shared registry
+// once the cap is reached, while remaining idempotent for already-tracked keys.
+TEST_F(RuntimeDispatchTest, PropSubscribeCapBoundsPerConnectionGrowth) {
+    runtime_.set_max_subscriptions_per_connection(3);
+
+    for (i32 obj = 0; obj < 10; ++obj) {
+        ASSERT_NO_THROW(subscribe(obj));  // distinct object -> distinct key
+    }
+
+    // Only the first 3 distinct subscriptions are retained; the rest are dropped.
+    EXPECT_EQ(subs_.size(), 3u);
+    EXPECT_EQ(runtime_.subscriptions().total_subscriptions(), 3u);
+
+    // Re-subscribing to an already-tracked key stays idempotent past the cap.
+    ASSERT_NO_THROW(subscribe(0));
+    EXPECT_EQ(subs_.size(), 3u);
+    EXPECT_EQ(runtime_.subscriptions().total_subscriptions(), 3u);
+}
 
 TEST_F(RuntimeDispatchTest, TruncatedCallRepliesDecodeErrorNotTerminate) {
     // Payload holds one u16; the method-call header needs two.
