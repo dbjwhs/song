@@ -695,3 +695,293 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
                        << "Command: " << cmd << "\n"
                        << "Generated header:\n" << header;
 }
+
+// =============================================================================
+// Split-mode generators (generate_types_header / generate_wire_impl /
+// generate_client_header / generate_server_header) -- these public entry points
+// are used by songc --split but were never exercised by a test.
+// =============================================================================
+
+namespace {
+
+// Parse + resolve `source`, then hand the code generator and the resolved
+// namespace to `emit`. Mirrors parse_and_generate but lets a test target the
+// split-mode generators instead of generate_header.
+template <typename Emit>
+std::string generate_split(const std::string& source, Emit emit) {
+    Parser parser(source);
+    auto ast = parser.parse();
+    Resolver resolver(ast);
+    EXPECT_TRUE(resolver.resolve());
+    CodeGenerator gen;
+    return emit(gen, ast.namespaces.front());
+}
+
+}  // namespace
+
+TEST(CodegenTest, TypesHeaderEmitsNonInlineSerializerDecls) {
+    std::string code = generate_split(R"(
+        namespace wiremod;
+        struct P { i32 x; }
+        struct L { P[] items; }
+    )", [](CodeGenerator& gen, const Namespace& ns) {
+        return gen.generate_types_header(ns);
+    });
+
+    // Forward declaration and struct definition present
+    EXPECT_NE(code.find("struct P;"), std::string::npos);
+    EXPECT_NE(code.find("struct P {"), std::string::npos);
+
+    // The types header emits non-inline serialization *declarations*; the
+    // definitions live in the wire impl TU.
+    EXPECT_NE(code.find("void encode_P(Buffer& buf, const P& val);"), std::string::npos);
+    EXPECT_NE(code.find("P decode_P(Buffer& buf);"), std::string::npos);
+    EXPECT_EQ(code.find("inline void encode_P("), std::string::npos);
+}
+
+TEST(CodegenTest, WireImplEmitsInlineStructSerializers) {
+    std::string code = generate_split(R"(
+        namespace wiremod;
+        struct P { i32 x; }
+        struct L { P[] items; }
+    )", [](CodeGenerator& gen, const Namespace& ns) {
+        return gen.generate_wire_impl(ns);
+    });
+
+    // Wire impl includes its matching types header and defines inline serializers
+    EXPECT_NE(code.find("#include \"wiremod_types.hpp\""), std::string::npos);
+    EXPECT_NE(code.find("inline void encode_P(Buffer& buf, const P& val) {"), std::string::npos);
+    EXPECT_NE(code.find("inline P decode_P(Buffer& buf) {"), std::string::npos);
+}
+
+// generate_wire_impl only emits per-struct encode/decode, not the
+// encode_array_<S>/decode_array_<S> helpers that generate_header emits. A
+// split-mode struct with an array-of-struct field therefore *calls*
+// encode_array_P without any definition being produced by this generator. This
+// pins that split-mode gap (the call is present, the definition is not).
+TEST(CodegenTest, WireImplOmitsStructArrayHelper) {
+    std::string code = generate_split(R"(
+        namespace wiremod;
+        struct P { i32 x; }
+        struct L { P[] items; }
+    )", [](CodeGenerator& gen, const Namespace& ns) {
+        return gen.generate_wire_impl(ns);
+    });
+
+    // The array-of-struct field routes to encode_array_P (a generated helper)...
+    EXPECT_NE(code.find("encode_array_P(buf, val.items)"), std::string::npos);
+    // ...but generate_wire_impl never emits that helper's definition.
+    EXPECT_EQ(code.find("inline void encode_array_P("), std::string::npos);
+    EXPECT_EQ(code.find("inline std::vector<P> decode_array_P("), std::string::npos);
+}
+
+TEST(CodegenTest, ClientHeaderHasProxyNotDispatcherOrInterface) {
+    std::string code = generate_split(R"(
+        namespace calc;
+        service Calculator {
+            add(i32 a, i32 b) -> i32;
+        }
+    )", [](CodeGenerator& gen, const Namespace& ns) {
+        return gen.generate_client_header(ns);
+    });
+
+    // Client header carries IDs and the proxy...
+    EXPECT_NE(code.find("#include \"calc_types.hpp\""), std::string::npos);
+    EXPECT_NE(code.find("kService_Calculator"), std::string::npos);
+    EXPECT_NE(code.find("class CalculatorProxy {"), std::string::npos);
+
+    // ...but not the server-side interface or dispatcher.
+    EXPECT_EQ(code.find("dispatch_Calculator"), std::string::npos);
+    EXPECT_EQ(code.find("class ICalculator {"), std::string::npos);
+}
+
+TEST(CodegenTest, ServerHeaderHasInterfaceAndDispatcherNotProxy) {
+    std::string code = generate_split(R"(
+        namespace calc;
+        service Calculator {
+            add(i32 a, i32 b) -> i32;
+        }
+    )", [](CodeGenerator& gen, const Namespace& ns) {
+        return gen.generate_server_header(ns);
+    });
+
+    // Server header carries the interface and dispatcher...
+    EXPECT_NE(code.find("#include \"calc_types.hpp\""), std::string::npos);
+    EXPECT_NE(code.find("class ICalculator {"), std::string::npos);
+    EXPECT_NE(code.find("dispatch_Calculator"), std::string::npos);
+
+    // ...but not the client-side proxy.
+    EXPECT_EQ(code.find("class CalculatorProxy {"), std::string::npos);
+}
+
+// =============================================================================
+// readonly property suppression
+// =============================================================================
+
+// A readonly property must get a getter but no setter in the proxy or skeleton,
+// and no prop_set case, while a writable sibling gets both.
+TEST(CodegenTest, ReadonlyPropertyHasNoSetter) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        class Sensor {
+            readonly i32 id;
+            f64 value;
+            Sensor();
+        }
+    )");
+
+    // Readonly 'id': getter present, setter fully suppressed everywhere.
+    EXPECT_NE(code.find("i32 id() const"), std::string::npos);          // proxy getter
+    EXPECT_NE(code.find("virtual i32 get_id() const"), std::string::npos);  // skeleton getter
+    EXPECT_EQ(code.find("set_id"), std::string::npos);                  // no setter at all
+
+    // Writable 'value': setter present in proxy and skeleton.
+    EXPECT_NE(code.find("void set_value("), std::string::npos);
+
+    // prop_set default arm documents the readonly/unknown case.
+    EXPECT_NE(code.find("Unknown or readonly property ID"), std::string::npos);
+}
+
+// =============================================================================
+// class inheritance: base delegation in skeleton and dispatcher
+// =============================================================================
+
+TEST(CodegenTest, DerivedClassDelegatesToBase) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        class Base { i32 a; Base(); foo() -> void; }
+        class Derived : Base { i32 b; Derived(); bar() -> void; }
+    )");
+
+    // Skeleton derives from the base skeleton.
+    EXPECT_NE(code.find("class DerivedBase : public BaseBase {"), std::string::npos);
+
+    // Dispatcher default arms delegate to the base rather than throwing.
+    EXPECT_NE(code.find("BaseBase::prop_get(prop_id, resp);"), std::string::npos);
+    EXPECT_NE(code.find("BaseBase::prop_set(prop_id, req, resp);"), std::string::npos);
+    EXPECT_NE(code.find("BaseBase::dispatch(method_id, req, resp);"), std::string::npos);
+}
+
+// =============================================================================
+// Boundary / degenerate definitions
+// =============================================================================
+
+// Struct inheritance is accepted by the parser/resolver but silently ignored by
+// codegen: the derived struct is emitted with only its own fields and no base,
+// so inherited fields are dropped from both the type and the wire format. This
+// pins that aspirational-drift behavior (per CLAUDE.md, flag doc/impl drift).
+TEST(CodegenTest, StructInheritanceIgnoredByCodegen) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Base { i32 a; }
+        struct Derived : Base { i32 b; }
+    )");
+
+    // No ': public Base' is emitted, and Derived carries only its own field 'b'
+    // (inherited 'a' is absent from the struct body).
+    EXPECT_EQ(code.find("struct Derived : public Base"), std::string::npos);
+    EXPECT_NE(code.find("struct Derived {\n    i32 b;\n};"), std::string::npos);
+}
+
+TEST(CodegenTest, EmptyAndSingleItemBoundaries) {
+    // Empty struct and empty service must generate without error.
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Empty {}
+        service Noop {}
+    )");
+    EXPECT_NE(code.find("struct Empty {"), std::string::npos);
+    EXPECT_NE(code.find("dispatch_Noop"), std::string::npos);
+
+    // Single-item enum must emit no trailing comma after the sole item.
+    std::string enum_code = parse_and_generate(R"(
+        namespace test;
+        enum One { only }
+    )");
+    EXPECT_NE(enum_code.find("enum class One : i32 {"), std::string::npos);
+    EXPECT_NE(enum_code.find("only"), std::string::npos);
+    EXPECT_EQ(enum_code.find("only,"), std::string::npos);
+}
+
+// =============================================================================
+// Generated class output compiles against the runtime (not just string-matched)
+// =============================================================================
+
+TEST(CodegenTest, GeneratedClassHeaderCompiles) {
+    // Class codegen (proxy + skeleton + dispatcher) is otherwise only
+    // string-matched; compile it against include/song to verify it type-checks
+    // against Object/ServiceConnection. Exercises a struct property, a readonly
+    // property, multiple constructors, and void/value/struct-returning methods.
+    std::string source = R"(
+        namespace counterdemo;
+
+        struct Pt { i32 x; i32 y; }
+
+        class Counter {
+            i32 value;
+            readonly i32 id;
+            Counter();
+            Counter(i32 start);
+            increment() -> void;
+            add(i32 d) -> i32;
+            move_by(Pt d) -> Pt;
+        }
+    )";
+
+    Parser parser(source);
+    auto ast = parser.parse();
+    Resolver resolver(ast);
+    ASSERT_TRUE(resolver.resolve());
+
+    CodeGenerator gen;
+    std::string header = gen.generate_header(ast.namespaces.front());
+
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto header_path = tmp_dir / "song_codegen_class_test.hpp";
+    auto source_path = tmp_dir / "song_codegen_class_test.cpp";
+
+    {
+        std::ofstream hf(header_path);
+        ASSERT_TRUE(hf.is_open());
+        hf << header;
+    }
+    {
+        std::ofstream sf(source_path);
+        ASSERT_TRUE(sf.is_open());
+        sf << "#include \"song_codegen_class_test.hpp\"\n"
+           << "int main() { return 0; }\n";
+    }
+
+    std::filesystem::path song_include;
+    for (auto candidate : {
+        std::filesystem::current_path() / ".." / "include",
+        std::filesystem::current_path() / "include",
+        std::filesystem::current_path().parent_path() / "include",
+    }) {
+        if (std::filesystem::exists(candidate / "song" / "song.hpp")) {
+            song_include = candidate;
+            break;
+        }
+    }
+
+    if (song_include.empty()) {
+        std::filesystem::remove(header_path);
+        std::filesystem::remove(source_path);
+        GTEST_SKIP() << "Could not locate song include directory";
+    }
+
+    std::string cmd = "clang++ -std=c++20 -fsyntax-only"
+                      " -I" + song_include.string() +
+                      " -I" + tmp_dir.string() +
+                      " " + source_path.string() +
+                      " 2>&1";
+
+    int ret = std::system(cmd.c_str());
+
+    std::filesystem::remove(header_path);
+    std::filesystem::remove(source_path);
+
+    EXPECT_EQ(ret, 0) << "Generated C++ class header failed to compile.\n"
+                      << "Command: " << cmd << "\n"
+                      << "Generated header:\n" << header;
+}
