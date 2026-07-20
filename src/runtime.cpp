@@ -10,7 +10,7 @@
 #include <cerrno>
 #include <csignal>
 #include <thread>
-#include <algorithm>
+#include <atomic>
 
 namespace song {
 
@@ -814,8 +814,12 @@ void ServiceRuntime::client_loop(Transport& transport) {
 }
 
 [[noreturn]] void ServiceRuntime::run_tcp_multi(TcpListener& listener) {
-    // Accept clients concurrently -- one thread per client
-    std::vector<std::thread> client_threads;
+    // Accept clients concurrently -- one thread per client, capped at
+    // max_concurrent_clients_. Workers are detached and decrement active_clients
+    // on exit, so finished threads self-reap: no join()/handle bookkeeping grows
+    // without bound. active_clients lives for the whole (noreturn) loop, so the
+    // detached workers may capture it by reference safely.
+    std::atomic<int> active_clients{0};
 
     for (;;) {
         auto client = listener.accept(-1);
@@ -823,29 +827,26 @@ void ServiceRuntime::client_loop(Transport& transport) {
             continue;
         }
 
+        // accept() is single-threaded here, so this load-then-add cannot race
+        // another admit; workers only ever decrement, so the cap is a hard limit.
+        if (active_clients.load(std::memory_order_acquire) >= max_concurrent_clients_) {
+            // At capacity -- drop the connection instead of piling up a thread.
+            client->close();
+            continue;
+        }
+        active_clients.fetch_add(1, std::memory_order_release);
+
         // Move the transport into a shared_ptr so the thread owns it
         auto shared_client = std::shared_ptr<TcpTransport>(client.release());
 
-        client_threads.emplace_back([this, shared_client]() {
+        std::thread([this, shared_client, &active_clients]() {
             try {
                 client_loop(*shared_client);
             } catch (...) {
                 // Client error -- thread exits, subscriptions cleaned up in client_loop
             }
-        });
-
-        // Clean up finished threads periodically
-        client_threads.erase(
-            std::remove_if(client_threads.begin(), client_threads.end(),
-                [](std::thread& t) {
-                    if (t.joinable()) {
-                        // Can't check if thread is done without joining, so detach old ones
-                        // In production, use a proper thread pool. This is simple and correct.
-                        return false;
-                    }
-                    return true;
-                }),
-            client_threads.end());
+            active_clients.fetch_sub(1, std::memory_order_release);
+        }).detach();
     }
 }
 

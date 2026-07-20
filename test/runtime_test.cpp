@@ -14,6 +14,8 @@
 #include <vector>
 #include <song/object.hpp>
 #include <song/stream.hpp>
+#include <thread>
+#include <chrono>
 
 using namespace song;
 
@@ -779,4 +781,68 @@ TEST_F(RuntimeDispatchTest, RegularOnlyServiceEmitsResultNotStream) {
 
     ASSERT_EQ(transport_.sent.size(), 1u);
     EXPECT_EQ(decode_captured(transport_.sent[0]).type, wire::MsgType::result);
+}
+
+// =============================================================================
+// run_tcp_multi concurrency cap
+// =============================================================================
+
+// The client cap must be at least 1; non-positive values are clamped.
+TEST(RuntimeMultiClientTest, MaxConcurrentClientsClampedToAtLeastOne) {
+    ServiceRuntime runtime;
+    EXPECT_EQ(runtime.max_concurrent_clients(), 128);  // default
+    runtime.set_max_concurrent_clients(4);
+    EXPECT_EQ(runtime.max_concurrent_clients(), 4);
+    runtime.set_max_concurrent_clients(0);
+    EXPECT_EQ(runtime.max_concurrent_clients(), 1);
+    runtime.set_max_concurrent_clients(-7);
+    EXPECT_EQ(runtime.max_concurrent_clients(), 1);
+}
+
+// run_tcp_multi() must stop admitting once the cap is reached, and must free a
+// slot when a client disconnects (proving finished workers self-reap). The
+// runtime and listener are intentionally leaked so the never-returning accept
+// loop can reference them for the life of the process without an exit-time
+// use-after-free (the ASan CI job runs with detect_leaks=0).
+TEST(RuntimeMultiClientTest, RunTcpMultiRejectsBeyondCapAndReusesFreedSlots) {
+    auto* runtime = new ServiceRuntime();
+    auto* listener = new TcpListener();
+    runtime->set_max_concurrent_clients(2);
+    listener->listen(0, 128, "127.0.0.1");
+    const u16 port = listener->bound_port();
+
+    std::thread([runtime, listener]() { runtime->run_tcp_multi(*listener); }).detach();
+
+    // Server sends an init confirmation as the first thing client_loop() does, so
+    // receiving it proves the connection was admitted (active count incremented).
+    auto admitted = [port](TcpTransport& c) -> bool {
+        try {
+            c.connect("127.0.0.1", port, 2000);
+            Buffer init;
+            return c.receive(init, 2000);
+        } catch (...) {
+            return false;
+        }
+    };
+
+    // Fill the cap of 2.
+    TcpTransport c1, c2;
+    ASSERT_TRUE(admitted(c1));
+    ASSERT_TRUE(admitted(c2));
+
+    // Third client is over the cap: the server accepts then immediately closes it
+    // without serving, so no init arrives.
+    TcpTransport c3;
+    EXPECT_FALSE(admitted(c3)) << "connection beyond the cap must be dropped";
+
+    // Disconnect one client; its worker exits and decrements the active count,
+    // freeing a slot for a new client.
+    c1.close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    TcpTransport c4;
+    EXPECT_TRUE(admitted(c4)) << "a freed slot must admit a new client";
+
+    c2.close();
+    c4.close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));  // let workers exit
 }

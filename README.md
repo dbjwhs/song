@@ -47,7 +47,7 @@ The value of this repo as a portfolio artifact isn't "built with AI" — it's th
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
 - **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS.
 - **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients.
-- **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
+- **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out. Concurrency is capped (`set_max_concurrent_clients()`, default 128) and finished workers self-reap, so an unauthenticated peer cannot force unbounded thread/fd growth.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
 - **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
 - **Scaffold Sync**: Re-running the scaffold generator diffs against existing implementations, reporting new/removed/modified methods

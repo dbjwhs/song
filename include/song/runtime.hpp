@@ -36,6 +36,7 @@ class ServiceRuntime {
     u32 local_capabilities_ = 0;
     std::array<std::string, 8> extension_names_{};
     u8 next_extension_slot_ = 0;
+    int max_concurrent_clients_ = 128;  // Cap for run_tcp_multi thread-per-client
 
 public:
     /// Register a service dispatcher
@@ -146,6 +147,15 @@ public:
 
     /// Multi-client TCP service loop with existing listener
     [[noreturn]] void run_tcp_multi(TcpListener& listener);
+
+    /// Maximum number of concurrent clients run_tcp_multi() will serve. Once
+    /// reached, further connections are accepted and immediately closed rather
+    /// than piling up threads, so an unauthenticated peer cannot drive unbounded
+    /// thread/fd allocation. Must be >= 1.
+    void set_max_concurrent_clients(int limit) {
+        max_concurrent_clients_ = (limit < 1) ? 1 : limit;
+    }
+    int max_concurrent_clients() const { return max_concurrent_clients_; }
 
     /// Get the subscription registry (for external notification triggers)
     SubscriptionRegistry& subscriptions() { return sub_registry_; }
