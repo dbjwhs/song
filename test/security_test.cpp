@@ -638,20 +638,31 @@ TEST(SecurityTest, ComputeHmacEmptyKeyOverloadsAgree) {
 // (gap: securityconfig-setkey-empty-on-enabled)
 // =============================================================================
 
-// set_key() only ever raises the level to shared_secret for a non-empty key; it
-// never lowers it. Calling set_key("") on an already-enabled config therefore
-// leaves is_enabled()==true with an empty key. This pins the current behavior of
-// that previously-unexercised code path (an enabled config with set_key("")).
-TEST(SecurityConfigTest, SetEmptyKeyOnEnabledConfigStaysEnabled) {
+// set_key("") on an already-enabled config must disable security rather than
+// leave is_enabled()==true with a zero-length key (which would authenticate with
+// an effectively empty HMAC key). An empty key always lowers the level to none.
+TEST(SecurityConfigTest, SetEmptyKeyOnEnabledConfigDisables) {
     SecurityConfig config("real-32-byte-shared-secret-key!!");
     ASSERT_TRUE(config.is_enabled());
 
     config.set_key("");
 
-    // Current contract: level is not lowered by an empty key.
-    EXPECT_TRUE(config.is_enabled());
-    EXPECT_EQ(config.level(), SecurityLevel::shared_secret);
+    EXPECT_FALSE(config.is_enabled());
+    EXPECT_EQ(config.level(), SecurityLevel::none);
     EXPECT_TRUE(config.key().empty());
+}
+
+// The shared-secret constructor rejects an empty key so a config can never be
+// enabled with a zero-length key.
+TEST(SecurityConfigTest, ConstructWithEmptyKeyThrows) {
+    EXPECT_THROW(SecurityConfig(std::string{}), SecurityError);
+}
+
+// Keys longer than kMaxKeySize are rejected by the constructor.
+TEST(SecurityConfigTest, ConstructWithOverlongKeyThrows) {
+    EXPECT_THROW(SecurityConfig(std::string(kMaxKeySize + 1, 'k')), SecurityError);
+    // A key exactly at the maximum is accepted.
+    EXPECT_NO_THROW(SecurityConfig(std::string(kMaxKeySize, 'k')));
 }
 
 // Moving an enabled config transfers the key and level to the destination.

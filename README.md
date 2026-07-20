@@ -321,7 +321,7 @@ SecureTransport secure_client(std::move(client_tcp), std::move(srv_security));
 ### How It Works
 
 - **TLS**: Full encryption via mbedTLS 4.x. Certificate or PSK mode. `MsgFlags::encrypted` set on all TLS messages. Certificate-mode clients verify the server hostname against the cert CN/SAN (`set_expected_hostname`) and fail closed if verification is required but no hostname is set.
-- **HMAC**: SHA-256 computed over each message, 8-byte truncated tag, constant-time comparison, transparent decorator over any transport.
+- **HMAC**: SHA-256 computed over each message, 8-byte truncated tag, constant-time comparison, transparent decorator over any transport. The shared-secret `SecurityConfig(key)` constructor rejects an empty (or over-long) key so a config can never report `is_enabled()` while authenticating with a zero-length key; 32 bytes is the recommended minimum.
 - Mismatched keys/certs throw `SecurityError`
 
 ### HMAC Tag Size
