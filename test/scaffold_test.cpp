@@ -1138,3 +1138,398 @@ enum class OldEnum : i32 {
     EXPECT_NE(output.find("ENUM VALUES CHANGED"), std::string::npos);
     EXPECT_NE(output.find("Status"), std::string::npos);
 }
+
+
+// =============================================================================
+// Struct Field Default Initializers (characterization)
+// =============================================================================
+//
+// The struct body/field regexes in parse_existing_structs do not understand C++
+// default member initializers. These tests pin the CURRENT (buggy) behavior so a
+// future fix is a deliberate, visible change rather than an accidental one.
+// Gap: scaffold-struct-field-default-initializer.
+
+TEST(ScaffoldTest, ParseExistingStructsDefaultInitializerMisparsesFieldName) {
+    // "i32 timeout = 30;" - the field regex binds the field name to the trailing
+    // token, so the name becomes the literal "30" and the type absorbs "= ".
+    std::string header = R"(
+struct Config {
+    i32 timeout = 30;
+    i32 retries;
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto structs = scaffold.parse_existing_structs(header);
+
+    ASSERT_EQ(structs.size(), 1u);
+    EXPECT_EQ(structs[0].name, "Config");
+    ASSERT_EQ(structs[0].fields.size(), 2u);
+
+    // The default-initialized field is misparsed: name is the literal, not the
+    // identifier, and the type keeps the trailing "=".
+    EXPECT_EQ(structs[0].fields[0].name, "30");
+    EXPECT_EQ(structs[0].fields[0].type, "i32 timeout =");
+
+    // A plain field with no initializer still parses correctly.
+    EXPECT_EQ(structs[0].fields[1].name, "retries");
+    EXPECT_EQ(structs[0].fields[1].type, "i32");
+}
+
+TEST(ScaffoldTest, ParseExistingStructsBraceInitializerTruncatesBody) {
+    // A "{}" default initializer contains a '}' that terminates the struct-body
+    // regex early, so every field (including the trailing one) is lost.
+    std::string header = R"(
+struct Foo {
+    std::vector<i32> v = {};
+    i32 x;
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto structs = scaffold.parse_existing_structs(header);
+
+    ASSERT_EQ(structs.size(), 1u);
+    EXPECT_EQ(structs[0].name, "Foo");
+    // Both fields are dropped because the '{}' truncates the parsed body.
+    EXPECT_TRUE(structs[0].fields.empty());
+}
+
+TEST(ScaffoldTest, CompareStructsDefaultInitializerReportsSpuriousModification) {
+    // The IDL struct matches the header struct field-for-field, but the header's
+    // default initializer corrupts the parsed fields, so compare_structs reports
+    // a spurious modification.
+    auto ast = parse_idl(R"(
+        namespace test;
+
+        struct Config {
+            i32 timeout;
+            i32 retries;
+        }
+
+        service Foo {
+            foo() -> void;
+        }
+    )");
+
+    std::string existing_header = R"(
+struct Config {
+    i32 timeout = 30;
+    i32 retries;
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto existing_structs = scaffold.parse_existing_structs(existing_header);
+    SyncReport report;
+    scaffold.compare_structs(ast.namespaces.front(), existing_structs, report);
+
+    EXPECT_TRUE(report.new_structs.empty());
+    EXPECT_TRUE(report.removed_structs.empty());
+    // Spurious: the semantically-identical struct is flagged as modified.
+    ASSERT_EQ(report.modified_structs.size(), 1u);
+    EXPECT_EQ(report.modified_structs[0].first.name, "Config");
+}
+
+// =============================================================================
+// Comments Not Stripped from Struct/Enum Parsing (characterization)
+// =============================================================================
+//
+// Unlike parse_existing_impl (which skips comment lines), parse_existing_structs
+// and parse_existing_enums run their regexes over the raw text, so struct/enum
+// keywords inside comments are parsed as real definitions.
+// Gap: scaffold-comments-not-stripped.
+
+TEST(ScaffoldTest, ParseExistingStructsDoesNotSkipCommentedStructs) {
+    std::string header = R"(
+// struct LegacyPoint {
+//   i32 x;
+// };
+struct Point {
+    i32 x;
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto structs = scaffold.parse_existing_structs(header);
+
+    // The commented-out struct is still matched (documents the gap).
+    ASSERT_EQ(structs.size(), 2u);
+    EXPECT_EQ(structs[0].name, "LegacyPoint");
+    // Its body lines start with "//" so the field filter drops them.
+    EXPECT_TRUE(structs[0].fields.empty());
+
+    // The real struct parses normally.
+    EXPECT_EQ(structs[1].name, "Point");
+    ASSERT_EQ(structs[1].fields.size(), 1u);
+    EXPECT_EQ(structs[1].fields[0].name, "x");
+}
+
+TEST(ScaffoldTest, ParseExistingEnumsDoesNotSkipBlockCommentedEnums) {
+    std::string header = R"(
+/* enum class Old : i32 { a, b }; */
+enum class Real : i32 {
+    x,
+    y
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto enums = scaffold.parse_existing_enums(header);
+
+    // The enum inside the block comment is still matched (documents the gap).
+    ASSERT_EQ(enums.size(), 2u);
+    EXPECT_EQ(enums[0].name, "Old");
+    EXPECT_EQ(enums[1].name, "Real");
+}
+
+TEST(ScaffoldTest, CompareStructsCommentedStructReportsSpuriousRemoval) {
+    // The IDL only declares Point, and the header's real struct is Point, but a
+    // commented-out struct is parsed as real and reported as removed-from-IDL.
+    auto ast = parse_idl(R"(
+        namespace test;
+
+        struct Point {
+            i32 x;
+        }
+
+        service Foo {
+            foo() -> void;
+        }
+    )");
+
+    std::string existing_header = R"(
+// struct LegacyPoint {
+//   i32 x;
+// };
+struct Point {
+    i32 x;
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto existing_structs = scaffold.parse_existing_structs(existing_header);
+    SyncReport report;
+    scaffold.compare_structs(ast.namespaces.front(), existing_structs, report);
+
+    EXPECT_TRUE(report.new_structs.empty());
+    EXPECT_TRUE(report.modified_structs.empty());
+    // Spurious: the commented-out struct is reported as removed from the IDL.
+    ASSERT_EQ(report.removed_structs.size(), 1u);
+    EXPECT_EQ(report.removed_structs[0].name, "LegacyPoint");
+}
+
+// =============================================================================
+// Multi-Line Method Signatures (characterization)
+// =============================================================================
+//
+// parse_existing_impl matches an anchored single-line regex per getline() line,
+// so a method signature wrapped across lines matches nothing. These tests pin
+// that behavior. Gap: scaffold-multiline-signature-not-parsed.
+
+TEST(ScaffoldTest, ParseExistingImplDropsMultiLineSignature) {
+    std::string content = R"(
+class FooImpl : public IFoo {
+public:
+    i32 compute(
+        i32 a,
+        i32 b) override {
+        return a + b;
+    }
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto methods = scaffold.parse_existing_impl(content, "IFoo");
+
+    // The wrapped signature is not matched by the single-line regex.
+    EXPECT_TRUE(methods.empty());
+}
+
+TEST(ScaffoldTest, ParseExistingImplMixedOnlyCapturesSingleLine) {
+    // In a class with one single-line and one multi-line method, only the
+    // single-line method is captured.
+    std::string content = R"(
+class FooImpl : public IFoo {
+public:
+    i32 one_line(i32 a) override { return a; }
+
+    i32 wrapped(
+        i32 a,
+        i32 b) override {
+        return a + b;
+    }
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto methods = scaffold.parse_existing_impl(content, "IFoo");
+
+    ASSERT_EQ(methods.size(), 1u);
+    EXPECT_EQ(methods[0].name, "one_line");
+    EXPECT_EQ(methods[0].return_type, "i32");
+    EXPECT_EQ(methods[0].params, "i32 a");
+}
+
+TEST(ScaffoldTest, CompareMultiLineImplReportsSpuriousNewMethod) {
+    // The method exists in the implementation but is wrapped across lines, so it
+    // is invisible to the parser and compare() reports it as a new method.
+    auto ast = parse_idl(R"(
+        namespace test;
+        service Foo {
+            compute(i32 a, i32 b) -> i32;
+        }
+    )");
+
+    std::string existing = R"(
+class FooImpl : public IFoo {
+public:
+    i32 compute(
+        i32 a,
+        i32 b) override {
+        return a + b;
+    }
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto methods = scaffold.parse_existing_impl(existing, "IFoo");
+    auto report = scaffold.compare(ast.namespaces.front().services.front(), methods);
+
+    EXPECT_TRUE(report.removed_methods.empty());
+    EXPECT_TRUE(report.modified_methods.empty());
+    // Spurious: an already-implemented method is flagged as new.
+    ASSERT_EQ(report.new_methods.size(), 1u);
+    EXPECT_EQ(report.new_methods[0]->name, "compute");
+}
+
+// =============================================================================
+// Enum Underlying-Type Requirement (characterization)
+// =============================================================================
+//
+// The enum regex hard-requires "enum class Name : <type>". Scoped enums without
+// an explicit underlying type, and unscoped enums, are silently not parsed.
+// Gap: scaffold-enum-underlying-type-required.
+
+TEST(ScaffoldTest, ParseExistingEnumsRequiresUnderlyingType) {
+    // No ": <type>" -> not matched.
+    std::string header = R"(
+enum class Color {
+    red,
+    green,
+    blue
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto enums = scaffold.parse_existing_enums(header);
+
+    EXPECT_TRUE(enums.empty());
+}
+
+TEST(ScaffoldTest, ParseExistingEnumsIgnoresUnscopedEnum) {
+    // "enum" without "class" -> not matched even with an underlying type.
+    std::string header = R"(
+enum Color : int {
+    red,
+    green
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto enums = scaffold.parse_existing_enums(header);
+
+    EXPECT_TRUE(enums.empty());
+}
+
+TEST(ScaffoldTest, CompareEnumsMissingUnderlyingTypeReportsSpuriousNew) {
+    // The header defines Color, but without an underlying type it is not parsed,
+    // so compare_enums reports the IDL enum as new.
+    auto ast = parse_idl(R"(
+        namespace test;
+
+        enum Color {
+            red,
+            green
+        }
+
+        service Foo {
+            foo() -> void;
+        }
+    )");
+
+    std::string existing_header = R"(
+enum class Color {
+    red,
+    green
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto existing_enums = scaffold.parse_existing_enums(existing_header);
+    SyncReport report;
+    scaffold.compare_enums(ast.namespaces.front(), existing_enums, report);
+
+    EXPECT_TRUE(report.removed_enums.empty());
+    EXPECT_TRUE(report.modified_enums.empty());
+    // Spurious: the already-present enum is flagged as new.
+    ASSERT_EQ(report.new_enums.size(), 1u);
+    EXPECT_EQ(report.new_enums[0]->name, "Color");
+}
+
+// =============================================================================
+// Non-Decimal / Expression Enum Values (characterization)
+// =============================================================================
+//
+// The enum value regex only accepts decimal digits (-?\d+), so hex literals and
+// expression values are misparsed into spurious members. Gap:
+// scaffold-comma-templates-and-nondecimal-enum-values.
+
+TEST(ScaffoldTest, ParseExistingEnumsMisparsesHexValues) {
+    std::string header = R"(
+enum class Perm : u32 {
+    read = 0x01,
+    write = 0x02
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto enums = scaffold.parse_existing_enums(header);
+
+    ASSERT_EQ(enums.size(), 1u);
+    EXPECT_EQ(enums[0].name, "Perm");
+    // "0x01" -> the decimal regex captures only the leading "0", then "x01" is
+    // matched as a separate (bogus) enum member. Same for write/0x02.
+    ASSERT_EQ(enums[0].values.size(), 4u);
+    EXPECT_EQ(enums[0].values[0].name, "read");
+    ASSERT_TRUE(enums[0].values[0].value.has_value());
+    EXPECT_EQ(enums[0].values[0].value.value(), 0);
+    EXPECT_EQ(enums[0].values[1].name, "x01");
+    EXPECT_FALSE(enums[0].values[1].value.has_value());
+    EXPECT_EQ(enums[0].values[2].name, "write");
+    EXPECT_EQ(enums[0].values[3].name, "x02");
+}
+
+TEST(ScaffoldTest, ParseExistingEnumsMisparsesExpressionValues) {
+    std::string header = R"(
+enum class Perm : u32 {
+    read = 1,
+    write = 2,
+    all = read | write
+};
+)";
+
+    ScaffoldGenerator scaffold;
+    auto enums = scaffold.parse_existing_enums(header);
+
+    ASSERT_EQ(enums.size(), 1u);
+    ASSERT_EQ(enums[0].values.size(), 5u);
+    EXPECT_EQ(enums[0].values[0].name, "read");
+    EXPECT_EQ(enums[0].values[1].name, "write");
+    // "all = read | write": "all" gets no numeric value, and the operands leak
+    // in as spurious duplicate members.
+    EXPECT_EQ(enums[0].values[2].name, "all");
+    EXPECT_FALSE(enums[0].values[2].value.has_value());
+    EXPECT_EQ(enums[0].values[3].name, "read");
+    EXPECT_EQ(enums[0].values[4].name, "write");
+}
