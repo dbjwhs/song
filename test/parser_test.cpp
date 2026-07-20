@@ -862,3 +862,187 @@ TEST(ParserTest, CanvasExample) {
     EXPECT_EQ(factory.methods[1].throws.size(), 1);
 }
 
+
+// =============================================================================
+// Class-body Method Modifiers (stream / optional)
+// =============================================================================
+
+// Class-body dispatch (parser.cpp KwStream/KwOptional branch) routes
+// modifier-prefixed members to parse_method just like the service path; only the
+// service side was previously tested (ServiceWithStreamMethod/OptionalMethod).
+TEST(ParserTest, ClassStreamMethod) {
+    Parser parser(R"(
+        namespace test;
+        class Feed {
+            stream tick() -> i32;
+        }
+    )");
+    auto ast = parser.parse();
+
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.methods.size(), 1u);
+    EXPECT_EQ(c.methods[0].name, "tick");
+    EXPECT_TRUE(c.methods[0].is_stream);
+    EXPECT_FALSE(c.methods[0].is_optional);
+}
+
+TEST(ParserTest, ClassOptionalMethod) {
+    Parser parser(R"(
+        namespace test;
+        class Repo {
+            optional find(string id) -> Record;
+        }
+    )");
+    auto ast = parser.parse();
+
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.methods.size(), 1u);
+    EXPECT_EQ(c.methods[0].name, "find");
+    EXPECT_TRUE(c.methods[0].is_optional);
+    EXPECT_FALSE(c.methods[0].is_stream);
+}
+
+// A class-body modifier method and a throws clause must coexist.
+TEST(ParserTest, ClassStreamMethodWithThrows) {
+    Parser parser(R"(
+        namespace test;
+        class Repo {
+            stream items() -> Record throws IOError;
+        }
+    )");
+    auto ast = parser.parse();
+
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.methods.size(), 1u);
+    EXPECT_TRUE(c.methods[0].is_stream);
+    ASSERT_EQ(c.methods[0].throws.size(), 1u);
+    EXPECT_EQ(c.methods[0].throws[0], "IOError");
+}
+
+// =============================================================================
+// Type Modifier Ordering (rejected grammars)
+// =============================================================================
+
+// Only T[]? is legal (that accepted form is covered by OptionalArrayType). The
+// reversed optional-before-array ordering must surface as a clean ParserError
+// rather than crashing: after '?' is consumed the '[' is left where a field name
+// is expected.
+TEST(ParserTest, StructOptionalBeforeArrayRejected) {
+    Parser parser("namespace test; struct S { string?[] a; }");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// A double optional marker ('??') is rejected: the second '?' remains where a
+// field name is expected.
+TEST(ParserTest, StructDoubleOptionalRejected) {
+    Parser parser("namespace test; struct S { string?? a; }");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// Struct fields do NOT accept C-style trailing name-side brackets (contrast with
+// the class user-type property path which does accept them).
+TEST(ParserTest, StructCStyleArrayFieldRejected) {
+    Parser parser("namespace test; struct S { i32 a[]; }");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// =============================================================================
+// Empty and Degenerate Bodies
+// =============================================================================
+
+// Every definition kind accepts an empty body; each parse loop guards on RBrace
+// before reading any member.
+TEST(ParserTest, EmptyDefinitionBodies) {
+    Parser parser(R"(
+        namespace test;
+        struct S {}
+        enum E {}
+        class C {}
+        service Sv {}
+        error Er {}
+    )");
+    auto ast = parser.parse();
+
+    const auto& ns = ast.namespaces[0];
+    ASSERT_EQ(ns.structs.size(), 1u);
+    EXPECT_TRUE(ns.structs[0].fields.empty());
+    ASSERT_EQ(ns.enums.size(), 1u);
+    EXPECT_TRUE(ns.enums[0].items.empty());
+    ASSERT_EQ(ns.classes.size(), 1u);
+    EXPECT_TRUE(ns.classes[0].properties.empty());
+    EXPECT_TRUE(ns.classes[0].constructors.empty());
+    EXPECT_TRUE(ns.classes[0].methods.empty());
+    ASSERT_EQ(ns.services.size(), 1u);
+    EXPECT_TRUE(ns.services[0].methods.empty());
+    ASSERT_EQ(ns.errors.size(), 1u);
+    EXPECT_TRUE(ns.errors[0].fields.empty());
+}
+
+// A constructor with an empty parameter list parses to zero params.
+TEST(ParserTest, ClassEmptyConstructor) {
+    Parser parser(R"(
+        namespace test;
+        class C {
+            C();
+        }
+    )");
+    auto ast = parser.parse();
+
+    const auto& c = ast.namespaces[0].classes[0];
+    ASSERT_EQ(c.constructors.size(), 1u);
+    EXPECT_TRUE(c.constructors[0].params.empty());
+}
+
+// A 'throws' keyword with no following error type is a ParserError.
+TEST(ParserTest, ServiceThrowsWithNoErrorTypeRejected) {
+    Parser parser("namespace test; service S { save(Record r) -> void throws; }");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// A trailing comma in a throws list is a ParserError.
+TEST(ParserTest, ServiceThrowsTrailingCommaRejected) {
+    Parser parser("namespace test; service S { save(Record r) -> void throws A, ; }");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// =============================================================================
+// Top-level Error and EOF Paths
+// =============================================================================
+
+// Empty input hits the EOF branch of parse_namespace (distinct from the
+// leading-non-namespace-token case already covered by MissingNamespace).
+TEST(ParserTest, EmptyInputThrows) {
+    Parser parser("");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// A file containing only a (non-doc) comment lexes to EOF with no namespace.
+TEST(ParserTest, CommentOnlyInputThrows) {
+    Parser parser("// just a comment\n");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// Only a single leading namespace is supported; a second 'namespace' token in
+// the definition stream is rejected as an unexpected definition (documents the
+// single-namespace-per-file limitation despite AST::namespaces being a vector).
+TEST(ParserTest, SecondNamespaceRejected) {
+    Parser parser("namespace a; struct S { i32 x; } namespace b;");
+    EXPECT_THROW(parser.parse(), ParserError);
+}
+
+// Negative enum discriminants are unsupported: the '-' is unlexable and surfaces
+// as a LexerError (not a ParserError).
+TEST(ParserTest, NegativeEnumValueThrowsLexerError) {
+    Parser parser("namespace test; enum E { neg = -1 }");
+    EXPECT_THROW(parser.parse(), LexerError);
+}
+
+// A dangling doc comment at EOF is silently dropped: the file parses to a single
+// empty namespace rather than crashing.
+TEST(ParserTest, DanglingDocAtEofParses) {
+    Parser parser("namespace test; /// dangling");
+    auto ast = parser.parse();
+
+    ASSERT_EQ(ast.namespaces.size(), 1u);
+    EXPECT_TRUE(ast.namespaces[0].structs.empty());
+}
