@@ -5,6 +5,8 @@
 #include <song/object.hpp>
 #include <song/wire.hpp>
 #include <song/buffer.hpp>
+#include <song/subscription.hpp>
+#include <song/transport.hpp>
 
 namespace song::test {
 
@@ -487,6 +489,274 @@ TEST(ObjectMessageTest, ObjectMethodMessage) {
 
     EXPECT_EQ(hdr.type, wire::MsgType::call);  // Object methods use MSG_CALL type
     EXPECT_EQ(hdr.sequence_id, 300u);
+}
+
+} // namespace song::test
+
+// =============================================================================
+// Coverage additions (appended)
+// =============================================================================
+
+namespace song::test {
+
+namespace {
+
+// Object subclass that bumps a caller-supplied counter in its destructor, used
+// to prove clear()/~ObjectRegistry delete each object exactly once even when the
+// reference count is greater than 1.
+class CountingObject : public Object {
+    int* destroyed_;
+
+public:
+    explicit CountingObject(int* destroyed) : destroyed_(destroyed) {}
+    ~CountingObject() override { ++(*destroyed_); }
+
+    void prop_get(u16, Buffer&) override {}
+    void prop_set(u16, Buffer&, Buffer&) override {}
+    void dispatch(u16, Buffer&, Buffer&) override {}
+};
+
+// Transport that records the most recent message sent to it, used to observe the
+// fan-out that Object::notify_property drives through a SubscriptionRegistry.
+class CapturingTransport : public Transport {
+public:
+    int send_count = 0;
+    Buffer last;
+
+    void send(const Buffer& msg) override {
+        last = Buffer{};
+        last.write(msg.data(), msg.size());
+        ++send_count;
+    }
+    bool receive(Buffer&, int) override { return false; }
+    void close() override {}
+    bool is_connected() const override { return true; }
+    const char* type_name() const override { return "capturing"; }
+};
+
+} // namespace
+
+// -- type_id() is threaded through create_object and readable on the instance ---
+TEST_F(ObjectRegistryTest, TypeIdSetByCreateObject) {
+    registry.register_factory(7, [](u16, Buffer&) -> Object* {
+        return new TestObject(0);
+    });
+
+    Buffer empty;
+    i32 id = registry.create_object(7, 0, empty);
+    Object* obj = registry.get(id);
+    ASSERT_NE(obj, nullptr);
+    EXPECT_EQ(obj->type_id(), 7u);
+    EXPECT_FALSE(obj->is_null());
+}
+
+// -- register_object leaves type_id at its default 0 (documents the contract) ---
+TEST_F(ObjectRegistryTest, TypeIdZeroAfterRegisterObject) {
+    i32 id = registry.register_object(new TestObject(0));
+    Object* obj = registry.get(id);
+    ASSERT_NE(obj, nullptr);
+    EXPECT_EQ(obj->type_id(), 0u);
+}
+
+// -- The stored type_id is what fans out through notify_property ---------------
+TEST_F(ObjectRegistryTest, TypeIdFansOutThroughSubscription) {
+    registry.register_factory(7, [](u16, Buffer&) -> Object* {
+        return new TestObject(0);
+    });
+
+    Buffer empty;
+    i32 id = registry.create_object(7, 0, empty);
+    Object* obj = registry.get(id);
+    ASSERT_NE(obj, nullptr);
+
+    SubscriptionRegistry subs;
+    CapturingTransport sink;
+    subs.subscribe(1, id, TestObject::kProp_value, &sink);
+    obj->set_subscription_registry(&subs);
+
+    Buffer val;
+    encode_i32(val, 99);
+    obj->notify_property(TestObject::kProp_value, val);
+
+    ASSERT_EQ(sink.send_count, 1);
+    sink.last.reset_read();
+    auto hdr = wire::decode_header(sink.last);
+    EXPECT_EQ(hdr.type, wire::MsgType::prop_notify);
+
+    auto prop = wire::decode_property_header(sink.last);
+    EXPECT_EQ(prop.type_id, 7u);  // the type_id assigned at create time
+    EXPECT_EQ(prop.object_id, id);
+    EXPECT_EQ(prop.property_id, TestObject::kProp_value);
+}
+
+// -- notify_property prefers the subscription registry and skips the callback ---
+TEST(ObjectNotifyPrecedenceTest, SubRegistryTakesPrecedenceOverCallback) {
+    TestObject obj(0);
+    SubscriptionRegistry subs;  // empty: no subscribers registered
+    int callback_calls = 0;
+
+    obj.set_notify_callback([&](u32, i32, u16, const Buffer&) {
+        ++callback_calls;
+    });
+    obj.set_subscription_registry(&subs);
+
+    Buffer val;
+    encode_i32(val, 5);
+    obj.notify_property(TestObject::kProp_value, val);
+
+    // The sub_registry branch early-returns before the callback branch runs.
+    EXPECT_EQ(callback_calls, 0);
+}
+
+// -- With no subscription registry, the single-client callback fires -----------
+TEST(ObjectNotifyPrecedenceTest, CallbackFiresWhenNoSubRegistry) {
+    TestObject obj(0);
+    int callback_calls = 0;
+    u16 seen_prop = 0;
+
+    obj.set_notify_callback([&](u32, i32, u16 prop_id, const Buffer&) {
+        ++callback_calls;
+        seen_prop = prop_id;
+    });
+
+    Buffer val;
+    encode_i32(val, 5);
+    obj.notify_property(TestObject::kProp_value, val);
+
+    EXPECT_EQ(callback_calls, 1);
+    EXPECT_EQ(seen_prop, TestObject::kProp_value);
+}
+
+// -- register_object(nullptr) throws and consumes no id ------------------------
+TEST_F(ObjectRegistryTest, RegisterNullThrows) {
+    EXPECT_THROW(registry.register_object(nullptr), ServiceError);
+    EXPECT_EQ(registry.size(), 0u);
+
+    // next_id_ was not consumed by the failed register: first valid id is -1.
+    i32 id = registry.register_object(new TestObject(1));
+    EXPECT_EQ(id, -1);
+}
+
+// -- add_ref on a missing id returns false and touches nothing -----------------
+TEST_F(ObjectRegistryTest, AddRefNonexistentReturnsFalse) {
+    EXPECT_FALSE(registry.add_ref(-999));
+
+    auto* obj = new TestObject(5);
+    registry.register_object(obj);
+    EXPECT_EQ(obj->ref_count(), 1);
+
+    EXPECT_FALSE(registry.add_ref(-12345));  // a different, still-missing id
+    EXPECT_EQ(obj->ref_count(), 1);          // the real object is unaffected
+}
+
+// -- add_ref on an id whose object was released returns false (no resurrect) ----
+TEST_F(ObjectRegistryTest, AddRefAfterReleaseReturnsFalse) {
+    auto* obj = new TestObject(5);
+    i32 id = registry.register_object(obj);
+
+    registry.release(id);  // ref_count 1 -> deleted and erased
+    EXPECT_FALSE(registry.contains(id));
+    EXPECT_FALSE(registry.add_ref(id));
+}
+
+// -- Released ids are not recycled: next allocation keeps decrementing ----------
+TEST_F(ObjectRegistryTest, IdsNotReusedAfterRelease) {
+    i32 id_a = registry.register_object(new TestObject(1));
+    EXPECT_EQ(id_a, -1);
+
+    registry.release(id_a);
+    EXPECT_EQ(registry.get(-1), nullptr);
+
+    auto* b = new TestObject(2);
+    i32 id_b = registry.register_object(b);
+    EXPECT_EQ(id_b, -2);  // -1 is not handed back out
+    EXPECT_EQ(registry.get(-1), nullptr);
+    EXPECT_EQ(registry.get(-2), b);
+}
+
+// -- Interleaved create/release still yields strictly decreasing ids -----------
+TEST_F(ObjectRegistryTest, IdsMonotonicWithInterleavedReleases) {
+    i32 id_a = registry.register_object(new TestObject(1));
+    auto* b = new TestObject(2);
+    i32 id_b = registry.register_object(b);
+    EXPECT_EQ(id_a, -1);
+    EXPECT_EQ(id_b, -2);
+
+    registry.release(id_a);
+
+    auto* c = new TestObject(3);
+    i32 id_c = registry.register_object(c);
+    EXPECT_EQ(id_c, -3);  // not the freed -1
+
+    EXPECT_EQ(registry.get(-1), nullptr);
+    EXPECT_EQ(registry.get(-2), b);
+    EXPECT_EQ(registry.get(-3), c);
+}
+
+// -- Pre-registration identity vs post-registration identity -------------------
+TEST_F(ObjectRegistryTest, PreRegistrationIdentity) {
+    auto* obj = new TestObject(0);
+    EXPECT_EQ(obj->object_id(), 0);
+    EXPECT_TRUE(obj->is_null());
+    EXPECT_EQ(obj->registry(), nullptr);
+
+    i32 id = registry.register_object(obj);
+    EXPECT_LT(obj->object_id(), 0);
+    EXPECT_EQ(obj->object_id(), id);
+    EXPECT_FALSE(obj->is_null());
+    EXPECT_EQ(obj->registry(), &registry);
+}
+
+// -- has_factories() reflects whether any factory is registered ----------------
+TEST_F(ObjectRegistryTest, HasFactoriesReflectsRegistration) {
+    EXPECT_FALSE(registry.has_factories());
+    registry.register_factory(1, [](u16, Buffer&) -> Object* {
+        return new TestObject(0);
+    });
+    EXPECT_TRUE(registry.has_factories());
+}
+
+// -- register_factory for an existing type_id overwrites (does not ignore) -----
+TEST_F(ObjectRegistryTest, RegisterFactoryOverwrites) {
+    registry.register_factory(1, [](u16, Buffer&) -> Object* {
+        return new TestObject(111);
+    });
+    registry.register_factory(1, [](u16, Buffer&) -> Object* {
+        return new TestObject(222);
+    });
+
+    Buffer empty;
+    i32 id = registry.create_object(1, 0, empty);
+    ASSERT_NE(registry.get(id), nullptr);
+    EXPECT_EQ(static_cast<TestObject*>(registry.get(id))->value(), 222);
+}
+
+// -- clear() force-deletes objects even with ref_count > 1, exactly once -------
+TEST(ObjectRegistryLifetimeTest, ClearDeletesObjectsWithOutstandingRefs) {
+    ObjectRegistry registry;
+    int destroyed = 0;
+    i32 id = registry.register_object(new CountingObject(&destroyed));
+
+    ASSERT_TRUE(registry.add_ref(id));
+    ASSERT_TRUE(registry.add_ref(id));
+    EXPECT_EQ(registry.get(id)->ref_count(), 3);
+
+    registry.clear();
+    EXPECT_EQ(registry.size(), 0u);
+    EXPECT_EQ(destroyed, 1);  // deleted once despite ref_count 3, no double-free
+}
+
+// -- ~ObjectRegistry force-deletes every outstanding object exactly once --------
+TEST(ObjectRegistryLifetimeTest, DestructorDeletesOutstandingRefs) {
+    int destroyed = 0;
+    {
+        ObjectRegistry registry;
+        i32 a = registry.register_object(new CountingObject(&destroyed));
+        i32 b = registry.register_object(new CountingObject(&destroyed));
+        ASSERT_TRUE(registry.add_ref(a));  // a: ref_count 2
+        ASSERT_TRUE(registry.add_ref(b));  // b: ref_count 2
+    }  // registry destructs -> clear()
+    EXPECT_EQ(destroyed, 2);
 }
 
 } // namespace song::test
