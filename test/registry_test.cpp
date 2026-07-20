@@ -89,6 +89,39 @@ TEST(MemoryRegistryTest, RegisterAndDiscover) {
     EXPECT_EQ(found.port, 9000u);
 }
 
+TEST(ServiceInfoTest, RejectsOverlongNameOrHost) {
+    ServiceInfo long_name;
+    long_name.name = std::string(kMaxServiceNameLen + 1, 'n');
+    long_name.host = "h";
+    long_name.port = 1;
+    EXPECT_FALSE(long_name.is_valid());
+
+    ServiceInfo long_host;
+    long_host.name = "n";
+    long_host.host = std::string(kMaxServiceHostLen + 1, 'h');
+    long_host.port = 1;
+    EXPECT_FALSE(long_host.is_valid());
+}
+
+TEST(MemoryRegistryTest, RejectsRegistrationsPastCap) {
+    MemoryRegistry registry;
+    for (size_t ndx = 0; ndx < kMaxRegisteredServices; ++ndx) {
+        ServiceInfo info;
+        info.name = "svc-" + std::to_string(ndx);
+        info.host = "127.0.0.1";
+        info.port = 9000;
+        ASSERT_TRUE(registry.register_service(info));
+    }
+    EXPECT_EQ(registry.size(), kMaxRegisteredServices);
+
+    ServiceInfo overflow;
+    overflow.name = "one-too-many";
+    overflow.host = "127.0.0.1";
+    overflow.port = 9000;
+    EXPECT_FALSE(registry.register_service(overflow));
+    EXPECT_EQ(registry.size(), kMaxRegisteredServices);
+}
+
 TEST(MemoryRegistryTest, DiscoverNonexistent) {
     MemoryRegistry registry;
     ServiceInfo found = registry.discover("nonexistent");

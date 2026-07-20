@@ -15,6 +15,15 @@
 
 namespace song {
 
+/// Maximum accepted lengths for a registered service (real names are short; the
+/// 1 MB decode_string cap is far too loose for a hostname/service name).
+constexpr size_t kMaxServiceNameLen = 256;
+constexpr size_t kMaxServiceHostLen = 255;
+
+/// Maximum number of distinct services a MemoryRegistry will hold at once, so an
+/// unauthenticated peer cannot exhaust memory by registering endless names.
+constexpr size_t kMaxRegisteredServices = 4096;
+
 /// Service information for registry
 struct ServiceInfo {
     std::string name;    // Service name (e.g., "calculator")
@@ -27,7 +36,10 @@ struct ServiceInfo {
     // Decode from buffer
     static ServiceInfo decode(Buffer& buf);
 
-    bool is_valid() const { return !name.empty() && !host.empty() && port != 0; }
+    bool is_valid() const {
+        return !name.empty() && !host.empty() && port != 0 &&
+               name.size() <= kMaxServiceNameLen && host.size() <= kMaxServiceHostLen;
+    }
 };
 
 /// Service/Method IDs for Registry service

@@ -284,6 +284,13 @@ bool MemoryRegistry::register_service(const ServiceInfo& info) {
         return false;  // Already registered
     }
 
+    // Bound total registrations so a peer cannot exhaust memory with endless
+    // distinct names. Existing names still refresh (handled above); only new
+    // names are rejected once the cap is reached.
+    if (services_.size() >= kMaxRegisteredServices) {
+        return false;
+    }
+
     Entry entry;
     entry.info = info;
     entry.last_heartbeat = std::chrono::steady_clock::now();
