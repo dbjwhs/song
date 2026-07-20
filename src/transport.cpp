@@ -11,6 +11,7 @@
 #include <netinet/tcp.h>
 #include <cstring>
 #include <cerrno>
+#include <chrono>
 
 // MSG_NOSIGNAL prevents SIGPIPE on broken connections (Linux).
 // macOS uses the SO_NOSIGPIPE socket option instead.
@@ -156,7 +157,8 @@ TcpTransport::~TcpTransport() {
 TcpTransport::TcpTransport(TcpTransport&& other) noexcept
     : sock_(other.sock_)
     , peer_addr_(std::move(other.peer_addr_))
-    , peer_port_(other.peer_port_) {
+    , peer_port_(other.peer_port_)
+    , message_deadline_ms_(other.message_deadline_ms_) {
     other.sock_ = -1;
     other.peer_port_ = 0;
 }
@@ -167,6 +169,7 @@ TcpTransport& TcpTransport::operator=(TcpTransport&& other) noexcept {
         sock_ = other.sock_;
         peer_addr_ = std::move(other.peer_addr_);
         peer_port_ = other.peer_port_;
+        message_deadline_ms_ = other.message_deadline_ms_;
         other.sock_ = -1;
         other.peer_port_ = 0;
     }
@@ -328,13 +331,51 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
 
     msg.reset();
 
+    // Slowloris guard: an idle connection may wait indefinitely for its next
+    // message, but once the first byte of a message has arrived the whole
+    // header+payload must complete within message_deadline_ms_. recv_bounded()
+    // polls with the remaining budget before each recv once the message has
+    // started; a lapsed budget is treated as a disconnect (returns 0). This
+    // frees a worker thread that a peer would otherwise pin by dribbling a
+    // partial message and stalling.
+    bool message_started = false;
+    std::chrono::steady_clock::time_point deadline;
+    auto recv_bounded = [&](std::byte* dst, size_t need) -> ssize_t {
+        if (message_started && message_deadline_ms_ > 0) {
+            auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                return 0;  // message-completion budget exhausted -> disconnect
+            }
+            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - now).count();
+            struct pollfd pfd{};
+            pfd.fd = sock_;
+            pfd.events = POLLIN;
+            int pr;
+            do {
+                pr = poll(&pfd, 1, static_cast<int>(remaining));
+            } while (pr < 0 && errno == EINTR);
+            if (pr <= 0) {
+                return 0;  // timed out waiting for the rest of the message
+            }
+        }
+        return recv(sock_, dst, need, 0);
+    };
+    auto start_deadline_on_first_byte = [&]() {
+        if (!message_started) {
+            message_started = true;
+            deadline = std::chrono::steady_clock::now() +
+                       std::chrono::milliseconds(message_deadline_ms_);
+        }
+    };
+
     // Read header (16 bytes)
     std::byte header_buf[16];
     size_t header_offset = 0;
     while (header_offset < 16) {
-        ssize_t n = recv(sock_, header_buf + header_offset, 16 - header_offset, 0);
+        ssize_t n = recv_bounded(header_buf + header_offset, 16 - header_offset);
         if (n == 0) {
-            return false;  // Connection closed
+            return false;  // Connection closed or message-completion timeout
         }
         if (n < 0) {
             if (errno == EINTR) {
@@ -342,6 +383,7 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
             }
             throw ServiceError("TcpTransport: recv failed: " + std::string(strerror(errno)));
         }
+        start_deadline_on_first_byte();
         header_offset += static_cast<size_t>(n);
     }
 
@@ -360,8 +402,8 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
         std::vector<std::byte> payload_buf(hdr.payload_size);
         size_t offset = 0;
         while (offset < hdr.payload_size) {
-            ssize_t n = recv(sock_, payload_buf.data() + offset,
-                           hdr.payload_size - offset, 0);
+            ssize_t n = recv_bounded(payload_buf.data() + offset,
+                                     hdr.payload_size - offset);
             if (n < 0) {
                 if (errno == EINTR) {
                     continue;
@@ -369,7 +411,7 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
                 throw ServiceError("TcpTransport: failed to read payload");
             }
             if (n == 0) {
-                throw ServiceError("TcpTransport: connection closed during payload read");
+                throw ServiceError("TcpTransport: connection closed or stalled during payload read");
             }
             offset += static_cast<size_t>(n);
         }

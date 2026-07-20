@@ -1064,3 +1064,44 @@ TEST(TcpListenerTest, ReListenSucceeds) {
 
     listener.close();
 }
+
+// Slowloris guard: once a message starts, receive() must abort if the rest does
+// not arrive within message_deadline_ms_, instead of blocking the thread forever.
+TEST(TcpTransportTest, ReceiveAbortsStalledPartialMessage) {
+    TcpListener listener;
+    listener.listen(0, 128, "127.0.0.1");
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> got_result{false};
+    std::atomic<bool> result_value{true};
+    std::thread server([&]() {
+        auto conn = listener.accept(2000);
+        if (!conn) {
+            return;
+        }
+        conn->set_message_deadline_ms(200);  // finish a started message within 200ms
+        Buffer msg;
+        bool r = conn->receive(msg, -1);  // blocking; must give up after the stall
+        result_value = r;
+        got_result = true;
+    });
+
+    // Connect, send part of the 16-byte header, then stall (hold the socket open).
+    TcpTransport client;
+    client.connect("127.0.0.1", port, 2000);
+    const char partial[4] = {'S', 'O', 'N', 'G'};
+    ASSERT_EQ(::send(client.socket_fd(), partial, sizeof(partial), 0),
+              static_cast<ssize_t>(sizeof(partial)));
+
+    // The server should return within ~200ms; allow generous margin.
+    auto start = std::chrono::steady_clock::now();
+    while (!got_result.load() &&
+           std::chrono::steady_clock::now() - start < std::chrono::seconds(3)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(got_result.load()) << "receive() never returned after the stall";
+    EXPECT_FALSE(result_value.load()) << "a stalled partial message must read as disconnect";
+
+    client.close();
+    server.join();
+}

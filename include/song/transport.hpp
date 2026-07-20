@@ -81,6 +81,7 @@ class TcpTransport : public Transport {
     int sock_ = -1;
     std::string peer_addr_;
     u16 peer_port_ = 0;
+    int message_deadline_ms_ = 30000;  // Max time to finish a started message
 
 public:
     TcpTransport() = default;
@@ -105,6 +106,16 @@ public:
     /// @param timeout_ms Connection timeout (-1 for system default)
     /// @throws ServiceError on failure
     void connect(const std::string& host, u16 port, int timeout_ms = 5000);
+
+    /// Once the first byte of a message has arrived, the rest of the header and
+    /// payload must arrive within this many milliseconds, or receive() treats the
+    /// connection as disconnected (returns false). This bounds a slowloris peer
+    /// that dribbles a partial message and stalls, which would otherwise pin the
+    /// serving thread forever. It does NOT limit how long an idle connection may
+    /// wait for its next message. Default 30000; <= 0 disables the deadline. Set
+    /// on the accepted server-side transport.
+    void set_message_deadline_ms(int ms) { message_deadline_ms_ = ms; }
+    int message_deadline_ms() const { return message_deadline_ms_; }
 
     void send(const Buffer& msg) override;
     bool receive(Buffer& msg, int timeout_ms = -1) override;
