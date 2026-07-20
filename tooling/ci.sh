@@ -84,5 +84,12 @@ echo "-- testing (full suite)"
 # (mDNS discovery, codegen-compile) are reported as Skipped, not failures.
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
 
+echo "-- python tests (stdlib unittest; skipped if python3 is unavailable)"
+if command -v python3 >/dev/null 2>&1; then
+    ( cd "${REPO_ROOT}/python" && python3 -m unittest discover -s tests -t . )
+else
+    echo "   python3 not found; skipping Python tests"
+fi
+
 echo
 echo "== CI gate PASSED =="

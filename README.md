@@ -518,10 +518,11 @@ Every commit is expected to pass the same gate CI runs. Reproduce it locally:
 ./tooling/ci.sh
 ```
 
-`tooling/ci.sh` configures, builds, and runs the full `ctest` suite in one
-step. Because the project compiles with `-Werror`, a successful build implies
-zero warnings. Environmental skips (mDNS discovery when Bonjour/Avahi is
-unavailable, the codegen-compile test) are reported as `Skipped`, not failures.
+`tooling/ci.sh` configures, builds, and runs the full `ctest` suite plus the
+Python `unittest` suite in one step. Because the project compiles with
+`-Werror`, a successful build implies zero warnings. Environmental skips (mDNS
+discovery when Bonjour/Avahi is unavailable, the codegen-compile test) are
+reported as `Skipped`, not failures.
 
 The same script runs in CI on Linux and macOS via GitHub Actions
 (`.github/workflows/ci.yml`), which also adds an AddressSanitizer +
