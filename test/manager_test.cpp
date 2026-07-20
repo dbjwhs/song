@@ -9,6 +9,7 @@
 #include <chrono>
 #include <atomic>
 #include <filesystem>
+#include <song/registry.hpp>
 
 using namespace song;
 
@@ -526,4 +527,139 @@ TEST(ManagerRemoteTest, ConnectToNonexistentRemoteServiceThrows) {
     // Use a port that's unlikely to be in use
     mgr.register_remote_service("remote", "127.0.0.1", 59997, 1);
     EXPECT_THROW(mgr.connect("remote"), ServiceError);
+}
+
+// =============================================================================
+// ServiceManager Discoverable Registration (duplicate/collision behavior)
+// =============================================================================
+
+// register_discoverable_service lacks the duplicate guard that
+// register_service and register_remote_service have. These tests pin the
+// current (asymmetric) behavior so a future change is noticed.
+
+TEST(ManagerTest, DiscoverableDuplicateRegistrationDoesNotThrow) {
+    ServiceManager mgr;
+    mgr.register_discoverable_service("calc", "calculator", 1);
+    // Second registration of the same discoverable name is silently accepted
+    // (no find_service guard), unlike the local/remote register_* methods.
+    EXPECT_NO_THROW(mgr.register_discoverable_service("calc", "calculator", 1));
+    // find_service returns the first entry, which is discoverable.
+    EXPECT_TRUE(mgr.is_discoverable("calc"));
+}
+
+TEST(ManagerTest, LocalThenDiscoverableSameNameShadows) {
+    ServiceManager mgr;
+    mgr.register_service("foo", "/path/to/foo", 1);
+    // Registering a discoverable entry with a colliding name does not throw,
+    // but the first (local) entry shadows it on lookup.
+    EXPECT_NO_THROW(mgr.register_discoverable_service("foo", "footype", 1));
+    EXPECT_FALSE(mgr.is_discoverable("foo"));
+    EXPECT_FALSE(mgr.is_remote("foo"));
+}
+
+TEST(ManagerTest, DiscoverableThenLocalSameNameThrows) {
+    ServiceManager mgr;
+    mgr.register_discoverable_service("foo", "footype", 1);
+    // register_service DOES guard against duplicate names, so the reverse
+    // ordering throws -- documenting the asymmetry with the discoverable path.
+    EXPECT_THROW(mgr.register_service("foo", "/path/to/foo", 1), ServiceError);
+}
+
+// =============================================================================
+// ServiceManager Service-Not-Found Throw Paths / is_alive Contract
+// =============================================================================
+
+TEST(ManagerTest, RestartNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.restart("nonexistent"), ServiceError);
+}
+
+TEST(ManagerTest, ReplaceNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.replace("nonexistent", "/new/path"), ServiceError);
+}
+
+TEST(ManagerTest, ConnectNonexistentLocalThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.connect("nonexistent"), ServiceError);
+}
+
+TEST(ManagerTest, SetAutoRestartNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.set_auto_restart("nonexistent", true), ServiceError);
+}
+
+TEST(ManagerTest, SetMaxRestartsNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.set_max_restarts("nonexistent", 5), ServiceError);
+}
+
+TEST(ManagerTest, RestartCountNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.restart_count("nonexistent"), ServiceError);
+}
+
+TEST(ManagerTest, ResetRestartCountNonexistentThrows) {
+    ServiceManager mgr;
+    EXPECT_THROW(mgr.reset_restart_count("nonexistent"), ServiceError);
+}
+
+TEST(ManagerTest, IsAliveNonexistentReturnsFalse) {
+    ServiceManager mgr;
+    // is_alive deliberately returns false (not throw) for an unregistered name.
+    bool alive = true;
+    EXPECT_NO_THROW(alive = mgr.is_alive("never-registered"));
+    EXPECT_FALSE(alive);
+}
+
+// =============================================================================
+// ServiceManager Registry Configuration API
+// =============================================================================
+
+TEST(ManagerRegistryTest, FreshManagerHasNoRegistry) {
+    ServiceManager mgr;
+    EXPECT_FALSE(mgr.has_registry());
+    EXPECT_EQ(mgr.registry_client(), nullptr);
+}
+
+TEST(ManagerRegistryTest, ZeroPortNotConfigured) {
+    ServiceManager mgr;
+    mgr.set_registry("127.0.0.1", 0);  // port == 0 boundary
+    EXPECT_FALSE(mgr.has_registry());
+    EXPECT_EQ(mgr.registry_client(), nullptr);
+}
+
+TEST(ManagerRegistryTest, EmptyHostNotConfigured) {
+    ServiceManager mgr;
+    mgr.set_registry("", 9999);  // empty host boundary
+    EXPECT_FALSE(mgr.has_registry());
+    EXPECT_EQ(mgr.registry_client(), nullptr);
+}
+
+TEST(ManagerRegistryTest, ConfiguredButDisconnected) {
+    ServiceManager mgr;
+    // Dead loopback port: configured, so a client is built, but it cannot
+    // connect (constructor swallows the connect failure).
+    mgr.set_registry("127.0.0.1", 59996);
+    EXPECT_TRUE(mgr.has_registry());
+
+    RegistryClient* client = mgr.registry_client();
+    ASSERT_NE(client, nullptr);
+    EXPECT_FALSE(client->is_connected());
+}
+
+TEST(ManagerRegistryTest, ReconfigureBuildsFreshClient) {
+    ServiceManager mgr;
+    mgr.set_registry("127.0.0.1", 59995);
+    RegistryClient* first = mgr.registry_client();
+    ASSERT_NE(first, nullptr);
+    EXPECT_FALSE(first->is_connected());
+
+    // set_registry resets the cached client; the next call builds one for the
+    // new (also dead) address.
+    mgr.set_registry("127.0.0.1", 59994);
+    EXPECT_TRUE(mgr.has_registry());
+    RegistryClient* second = mgr.registry_client();
+    ASSERT_NE(second, nullptr);
+    EXPECT_FALSE(second->is_connected());
 }
