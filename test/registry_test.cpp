@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <atomic>
 
 using namespace song;
 
@@ -537,4 +538,391 @@ TEST(RegistryClientHardeningTest, DiscoverTruncatedReplyReturnsInvalid) {
     client.close();
     listener.close();
     server.join();
+}
+
+// =============================================================================
+// Coverage appendix: dispatcher error paths, MemoryRegistry stale side effects,
+// RegistryClient protocol-mismatch / lifecycle / reconnect branches.
+// =============================================================================
+
+namespace {
+
+// Accept one connection, read the client's request, and reply with a message
+// built from the request's sequence id by `make_reply`. Then linger briefly so
+// the client can read the reply, and close.
+template <typename MakeReply>
+void serve_one_crafted(TcpListener& listener, MakeReply make_reply) {
+    auto conn = listener.accept(5000);
+    if (!conn) {
+        return;
+    }
+    Buffer req;
+    if (!conn->receive(req, 5000)) {
+        return;
+    }
+    auto hdr = wire::decode_header(req);
+    Buffer reply = make_reply(hdr.sequence_id);
+    conn->send(reply);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    conn->close();
+}
+
+// Accept one connection, read the client's request, but never reply. Linger long
+// enough for the client to hit its (short) receive timeout, then close.
+void serve_no_reply(TcpListener& listener) {
+    auto conn = listener.accept(5000);
+    if (!conn) {
+        return;
+    }
+    Buffer req;
+    conn->receive(req, 5000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    conn->close();
+}
+
+// A minimal, reconnection-capable registry server. Unlike a one-shot server it
+// returns to accept() whenever a connection ends (EOF or idle timeout), so a
+// client that close()s and issues another op is served on a fresh connection.
+void serve_registry_loop(TcpListener& listener, MemoryRegistry& reg,
+                         std::atomic<bool>& running) {
+    while (running) {
+        std::unique_ptr<TcpTransport> conn;
+        try {
+            conn = listener.accept(100);
+        } catch (...) {
+            continue;
+        }
+        if (!conn) {
+            continue;
+        }
+        while (running && conn->is_connected()) {
+            Buffer msg;
+            bool got = false;
+            try {
+                got = conn->receive(msg, 100);
+            } catch (...) {
+                break;  // idle timeout or read error -> end this connection
+            }
+            if (!got) {
+                break;  // EOF: peer closed -> go back to accept()
+            }
+            try {
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type != wire::MsgType::call) {
+                    continue;
+                }
+                auto [service_id, method_id] = wire::decode_method_call_header(msg);
+                if (service_id != kService_Registry) {
+                    continue;
+                }
+                Buffer response_payload;
+                dispatch_Registry(reg, method_id, msg, response_payload);
+                Buffer response = wire::create_result_message(hdr.sequence_id, response_payload);
+                conn->send(response);
+            } catch (...) {
+                break;
+            }
+        }
+        conn->close();
+    }
+}
+
+}  // namespace
+
+// =============================================================================
+// dispatch_Registry error paths (unknown method + malformed request)
+// =============================================================================
+
+TEST(RegistryDispatcherTest, UnknownMethodThrows) {
+    MemoryRegistry impl;
+    {
+        Buffer request;
+        Buffer response;
+        EXPECT_THROW(dispatch_Registry(impl, 0, request, response), ProtocolError);
+    }
+    {
+        Buffer request;
+        Buffer response;
+        EXPECT_THROW(dispatch_Registry(impl, 6, request, response), ProtocolError);
+    }
+    {
+        Buffer request;
+        Buffer response;
+        EXPECT_THROW(dispatch_Registry(impl, 0xFFFF, request, response), ProtocolError);
+    }
+}
+
+TEST(RegistryDispatcherTest, UnknownMethodMessageIncludesId) {
+    MemoryRegistry impl;
+    Buffer request;
+    Buffer response;
+    try {
+        dispatch_Registry(impl, 6, request, response);
+        FAIL() << "expected ProtocolError for unknown method";
+    } catch (const ProtocolError& e) {
+        EXPECT_NE(std::string(e.what()).find("6"), std::string::npos);
+    }
+}
+
+TEST(RegistryDispatcherTest, RegisterMalformedRequestThrows) {
+    MemoryRegistry impl;
+
+    // Encode only the name, omitting host and port: decoding host underflows.
+    Buffer request;
+    encode_string(request, "only-name");
+    request.reset_read();
+
+    Buffer response;
+    EXPECT_THROW(dispatch_Registry(impl, kMethod_Register, request, response),
+                 std::runtime_error);
+    EXPECT_EQ(impl.size(), 0u);  // nothing was registered
+}
+
+TEST(RegistryDispatcherTest, DiscoverOversizedStringLengthThrows) {
+    MemoryRegistry impl;
+
+    // String length prefix claims 1000 bytes but only 4 more bytes follow.
+    Buffer request;
+    encode_u32(request, 1000u);
+    encode_u32(request, 0u);
+    request.reset_read();
+
+    Buffer response;
+    EXPECT_THROW(dispatch_Registry(impl, kMethod_Discover, request, response),
+                 std::runtime_error);
+}
+
+// =============================================================================
+// MemoryRegistry stale-entry side effects (size() / list_all() / re-register)
+// =============================================================================
+
+TEST(MemoryRegistryTest, StaleEntryBlocksReregistration) {
+    MemoryRegistry registry(std::chrono::seconds(1));
+
+    EXPECT_TRUE(registry.register_service({"svc", "h1", 1000}));
+
+    // Let the entry go stale WITHOUT any reap (no discover/list_all/cleanup_stale).
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // The stale-but-present entry still blocks a fresh registration of the name.
+    EXPECT_FALSE(registry.register_service({"svc", "h2", 2000}));
+
+    // discover() reaps the stale entry, so the name now reports absent even though
+    // the re-registration was just rejected: the map is left empty.
+    EXPECT_FALSE(registry.discover("svc").is_valid());
+    EXPECT_EQ(registry.size(), 0u);
+}
+
+TEST(MemoryRegistryTest, SizeCountsStaleUntilListAllReaps) {
+    MemoryRegistry registry(std::chrono::seconds(1));
+
+    registry.register_service({"s1", "h1", 1000});
+    registry.register_service({"s2", "h2", 2000});
+    EXPECT_EQ(registry.size(), 2u);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // size() does not reap: stale entries are still counted.
+    EXPECT_EQ(registry.size(), 2u);
+
+    // list_all() evicts stale entries as a side effect.
+    auto all = registry.list_all();
+    EXPECT_TRUE(all.empty());
+    EXPECT_EQ(registry.size(), 0u);
+}
+
+TEST(MemoryRegistryTest, ListAllKeepsHeartbeatedEvictsStale) {
+    MemoryRegistry registry(std::chrono::seconds(1));
+
+    registry.register_service({"alive", "h1", 1000});
+    registry.register_service({"dead", "h2", 2000});
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    EXPECT_TRUE(registry.heartbeat("alive"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    auto all = registry.list_all();
+    ASSERT_EQ(all.size(), 1u);
+    EXPECT_EQ(all[0].name, "alive");
+    EXPECT_EQ(registry.size(), 1u);
+    EXPECT_FALSE(registry.discover("dead").is_valid());
+}
+
+// =============================================================================
+// RegistryClient::call() protocol-mismatch branches (via a crafting mock server)
+// =============================================================================
+
+TEST(RegistryClientProtocolTest, SequenceMismatchReturnsFalse) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&]() {
+        serve_one_crafted(listener, [](u32 seq) {
+            Buffer payload;
+            encode_u8(payload, 1);  // a "true" heartbeat body...
+            return wire::create_result_message(seq + 1, payload);  // ...but wrong seq
+        });
+    });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    bool ok = true;
+    EXPECT_NO_THROW(ok = client.heartbeat("svc"));
+    EXPECT_FALSE(ok);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+TEST(RegistryClientProtocolTest, ErrorReplyReturnsFalse) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&]() {
+        serve_one_crafted(listener, [](u32 seq) {
+            return wire::create_error_message(seq, ErrorCode::unknown_service, "boom");
+        });
+    });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    bool ok = true;
+    EXPECT_NO_THROW(ok = client.heartbeat("svc"));
+    EXPECT_FALSE(ok);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+TEST(RegistryClientProtocolTest, WrongTypeReplyReturnsFalse) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&]() {
+        serve_one_crafted(listener, [](u32 seq) {
+            wire::Header hdr;
+            hdr.magic = wire::kMagic;
+            hdr.flags = wire::MsgFlags::none;
+            hdr.type = wire::MsgType::ping;  // matching seq, but not a result
+            hdr.reserved = 0;
+            hdr.payload_size = 0;
+            hdr.sequence_id = seq;
+            Buffer msg;
+            wire::encode_header(msg, hdr);
+            return msg;
+        });
+    });
+
+    RegistryClient client("127.0.0.1", port, 2000);
+    bool ok = true;
+    EXPECT_NO_THROW(ok = client.heartbeat("svc"));
+    EXPECT_FALSE(ok);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+TEST(RegistryClientProtocolTest, NoReplyTimesOutReturnsFalse) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&]() { serve_no_reply(listener); });
+
+    RegistryClient client("127.0.0.1", port, 200);  // short op timeout
+    bool ok = true;
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_NO_THROW(ok = client.heartbeat("svc"));
+    auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_FALSE(ok);
+    // Returns around the timeout, not after the server's much longer linger.
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+              2000);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+// =============================================================================
+// RegistryClient lifecycle: default construction, connect() return value, reuse
+// =============================================================================
+
+TEST(RegistryClientLifecycleTest, DefaultConstructedOpsFailGracefully) {
+    RegistryClient client;  // no cached host/port
+    EXPECT_FALSE(client.is_connected());
+
+    bool reg = true;
+    bool unreg = true;
+    bool hb = true;
+    ServiceInfo disc{"placeholder", "placeholder", 1};
+    std::vector<ServiceInfo> all;
+
+    EXPECT_NO_THROW(reg = client.register_service({"svc", "127.0.0.1", 8080}));
+    EXPECT_NO_THROW(unreg = client.unregister_service("svc"));
+    EXPECT_NO_THROW(hb = client.heartbeat("svc"));
+    EXPECT_NO_THROW(disc = client.discover("svc"));
+    EXPECT_NO_THROW(all = client.list_all());
+
+    EXPECT_FALSE(reg);
+    EXPECT_FALSE(unreg);
+    EXPECT_FALSE(hb);
+    EXPECT_FALSE(disc.is_valid());
+    EXPECT_TRUE(all.empty());
+}
+
+TEST(RegistryClientLifecycleTest, ConnectRefusedReturnsFalse) {
+    RegistryClient client;
+    EXPECT_FALSE(client.connect("127.0.0.1", 19997, 500));
+    EXPECT_FALSE(client.is_connected());
+}
+
+TEST(RegistryClientReconnectTest, CloseThenReuseReconnects) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    MemoryRegistry reg;
+    std::atomic<bool> running{true};
+    std::thread server([&]() { serve_registry_loop(listener, reg, running); });
+
+    RegistryClient client("127.0.0.1", port);
+    EXPECT_TRUE(client.is_connected());
+    EXPECT_TRUE(client.register_service({"reuse-svc", "10.0.0.8", 6000}));
+
+    client.close();
+    EXPECT_FALSE(client.is_connected());
+
+    // ensure_connected() should transparently reconnect using cached host/port,
+    // and the shared server registry still knows "reuse-svc".
+    EXPECT_TRUE(client.heartbeat("reuse-svc"));
+    EXPECT_TRUE(client.is_connected());
+
+    client.close();
+    running = false;
+    listener.close();
+    server.join();
+}
+
+// =============================================================================
+// RegistryClient explicit connect() success (fixture-backed live registry)
+// =============================================================================
+
+TEST_F(RegistryE2ETest, ExplicitConnectReturnsTrue) {
+    RegistryClient client;  // default-constructed, then connect explicitly
+    EXPECT_FALSE(client.is_connected());
+
+    EXPECT_TRUE(client.connect("127.0.0.1", kTestPort));
+    EXPECT_TRUE(client.is_connected());
+
+    EXPECT_TRUE(client.register_service({"lc-svc", "10.0.0.9", 7000}));
+    ServiceInfo found = client.discover("lc-svc");
+    EXPECT_EQ(found.name, "lc-svc");
+    EXPECT_EQ(found.host, "10.0.0.9");
+    EXPECT_EQ(found.port, 7000u);
 }
