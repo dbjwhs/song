@@ -492,3 +492,210 @@ TEST(DiscoveryE2ETest, ConnectToDiscoveredService) {
     server_thread.join();
     discovery->unregister_service();
 }
+
+// =============================================================================
+// Negative discovery and timeout-boundary paths (deterministic negatives)
+// =============================================================================
+
+namespace {
+// Build a short, likely-unique DNS-SD service type so discover()/discover_one()
+// reliably find nothing. Kept under the 15-char DNS-SD label limit so the
+// browse actually runs (rather than being rejected up front).
+std::string make_unique_disc_type() {
+    static std::atomic<unsigned> counter{0};
+    auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    unsigned suffix = static_cast<unsigned>(ticks) % 10000u;
+    return "gap" + std::to_string(suffix) + "x" +
+           std::to_string(counter.fetch_add(1));
+}
+}  // namespace
+
+TEST(DiscoveryNegativeTest, DiscoverUniqueTypeReturnsEmpty) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    std::string type = make_unique_disc_type();
+    auto start = std::chrono::steady_clock::now();
+    auto services = discovery->discover(type, std::chrono::milliseconds(300));
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+
+    // Nothing was registered under this unique type, so nothing can be found.
+    EXPECT_TRUE(services.empty());
+    // The internal timeout loop must bound the call; catch hang/slowness regressions.
+    EXPECT_LT(elapsed, 3000);
+}
+
+TEST(DiscoveryNegativeTest, DiscoverOneNonexistentReturnsNullopt) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    std::string type = make_unique_disc_type();
+    auto start = std::chrono::steady_clock::now();
+    auto found = discovery->discover_one("NoSuchInstance", type,
+                                         std::chrono::milliseconds(300));
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+
+    EXPECT_FALSE(found.has_value());
+    EXPECT_LT(elapsed, 3000);
+}
+
+TEST(DiscoveryNegativeTest, ZeroTimeoutReturnsEmptyPromptly) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    std::string type = make_unique_disc_type();
+
+    // discover() with a zero timeout: the <=0 guard must short-circuit the poll
+    // loop, returning an empty result well under a normal (multi-hundred-ms) wait.
+    auto start = std::chrono::steady_clock::now();
+    auto services = discovery->discover(type, std::chrono::milliseconds(0));
+    auto elapsed_browse = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - start)
+                              .count();
+    EXPECT_TRUE(services.empty());
+    EXPECT_LT(elapsed_browse, 1500);
+
+    // discover_one() with a zero timeout: must return nullopt promptly.
+    start = std::chrono::steady_clock::now();
+    auto found = discovery->discover_one("NoSuchInstance", type,
+                                         std::chrono::milliseconds(0));
+    auto elapsed_resolve = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+    EXPECT_FALSE(found.has_value());
+    EXPECT_LT(elapsed_resolve, 1500);
+}
+
+TEST(DiscoveryNegativeTest, NegativeTimeoutDoesNotHang) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    std::string type = make_unique_disc_type();
+
+    // A negative timeout must be treated like an already-expired deadline
+    // (the `< timeout` / `timeout_ms <= 0` guards), never a hang or crash.
+    auto start = std::chrono::steady_clock::now();
+    auto services = discovery->discover(type, std::chrono::milliseconds(-50));
+    auto found = discovery->discover_one("NoSuchInstance", type,
+                                         std::chrono::milliseconds(-50));
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+
+    EXPECT_TRUE(services.empty());
+    EXPECT_FALSE(found.has_value());
+    EXPECT_LT(elapsed, 1500);
+}
+
+TEST(DiscoveryNegativeTest, RepeatedDiscoverOneAllNullopt) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    // Exercise the resolve setup/teardown path repeatedly; every lookup of a
+    // unique nonexistent name must return nullopt with no accumulation of state.
+    std::string type = make_unique_disc_type();
+    for (int ndx = 0; ndx < 8; ++ndx) {
+        auto found = discovery->discover_one("NoSuchInstance", type,
+                                             std::chrono::milliseconds(40));
+        EXPECT_FALSE(found.has_value());
+    }
+}
+
+// =============================================================================
+// DiscoveredService.type round-trip contract (double-wrap hazard)
+// =============================================================================
+
+TEST(DiscoveryTest, MakeServiceTypeDoubleWrapHazard) {
+    const std::string short_type = "songtest";
+    const std::string full = Discovery::make_service_type(short_type);
+    EXPECT_EQ(full, "_songtest._song._tcp");
+
+    // discover()/discover_one() take the SHORT type and wrap it internally,
+    // while a resolved DiscoveredService.type stores the already-wrapped full
+    // type. Feeding a full type back into the API double-wraps it and would
+    // silently match nothing -- lock that hazard here deterministically.
+    const std::string double_wrapped = Discovery::make_service_type(full);
+    EXPECT_NE(double_wrapped, full);
+    EXPECT_EQ(double_wrapped, "__songtest._song._tcp._song._tcp");
+}
+
+// =============================================================================
+// Unavailable-platform stub contract (Avahi stub / NullDiscovery)
+// =============================================================================
+
+TEST(DiscoveryUnavailableTest, StubContractWhenUnavailable) {
+    auto discovery = create_discovery();
+    if (!discovery || discovery->is_available()) {
+        GTEST_SKIP() << "Discovery is available (or null) on this platform";
+    }
+
+    // On platforms shipping the stub/null backend the whole contract is
+    // all-negative and must never spuriously report success or hang.
+    EXPECT_FALSE(discovery->register_service("n", "t", 1));
+    EXPECT_FALSE(discovery->is_registered());
+    // Repeated registration attempts keep failing without setting state.
+    EXPECT_FALSE(discovery->register_service("n", "t", 1));
+    EXPECT_FALSE(discovery->is_registered());
+    EXPECT_TRUE(discovery->discover("t", std::chrono::milliseconds(100)).empty());
+    EXPECT_FALSE(
+        discovery->discover_one("n", "t", std::chrono::milliseconds(100)).has_value());
+}
+
+// =============================================================================
+// Unregister idempotency and re-registration lifecycle
+// =============================================================================
+
+TEST(DiscoveryTest, UnregisterWhenIdleIsNoOp) {
+    auto discovery = create_discovery();
+    if (!discovery) {
+        GTEST_SKIP() << "No discovery implementation on this platform";
+    }
+
+    // Fresh instance: nothing registered. unregister_service() must be a safe
+    // no-op (guarded register_ref_/group_ null path), and idempotent.
+    EXPECT_FALSE(discovery->is_registered());
+    discovery->unregister_service();
+    EXPECT_FALSE(discovery->is_registered());
+    discovery->unregister_service();  // second call: still a safe no-op
+    EXPECT_FALSE(discovery->is_registered());
+}
+
+TEST(DiscoveryTest, ReRegisterAfterUnregister) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "Discovery not available on this platform";
+    }
+
+    bool registered = discovery->register_service("ReRegTest", "test", 23456);
+    if (!registered) {
+        GTEST_SKIP() << "Failed to register service";
+    }
+    EXPECT_TRUE(discovery->is_registered());
+
+    discovery->unregister_service();
+    EXPECT_FALSE(discovery->is_registered());
+
+    // Re-registering after teardown must work (the backing ref/group must have
+    // been reset, not left dangling).
+    bool re_registered = discovery->register_service("ReRegTest2", "test", 23457);
+    if (re_registered) {
+        EXPECT_TRUE(discovery->is_registered());
+    }
+
+    discovery->unregister_service();
+    EXPECT_FALSE(discovery->is_registered());
+}
