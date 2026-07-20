@@ -124,6 +124,122 @@ TEST(DiscoveryTest, DoubleRegisterReplacesFirst) {
 // ServiceManager Discoverable Services
 // =============================================================================
 
+// =============================================================================
+// ServiceRegistration RAII contract (deterministic, no real mDNS backend)
+// =============================================================================
+
+namespace {
+// A Discovery mock that counts register/unregister calls so the RAII/move
+// semantics of ServiceRegistration can be verified without mDNS (the existing
+// move tests skip when discovery is unavailable).
+class CountingDiscovery : public Discovery {
+public:
+    int register_count = 0;
+    int unregister_count = 0;
+    bool register_result = true;
+
+    bool register_service(const std::string&, const std::string&, u16) override {
+        ++register_count;
+        registered_ = register_result;
+        return register_result;
+    }
+    void unregister_service() override {
+        ++unregister_count;
+        registered_ = false;
+    }
+    bool is_registered() const override { return registered_; }
+    std::vector<DiscoveredService> discover(const std::string&,
+                                            std::chrono::milliseconds) override {
+        return {};
+    }
+    std::optional<DiscoveredService> discover_one(const std::string&,
+                                                  const std::string&,
+                                                  std::chrono::milliseconds) override {
+        return std::nullopt;
+    }
+    bool is_available() const override { return true; }
+
+private:
+    bool registered_ = false;
+};
+}  // namespace
+
+TEST(ServiceRegistrationRaiiTest, RegisterSuccessUnregistersOnDestroy) {
+    CountingDiscovery disc;
+    {
+        ServiceRegistration reg(disc, "n", "t", 1);
+        EXPECT_TRUE(reg.is_registered());
+        EXPECT_EQ(disc.register_count, 1);
+        EXPECT_EQ(disc.unregister_count, 0);
+    }
+    EXPECT_EQ(disc.register_count, 1);
+    EXPECT_EQ(disc.unregister_count, 1);
+}
+
+TEST(ServiceRegistrationRaiiTest, RegisterFailureDoesNotUnregister) {
+    CountingDiscovery disc;
+    disc.register_result = false;
+    {
+        ServiceRegistration reg(disc, "n", "t", 1);
+        EXPECT_FALSE(reg.is_registered());
+    }
+    EXPECT_EQ(disc.register_count, 1);
+    EXPECT_EQ(disc.unregister_count, 0);  // never registered -> never unregister
+}
+
+TEST(ServiceRegistrationRaiiTest, MoveConstructTransfersOwnership) {
+    CountingDiscovery disc;
+    {
+        ServiceRegistration reg1(disc, "n", "t", 1);
+        ServiceRegistration reg2(std::move(reg1));
+        EXPECT_FALSE(reg1.is_registered());
+        EXPECT_TRUE(reg2.is_registered());
+    }
+    EXPECT_EQ(disc.register_count, 1);
+    EXPECT_EQ(disc.unregister_count, 1);  // exactly one, no double unregister
+}
+
+TEST(ServiceRegistrationRaiiTest, MoveAssignReleasesExistingTarget) {
+    CountingDiscovery disc;
+    {
+        ServiceRegistration reg_a(disc, "a", "t", 1);
+        ServiceRegistration reg_b(disc, "b", "t", 2);
+        EXPECT_EQ(disc.register_count, 2);
+
+        reg_a = std::move(reg_b);
+        // reg_a's original registration is released immediately.
+        EXPECT_EQ(disc.unregister_count, 1);
+        EXPECT_TRUE(reg_a.is_registered());
+        EXPECT_FALSE(reg_b.is_registered());
+    }
+    EXPECT_EQ(disc.unregister_count, 2);  // reg_a's surviving registration too
+}
+
+TEST(ServiceRegistrationRaiiTest, SelfMoveAssignIsNoOp) {
+    CountingDiscovery disc;
+    {
+        ServiceRegistration reg(disc, "n", "t", 1);
+        // Indirection defeats -Wself-move while still exercising self-assignment.
+        ServiceRegistration* self = &reg;
+        reg = std::move(*self);
+        EXPECT_TRUE(reg.is_registered());
+        EXPECT_EQ(disc.unregister_count, 0);
+    }
+    EXPECT_EQ(disc.unregister_count, 1);
+}
+
+TEST(ServiceRegistrationRaiiTest, VectorReallocationUnregistersEachOnce) {
+    CountingDiscovery disc;
+    {
+        std::vector<ServiceRegistration> regs;
+        for (int i = 0; i < 8; ++i) {
+            regs.emplace_back(disc, "n", "t", static_cast<u16>(1000 + i));
+        }
+        EXPECT_EQ(disc.register_count, 8);
+    }
+    EXPECT_EQ(disc.unregister_count, 8);  // no missed and no double unregister
+}
+
 TEST(ManagerDiscoverableTest, RegisterDiscoverableService) {
     ServiceManager mgr;
     mgr.register_discoverable_service("calc", "calculator", 1);
