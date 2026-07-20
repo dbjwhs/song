@@ -447,3 +447,468 @@ TEST(StreamWriterTest, FdModeWritesStreamThenEnd) {
 
     ::close(fds[0]);
 }
+
+
+// =============================================================================
+// StreamWriter Move Semantics (fd mode) -- gap: stream-writer-move-semantics
+// =============================================================================
+
+// Move-construction transfers stream ownership: the moved-from writer is marked
+// ended (emits nothing on destruction) while the target keeps the sequence id
+// and remains active. The reader must see exactly one chunk + one stream_end.
+TEST(StreamWriterTest, FdMoveCtorTransfersOwnership) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter a(fds[1], 5);
+        Buffer chunk;
+        encode_i32(chunk, 42);
+        a.write(chunk);
+
+        StreamWriter b(std::move(a));
+        EXPECT_TRUE(a.ended());
+        EXPECT_FALSE(b.ended());
+        EXPECT_EQ(b.sequence_id(), 5u);
+        b.end();
+        EXPECT_TRUE(b.ended());
+    }  // a and b destruct; both ended_, so neither emits anything
+    ::close(fds[1]);
+
+    wire::Header hdr{};
+    Buffer payload;
+    ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+    EXPECT_EQ(hdr.type, wire::MsgType::stream);
+    EXPECT_EQ(hdr.sequence_id, 5u);
+    EXPECT_EQ(decode_i32(payload), 42);
+
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 5u);
+
+    // Write end closed and both messages consumed -> EOF, nothing more emitted.
+    wire::Header extra_hdr{};
+    Buffer extra_payload;
+    EXPECT_FALSE(read_one_message(fds[0], extra_hdr, extra_payload));
+    ::close(fds[0]);
+}
+
+// A moved-from StreamWriter has ended_ == true, so write() must reject with a
+// ServiceError before touching the fd.
+TEST(StreamWriterTest, MovedFromWriterRejectsWrite) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter a(fds[1], 3);
+        StreamWriter b(std::move(a));
+        EXPECT_TRUE(a.ended());
+
+        Buffer chunk;
+        encode_i32(chunk, 1);
+        EXPECT_THROW(a.write(chunk), ServiceError);
+
+        b.end();  // b carries a's sequence id (3)
+    }
+    ::close(fds[1]);
+
+    // Only b's stream_end(seq 3) should appear; the moved-from a emits nothing.
+    wire::Header hdr{};
+    Buffer payload;
+    ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+    EXPECT_EQ(hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(hdr.sequence_id, 3u);
+
+    wire::Header extra_hdr{};
+    Buffer extra_payload;
+    EXPECT_FALSE(read_one_message(fds[0], extra_hdr, extra_payload));
+    ::close(fds[0]);
+}
+
+// Self move-assignment is a no-op (guarded by this != &other): the writer keeps
+// its state, emits no premature stream_end, and stays usable.
+TEST(StreamWriterTest, SelfMoveAssignmentIsSafe) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter w(fds[1], 9);
+        // Pointer indirection avoids a compile-time -Wself-move diagnostic while
+        // still exercising the runtime self-assignment guard.
+        StreamWriter* self = &w;
+        w = std::move(*self);
+        EXPECT_FALSE(w.ended());
+        EXPECT_EQ(w.sequence_id(), 9u);
+
+        Buffer chunk;
+        encode_i32(chunk, 77);
+        w.write(chunk);  // still usable after self-move
+        w.end();
+    }
+    ::close(fds[1]);
+
+    wire::Header hdr{};
+    Buffer payload;
+    ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+    EXPECT_EQ(hdr.type, wire::MsgType::stream);
+    EXPECT_EQ(hdr.sequence_id, 9u);
+    EXPECT_EQ(decode_i32(payload), 77);
+
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 9u);
+
+    wire::Header extra_hdr{};
+    Buffer extra_payload;
+    EXPECT_FALSE(read_one_message(fds[0], extra_hdr, extra_payload));
+    ::close(fds[0]);
+}
+
+// Move-assigning into an active writer must end the target's current stream
+// first (stream_end on the old sequence id / fd), then adopt the source stream.
+TEST(StreamWriterTest, FdMoveAssignEndsPriorTargetStream) {
+    int fds_a[2];
+    int fds_b[2];
+    ASSERT_EQ(::pipe(fds_a), 0);
+    ASSERT_EQ(::pipe(fds_b), 0);
+    {
+        StreamWriter writer_a(fds_a[1], 5);
+        Buffer a_chunk;
+        encode_i32(a_chunk, 500);
+        writer_a.write(a_chunk);
+
+        StreamWriter writer_b(fds_b[1], 2);
+        Buffer b_chunk;
+        encode_i32(b_chunk, 200);
+        writer_b.write(b_chunk);
+
+        writer_b = std::move(writer_a);  // ends stream 2 on pipe B, adopts stream 5
+        EXPECT_TRUE(writer_a.ended());
+        EXPECT_FALSE(writer_b.ended());
+        EXPECT_EQ(writer_b.sequence_id(), 5u);
+
+        Buffer follow;
+        encode_i32(follow, 501);
+        writer_b.write(follow);  // now writes to pipe A, seq 5
+        writer_b.end();
+    }
+    ::close(fds_a[1]);
+    ::close(fds_b[1]);
+
+    // Pipe B: original chunk(200, seq 2) then the forced stream_end(seq 2).
+    {
+        wire::Header hdr{};
+        Buffer payload;
+        ASSERT_TRUE(read_one_message(fds_b[0], hdr, payload));
+        EXPECT_EQ(hdr.type, wire::MsgType::stream);
+        EXPECT_EQ(hdr.sequence_id, 2u);
+        EXPECT_EQ(decode_i32(payload), 200);
+
+        wire::Header end_hdr{};
+        Buffer end_payload;
+        ASSERT_TRUE(read_one_message(fds_b[0], end_hdr, end_payload));
+        EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+        EXPECT_EQ(end_hdr.sequence_id, 2u);
+
+        wire::Header extra_hdr{};
+        Buffer extra_payload;
+        EXPECT_FALSE(read_one_message(fds_b[0], extra_hdr, extra_payload));
+    }
+
+    // Pipe A: writer_a's chunk(500) + writer_b's follow-up chunk(501) + end, all seq 5.
+    {
+        wire::Header hdr{};
+        Buffer payload;
+        ASSERT_TRUE(read_one_message(fds_a[0], hdr, payload));
+        EXPECT_EQ(hdr.type, wire::MsgType::stream);
+        EXPECT_EQ(hdr.sequence_id, 5u);
+        EXPECT_EQ(decode_i32(payload), 500);
+
+        wire::Header hdr2{};
+        Buffer payload2;
+        ASSERT_TRUE(read_one_message(fds_a[0], hdr2, payload2));
+        EXPECT_EQ(hdr2.type, wire::MsgType::stream);
+        EXPECT_EQ(hdr2.sequence_id, 5u);
+        EXPECT_EQ(decode_i32(payload2), 501);
+
+        wire::Header end_hdr{};
+        Buffer end_payload;
+        ASSERT_TRUE(read_one_message(fds_a[0], end_hdr, end_payload));
+        EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+        EXPECT_EQ(end_hdr.sequence_id, 5u);
+
+        wire::Header extra_hdr{};
+        Buffer extra_payload;
+        EXPECT_FALSE(read_one_message(fds_a[0], extra_hdr, extra_payload));
+    }
+
+    ::close(fds_a[0]);
+    ::close(fds_b[0]);
+}
+
+// =============================================================================
+// StreamWriter end()/write() contract -- gap: stream-writer-write-after-end
+// =============================================================================
+
+// After end(), further write() must throw ServiceError and emit nothing extra.
+TEST(StreamWriterTest, FdWriteAfterEndThrows) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter w(fds[1], 11);
+        Buffer chunk;
+        encode_i32(chunk, 55);
+        w.write(chunk);
+        w.end();
+        EXPECT_TRUE(w.ended());
+
+        Buffer chunk2;
+        encode_i32(chunk2, 66);
+        EXPECT_THROW(w.write(chunk2), ServiceError);
+    }
+    ::close(fds[1]);
+
+    // Exactly one chunk followed by exactly one stream_end.
+    wire::Header hdr{};
+    Buffer payload;
+    ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+    EXPECT_EQ(hdr.type, wire::MsgType::stream);
+    EXPECT_EQ(hdr.sequence_id, 11u);
+    EXPECT_EQ(decode_i32(payload), 55);
+
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 11u);
+
+    wire::Header extra_hdr{};
+    Buffer extra_payload;
+    EXPECT_FALSE(read_one_message(fds[0], extra_hdr, extra_payload));
+    ::close(fds[0]);
+}
+
+// end() is idempotent: repeated calls send exactly one stream_end.
+TEST(StreamWriterTest, FdEndIsIdempotent) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter w(fds[1], 22);
+        w.end();
+        EXPECT_TRUE(w.ended());
+        w.end();  // no-op
+        w.end();  // no-op
+    }
+    ::close(fds[1]);
+
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 22u);
+    EXPECT_EQ(end_hdr.payload_size, 0u);
+
+    // Only ONE stream_end was ever written.
+    wire::Header extra_hdr{};
+    Buffer extra_payload;
+    EXPECT_FALSE(read_one_message(fds[0], extra_hdr, extra_payload));
+    ::close(fds[0]);
+}
+
+// =============================================================================
+// StreamWriter payload boundaries -- gap: stream-writer-large-chunk-partial-write
+// =============================================================================
+
+// A single chunk larger than the OS pipe buffer forces write_all() to perform
+// multiple partial ::write() calls; a concurrent drainer lets it complete, and
+// the payload must arrive byte-for-byte with the exact declared size.
+TEST(StreamWriterTest, FdLargeChunkRoundTrips) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+
+    const size_t kPayloadLen = 1u << 20;  // 1 MB, well above any pipe buffer
+    std::vector<std::byte> data(kPayloadLen);
+    for (size_t ndx = 0; ndx < kPayloadLen; ++ndx) {
+        data[ndx] = static_cast<std::byte>((ndx * 31u + 7u) & 0xFFu);
+    }
+
+    std::vector<std::byte> received;
+    bool got_end = false;
+    std::thread reader([&]() {
+        wire::Header hdr{};
+        Buffer payload;
+        if (!read_one_message(fds[0], hdr, payload)) {
+            return;
+        }
+        if (hdr.type != wire::MsgType::stream) {
+            return;
+        }
+        received.assign(payload.data(), payload.data() + payload.size());
+
+        wire::Header end_hdr{};
+        Buffer end_payload;
+        if (read_one_message(fds[0], end_hdr, end_payload) &&
+            end_hdr.type == wire::MsgType::stream_end) {
+            got_end = true;
+        }
+    });
+
+    bool write_ok = true;
+    try {
+        StreamWriter w(fds[1], 3);
+        Buffer chunk;
+        chunk.write(data.data(), data.size());
+        w.write(chunk);
+        w.end();
+    } catch (...) {
+        write_ok = false;
+    }
+    ::close(fds[1]);  // always close so the reader observes EOF and never hangs
+    reader.join();
+    ::close(fds[0]);
+
+    EXPECT_TRUE(write_ok);
+    ASSERT_EQ(received.size(), kPayloadLen);
+    EXPECT_TRUE(got_end);
+    EXPECT_EQ(received, data);
+}
+
+// Chunks exactly at (4096) and one past (4097) the Buffer small-buffer cap must
+// round-trip intact through the fd writer, catching any off-by-one at the
+// inline/heap transition. Total bytes stay under the pipe buffer, so no drainer
+// thread is needed.
+TEST(StreamWriterTest, FdChunkSizeBoundaries) {
+    for (size_t len : {size_t{4096}, size_t{4097}}) {
+        int fds[2];
+        ASSERT_EQ(::pipe(fds), 0);
+
+        std::vector<std::byte> data(len);
+        for (size_t ndx = 0; ndx < len; ++ndx) {
+            data[ndx] = static_cast<std::byte>((ndx * 7u + 1u) & 0xFFu);
+        }
+
+        {
+            StreamWriter w(fds[1], 4);
+            Buffer chunk;
+            chunk.write(data.data(), data.size());
+            w.write(chunk);
+            w.end();
+        }
+        ::close(fds[1]);
+
+        wire::Header hdr{};
+        Buffer payload;
+        ASSERT_TRUE(read_one_message(fds[0], hdr, payload));
+        EXPECT_EQ(hdr.type, wire::MsgType::stream);
+        EXPECT_EQ(hdr.payload_size, static_cast<u32>(len));
+        ASSERT_EQ(payload.size(), len);
+        std::vector<std::byte> got(payload.data(), payload.data() + payload.size());
+        EXPECT_EQ(got, data);
+
+        wire::Header end_hdr{};
+        Buffer end_payload;
+        ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+        EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+
+        ::close(fds[0]);
+    }
+}
+
+// An empty chunk written mid-stream produces a real stream message with
+// payload_size == 0, and does not disturb the following non-empty chunk.
+TEST(StreamWriterTest, FdEmptyChunkThenNonEmpty) {
+    int fds[2];
+    ASSERT_EQ(::pipe(fds), 0);
+    {
+        StreamWriter w(fds[1], 8);
+        Buffer empty;
+        w.write(empty);
+        Buffer chunk;
+        encode_i32(chunk, 314);
+        w.write(chunk);
+        w.end();
+    }
+    ::close(fds[1]);
+
+    wire::Header hdr1{};
+    Buffer p1;
+    ASSERT_TRUE(read_one_message(fds[0], hdr1, p1));
+    EXPECT_EQ(hdr1.type, wire::MsgType::stream);
+    EXPECT_EQ(hdr1.sequence_id, 8u);
+    EXPECT_EQ(hdr1.payload_size, 0u);
+
+    wire::Header hdr2{};
+    Buffer p2;
+    ASSERT_TRUE(read_one_message(fds[0], hdr2, p2));
+    EXPECT_EQ(hdr2.type, wire::MsgType::stream);
+    EXPECT_EQ(hdr2.sequence_id, 8u);
+    EXPECT_EQ(decode_i32(p2), 314);
+
+    wire::Header end_hdr{};
+    Buffer end_payload;
+    ASSERT_TRUE(read_one_message(fds[0], end_hdr, end_payload));
+    EXPECT_EQ(end_hdr.type, wire::MsgType::stream_end);
+    EXPECT_EQ(end_hdr.sequence_id, 8u);
+
+    ::close(fds[0]);
+}
+
+// =============================================================================
+// StreamReader iteration contract -- gap: stream-reader-iteration-contract
+// =============================================================================
+
+// chunk() on an empty reader throws on both the mutable and const overloads.
+TEST(StreamReaderTest, ChunkOnEmptyThrows) {
+    StreamReader reader(1);
+    EXPECT_THROW(reader.chunk(), ServiceError);
+    const StreamReader& cref = reader;
+    EXPECT_THROW(cref.chunk(), ServiceError);
+}
+
+// Once the single chunk is consumed, next() is false and chunk() throws.
+TEST(StreamReaderTest, ChunkAfterExhaustionThrows) {
+    StreamReader reader(1);
+    Buffer c;
+    encode_i32(c, 7);
+    reader.add_chunk(std::move(c));
+    reader.set_complete();
+
+    ASSERT_TRUE(reader.next());
+    EXPECT_EQ(decode_i32(reader.chunk()), 7);  // consumes the only chunk
+    EXPECT_FALSE(reader.next());
+    EXPECT_THROW(reader.chunk(), ServiceError);
+}
+
+// chunk() is what advances the cursor; next() is only advisory. Calling chunk()
+// repeatedly without next() still walks the chunks in order.
+TEST(StreamReaderTest, ChunkConsumesWithoutNext) {
+    StreamReader reader(1);
+    for (i32 value : {0, 1, 2}) {
+        Buffer c;
+        encode_i32(c, value);
+        reader.add_chunk(std::move(c));
+    }
+    reader.set_complete();
+
+    EXPECT_EQ(decode_i32(reader.chunk()), 0);
+    EXPECT_EQ(decode_i32(reader.chunk()), 1);
+    EXPECT_EQ(decode_i32(reader.chunk()), 2);
+    EXPECT_FALSE(reader.next());
+    EXPECT_THROW(reader.chunk(), ServiceError);
+}
+
+// next() does not consume: calling it twice before chunk() is harmless and the
+// chunk is still delivered exactly once.
+TEST(StreamReaderTest, NextIsIdempotentBeforeConsume) {
+    StreamReader reader(1);
+    Buffer c;
+    encode_i32(c, 99);
+    reader.add_chunk(std::move(c));
+    reader.set_complete();
+
+    EXPECT_TRUE(reader.next());
+    EXPECT_TRUE(reader.next());  // idempotent; does not advance
+    EXPECT_EQ(decode_i32(reader.chunk()), 99);
+    EXPECT_FALSE(reader.next());
+}
