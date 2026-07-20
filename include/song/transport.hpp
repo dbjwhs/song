@@ -140,8 +140,12 @@ public:
     /// Bind to a port and start listening
     /// @param port Port to listen on (0 for OS-assigned ephemeral port)
     /// @param backlog Listen queue size
-    /// @throws ServiceError on failure
-    void listen(u16 port = 0, int backlog = 128);
+    /// @param bind_address IPv4 address to bind (dotted-quad, e.g. "127.0.0.1"
+    ///        to restrict to loopback). Empty binds all interfaces (INADDR_ANY),
+    ///        which exposes the service to every reachable network -- prefer a
+    ///        specific address for anything without transport authentication.
+    /// @throws ServiceError on failure (including a malformed bind_address)
+    void listen(u16 port = 0, int backlog = 128, const std::string& bind_address = "");
 
     /// Accept an incoming connection
     /// @param timeout_ms Timeout in milliseconds (-1 for blocking)

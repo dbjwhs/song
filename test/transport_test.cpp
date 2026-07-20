@@ -178,6 +178,37 @@ TEST(TcpListenerTest, MoveAssign) {
     EXPECT_FALSE(listener1.is_listening());
 }
 
+// A listener bound to a specific address (loopback) still accepts a client that
+// connects on that address. Restricting the bind is how an unauthenticated
+// service (e.g. the registry demo) stays off other interfaces.
+TEST(TcpListenerTest, ListenLoopbackAcceptsLoopbackClient) {
+    TcpListener listener;
+    listener.listen(0, 128, "127.0.0.1");
+    u16 port = listener.bound_port();
+    ASSERT_GT(port, 0);
+
+    std::atomic<bool> connected{false};
+    std::thread client_thread([&]() {
+        TcpTransport client;
+        client.connect("127.0.0.1", port, 1000);
+        connected = true;
+    });
+
+    auto server_conn = listener.accept(1000);
+    EXPECT_NE(server_conn, nullptr);
+
+    client_thread.join();
+    EXPECT_TRUE(connected);
+}
+
+// A malformed bind address is rejected rather than silently falling back to
+// binding all interfaces.
+TEST(TcpListenerTest, ListenInvalidBindAddressThrows) {
+    TcpListener listener;
+    EXPECT_THROW(listener.listen(0, 128, "not-an-ip-address"), ServiceError);
+    EXPECT_FALSE(listener.is_listening());
+}
+
 // =============================================================================
 // TcpTransport Tests
 // =============================================================================
