@@ -16,6 +16,11 @@
 
 namespace song {
 
+// Cap on distinct instance names a single discover() will collect, so a peer
+// flooding the LAN with advertised instances cannot grow the result list without
+// bound or drive an unbounded number of sequential per-name resolves.
+constexpr size_t kMaxDiscoveryResults = 64;
+
 #ifdef __APPLE__
 
 // =============================================================================
@@ -55,7 +60,17 @@ static void DNSSD_API browse_callback(
     auto* ctx = static_cast<BrowseContext*>(context);
     std::lock_guard lock(ctx->mutex);
     if (flags & kDNSServiceFlagsAdd) {
-        ctx->names.push_back(serviceName);
+        // De-duplicate and cap the collected names.
+        bool duplicate = false;
+        for (const auto& existing : ctx->names) {
+            if (existing == serviceName) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && ctx->names.size() < kMaxDiscoveryResults) {
+            ctx->names.push_back(serviceName);
+        }
         ctx->domain = replyDomain;
     }
     ctx->cv.notify_all();
@@ -429,7 +444,17 @@ static void avahi_browse_callback(
     auto* ctx = static_cast<AvahiBrowseContext*>(userdata);
     if (event == AVAHI_BROWSER_NEW) {
         std::lock_guard lock(ctx->mutex);
-        ctx->names.push_back(name);
+        // De-duplicate and cap the collected names (see kMaxDiscoveryResults).
+        bool duplicate = false;
+        for (const auto& existing : ctx->names) {
+            if (existing == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && ctx->names.size() < kMaxDiscoveryResults) {
+            ctx->names.push_back(name);
+        }
         if (domain) ctx->domain = domain;
     }
 }
