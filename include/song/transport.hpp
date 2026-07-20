@@ -21,6 +21,11 @@ public:
     virtual ~Transport() = default;
 
     /// Send a complete message
+    /// Implementations are not internally synchronized: a single transport must
+    /// have one writer at a time. The multi-client runtime upholds this by giving
+    /// each connection its own thread; SubscriptionRegistry::notify() additionally
+    /// serializes its fan-out writes under its own lock. If you share a transport
+    /// across threads for writing, serialize the writes yourself.
     /// @throws ServiceError on failure
     virtual void send(const Buffer& msg) = 0;
 

@@ -82,6 +82,77 @@ TEST(SubscriptionRegistryTest, UnsubscribeAllOnDisconnect) {
     EXPECT_EQ(reg.total_subscriptions(), 0u);
 }
 
+namespace {
+// A transport whose send() parks until released, so a test can observe what the
+// registry does while a notify is mid-send. All other operations are no-ops.
+class BlockingTransport : public Transport {
+public:
+    std::atomic<bool> in_send{false};
+    std::atomic<bool> release{false};
+    std::atomic<int> send_count{0};
+
+    void send(const Buffer&) override {
+        in_send = true;
+        while (!release.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        ++send_count;
+        in_send = false;
+    }
+    bool receive(Buffer&, int) override { return false; }
+    void close() override {}
+    bool is_connected() const override { return true; }
+    const char* type_name() const override { return "blocking"; }
+};
+} // namespace
+
+TEST(SubscriptionRegistryTest, NotifyHoldsLockUntilSendCompletes) {
+    // Regression for the notify() transport use-after-free. In run_tcp_multi each
+    // subscriber transport is freed by its owning thread right after that thread's
+    // unsubscribe_all() returns. If notify() sent outside the registry lock,
+    // unsubscribe_all() could return -- and the transport be freed -- while
+    // another thread was still dereferencing that transport inside send(). The fix
+    // holds the lock across the send, so unsubscribe_all() must wait for an
+    // in-flight notify. This verifies that ordering deterministically: it fails if
+    // notify() releases the lock before its send completes.
+    SubscriptionRegistry reg;
+    BlockingTransport tp;
+    auto sub_id = reinterpret_cast<SubscriptionRegistry::SubscriberId>(&tp);
+    reg.subscribe(sub_id, -1, 1, &tp);
+
+    Buffer value;
+    encode_i32(value, 7);
+
+    // Notifier thread parks inside BlockingTransport::send, holding the lock.
+    std::thread notifier([&]() {
+        reg.notify(100, -1, 1, value);
+    });
+    while (!tp.in_send.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // unsubscribe_all must block on the registry lock until the send completes.
+    std::atomic<bool> unsub_done{false};
+    std::thread unsub([&]() {
+        reg.unsubscribe_all(sub_id);
+        unsub_done = true;
+    });
+
+    // Still parked in send -> unsubscribe_all must not have returned. If it has,
+    // the transport could be freed under the sending thread (the UAF this guards).
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_FALSE(unsub_done.load())
+        << "unsubscribe_all returned while a notify send was in flight (UAF window)";
+    EXPECT_TRUE(tp.in_send.load());
+
+    // Release the send: notify finishes, drops the lock, unsubscribe_all proceeds.
+    tp.release = true;
+    notifier.join();
+    unsub.join();
+    EXPECT_TRUE(unsub_done.load());
+    EXPECT_EQ(tp.send_count.load(), 1);
+}
+
 // =============================================================================
 // Multi-Client Fan-Out E2E Tests
 // =============================================================================

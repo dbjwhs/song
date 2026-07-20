@@ -45,6 +45,11 @@ public:
 
     /// Notify all subscribers of a property change
     /// Sends MSG_PROP_NOTIFY to each subscribed transport.
+    /// The internal mutex is held across the sends so a subscriber transport
+    /// cannot be freed by a disconnecting client thread (via unsubscribe_all())
+    /// while this method is still writing to it. A slow subscriber therefore
+    /// stalls concurrent subscribe/unsubscribe/notify calls for the duration of
+    /// its send; this trade favors memory safety over throughput.
     /// @param type_id Object type
     /// @param object_id Object instance
     /// @param property_id Property that changed
@@ -78,7 +83,11 @@ private:
         Transport* transport;
     };
 
-    mutable std::mutex mutex_;
+    // Recursive so a subscriber's send() may re-enter the registry on the same
+    // thread (see notify()) without self-deadlocking, while notify() still holds
+    // the lock across its sends to keep transports alive against a concurrent
+    // unsubscribe_all() on another thread.
+    mutable std::recursive_mutex mutex_;
     std::unordered_map<SubscriptionKey, std::vector<Subscriber>, SubscriptionKeyHash> subs_;
 };
 

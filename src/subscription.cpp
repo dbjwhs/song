@@ -65,23 +65,38 @@ void SubscriptionRegistry::notify(u32 type_id, i32 object_id, u16 property_id,
     // Build the notification message once
     Buffer notify_msg = wire::create_property_notify_message(type_id, object_id, property_id, value);
 
-    // Copy subscriber list under lock, then send outside lock
+    // Send with the lock held for the whole fan-out. In the multi-client runtime
+    // (run_tcp_multi) each subscriber transport is owned by a different client
+    // thread, which frees the transport immediately after its client_loop() calls
+    // unsubscribe_all() on disconnect. If we released the lock before sending, a
+    // peer thread could free a transport between our snapshot and our send() -- a
+    // use-after-free that the try/catch below cannot catch (it is undefined
+    // behavior, not an exception). Because unsubscribe_all() also acquires mutex_,
+    // holding it across the sends forces a disconnecting subscriber to wait for any
+    // in-flight notify to it, so its transport cannot be destroyed mid-send.
+    //
+    // mutex_ is recursive: a subscriber's send() is allowed to call back into the
+    // registry on this same thread (e.g. subscribe/unsubscribe/subscriber_count)
+    // without self-deadlocking. We snapshot the target list first so such a
+    // reentrant mutation cannot invalidate the iteration in progress. (Serializing
+    // a notify against a concurrent write the owning thread makes on the same
+    // transport is a transport-level concern; see the single-writer note in
+    // transport.hpp.)
+    std::lock_guard lock(mutex_);
+
     std::vector<Transport*> targets;
     {
-        std::lock_guard lock(mutex_);
         SubscriptionKey key{object_id, property_id};
         auto it = subs_.find(key);
         if (it == subs_.end()) {
             return;
         }
-
         targets.reserve(it->second.size());
         for (const auto& sub : it->second) {
             targets.push_back(sub.transport);
         }
     }
 
-    // Send to all subscribers (outside lock to avoid deadlocks)
     for (Transport* tp : targets) {
         try {
             tp->send(notify_msg);
