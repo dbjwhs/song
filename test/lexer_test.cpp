@@ -482,3 +482,427 @@ TEST(LexerTest, IntegerTokenToString) {
     EXPECT_TRUE(str.find("Integer") != std::string::npos);
     EXPECT_TRUE(str.find("int_value=42") != std::string::npos);
 }
+
+// =============================================================================
+// Non-ASCII / High-Byte Input (defined, deterministic error behavior)
+// =============================================================================
+
+// A raw high byte (0x80) is not whitespace, punctuation, digit, or an
+// identifier start, so it must surface as a located LexerError rather than
+// silently matching or crashing on the ctype UB path.
+TEST(LexerTest, HighByte0x80ThrowsLexerError) {
+  std::string input(1, static_cast<char>(0x80));
+  Lexer lexer(input);
+  try {
+    lexer.next_token();
+    FAIL() << "Expected LexerError";
+  } catch (const LexerError& e) {
+    EXPECT_EQ(e.line(), 1u);
+    EXPECT_EQ(e.column(), 1u);
+  }
+}
+
+TEST(LexerTest, HighByte0xFFThrowsLexerError) {
+  std::string input(1, static_cast<char>(0xFF));
+  Lexer lexer(input);
+  EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
+// A UTF-8 multibyte sequence embedded in identifier position: the ASCII prefix
+// tokenizes as an Identifier and the first non-ASCII byte then raises a located
+// LexerError. Documents that identifiers are ASCII-only.
+TEST(LexerTest, Utf8IdentifierBytesTokenizePrefixThenThrow) {
+  std::string input = "caf\xC3\xA9";  // "cafe" with a UTF-8 e-acute
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Identifier);
+  EXPECT_EQ(t1->m_value, "caf");
+
+  try {
+    lexer.next_token();
+    FAIL() << "Expected LexerError at first non-ASCII byte";
+  } catch (const LexerError& e) {
+    EXPECT_EQ(e.line(), 1u);
+    EXPECT_EQ(e.column(), 4u);
+  }
+}
+
+// Doc-comment bodies are copied byte-for-byte until end of line, so raw UTF-8
+// bytes round-trip unchanged (the ctype path is not involved here).
+TEST(LexerTest, DocCommentPreservesUtf8Bytes) {
+  std::string input = "/// \xE2\x9C\x93 done";  // U+2713 CHECK MARK
+  Lexer lexer(input);
+
+  auto token = lexer.next_token();
+  ASSERT_TRUE(token.has_value());
+  EXPECT_EQ(token->m_type, TokenType::DocComment);
+  EXPECT_EQ(token->m_value, std::string("\xE2\x9C\x93 done"));
+
+  auto eof = lexer.next_token();
+  ASSERT_TRUE(eof.has_value());
+  EXPECT_EQ(eof->m_type, TokenType::Eof);
+}
+
+// =============================================================================
+// CRLF / Carriage-Return Handling
+// =============================================================================
+
+// Current behavior: a doc comment on CRLF input retains the trailing '\r' in its
+// value (lex_doc_comment collects until '\n' only). This locks that behavior so
+// any future CRLF normalization is an intentional change.
+TEST(LexerTest, DocCommentCrlfRetainsTrailingCr) {
+  std::string input = "/// hello\r\nstruct";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::DocComment);
+  EXPECT_EQ(t1->m_value, std::string("hello\r"));
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::KwStruct);
+  EXPECT_EQ(t2->m_line, 2u);
+}
+
+// A regular (non-doc) line comment discards the trailing '\r' along with the
+// rest of the line, so the CR never leaks into the following token.
+TEST(LexerTest, LineCommentCrlfDoesNotLeakCarriageReturn) {
+  std::string input = "struct // comment\r\nPoint";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::KwStruct);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Identifier);
+  EXPECT_EQ(t2->m_value, "Point");
+  EXPECT_EQ(t2->m_line, 2u);
+}
+
+// A lone '\r' is treated as ordinary whitespace and does NOT advance the line
+// counter (only '\n' does). Two identifiers separated by a bare CR stay on
+// line 1.
+TEST(LexerTest, LoneCarriageReturnSeparatesIdentifiersSameLine) {
+  std::string input = "a\rb";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Identifier);
+  EXPECT_EQ(t1->m_value, "a");
+  EXPECT_EQ(t1->m_line, 1u);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Identifier);
+  EXPECT_EQ(t2->m_value, "b");
+  EXPECT_EQ(t2->m_line, 1u);
+}
+
+TEST(LexerTest, MultipleDocCommentsCrlfRetainCr) {
+  std::string input = "/// L1\r\n/// L2\r\n";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::DocComment);
+  EXPECT_EQ(t1->m_value, std::string("L1\r"));
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::DocComment);
+  EXPECT_EQ(t2->m_value, std::string("L2\r"));
+
+  auto t3 = lexer.next_token();
+  ASSERT_TRUE(t3.has_value());
+  EXPECT_EQ(t3->m_type, TokenType::Eof);
+}
+
+// =============================================================================
+// Slash / Minus Error Paths
+// =============================================================================
+
+// A single '/' not followed by another '/' is not a comment start and falls
+// through to the unexpected-character error, with the column at the slash.
+TEST(LexerTest, LoneSlashThrowsWithColumn) {
+  std::string input = "a / b";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Identifier);
+  EXPECT_EQ(t1->m_value, "a");
+
+  try {
+    lexer.next_token();
+    FAIL() << "Expected LexerError at '/'";
+  } catch (const LexerError& e) {
+    EXPECT_EQ(e.line(), 1u);
+    EXPECT_EQ(e.column(), 3u);
+  }
+}
+
+TEST(LexerTest, LeadingSlashThrowsAtColumnOne) {
+  std::string input = "/x";
+  Lexer lexer(input);
+
+  try {
+    lexer.next_token();
+    FAIL() << "Expected LexerError at '/'";
+  } catch (const LexerError& e) {
+    EXPECT_EQ(e.line(), 1u);
+    EXPECT_EQ(e.column(), 1u);
+  }
+}
+
+// Negative integer literals are not supported: after the '=' the lexer rejects
+// the lone '-' (a '-' is only meaningful as part of '->').
+TEST(LexerTest, NegativeLiteralNotSupported) {
+  std::string input = "x = -1;";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Identifier);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Equals);
+
+  try {
+    lexer.next_token();
+    FAIL() << "Expected LexerError at '-'";
+  } catch (const LexerError& e) {
+    EXPECT_EQ(e.line(), 1u);
+    EXPECT_EQ(e.column(), 5u);
+  }
+}
+
+// A lone '-' throws, but a complete '->' at end of input yields a single Arrow
+// followed by Eof (regression guard for peek_next at the input boundary).
+TEST(LexerTest, LoneMinusThrowsArrowAtEndSucceeds) {
+  {
+    std::string input = "-";
+    Lexer lexer(input);
+    EXPECT_THROW(lexer.next_token(), LexerError);
+  }
+  {
+    std::string input = "->";
+    Lexer lexer(input);
+    auto t1 = lexer.next_token();
+    ASSERT_TRUE(t1.has_value());
+    EXPECT_EQ(t1->m_type, TokenType::Arrow);
+
+    auto t2 = lexer.next_token();
+    ASSERT_TRUE(t2.has_value());
+    EXPECT_EQ(t2->m_type, TokenType::Eof);
+  }
+}
+
+// =============================================================================
+// EOF Idempotency and Position Tracking
+// =============================================================================
+
+// Calling next_token() repeatedly after Eof keeps returning Eof (never
+// std::nullopt, never advancing) with a stable line/column.
+TEST(LexerTest, RepeatedNextTokenPastEofReturnsStableEof) {
+  std::string input = "x";
+  Lexer lexer(input);
+
+  auto ident = lexer.next_token();
+  ASSERT_TRUE(ident.has_value());
+  EXPECT_EQ(ident->m_type, TokenType::Identifier);
+
+  size_t eof_line = 0;
+  size_t eof_column = 0;
+  for (int ndx = 0; ndx < 3; ++ndx) {
+    auto eof = lexer.next_token();
+    ASSERT_TRUE(eof.has_value());
+    EXPECT_EQ(eof->m_type, TokenType::Eof);
+    if (ndx == 0) {
+      eof_line = eof->m_line;
+      eof_column = eof->m_column;
+    } else {
+      EXPECT_EQ(eof->m_line, eof_line);
+      EXPECT_EQ(eof->m_column, eof_column);
+    }
+  }
+}
+
+// Column resets to 1 at the start of each line across multiple newlines.
+TEST(LexerTest, ColumnResetsToOneAfterEachNewline) {
+  std::string input = "a\nbb\nccc";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_line, 1u);
+  EXPECT_EQ(t1->m_column, 1u);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_line, 2u);
+  EXPECT_EQ(t2->m_column, 1u);
+
+  auto t3 = lexer.next_token();
+  ASSERT_TRUE(t3.has_value());
+  EXPECT_EQ(t3->m_line, 3u);
+  EXPECT_EQ(t3->m_column, 1u);
+}
+
+// A token following a skipped '//' line comment reports the correct line and a
+// column of 1 (the columns consumed skipping the comment do not leak forward).
+TEST(LexerTest, TokenPositionAfterSkippedLineComment) {
+  std::string input = "struct // c\nPoint";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::KwStruct);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Identifier);
+  EXPECT_EQ(t2->m_value, "Point");
+  EXPECT_EQ(t2->m_line, 2u);
+  EXPECT_EQ(t2->m_column, 1u);
+}
+
+// The Eof token's column reflects the trailing whitespace that was consumed.
+TEST(LexerTest, EofColumnAfterTrailingSpace) {
+  std::string input = "ab ";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Identifier);
+  EXPECT_EQ(t1->m_column, 1u);
+
+  auto eof = lexer.next_token();
+  ASSERT_TRUE(eof.has_value());
+  EXPECT_EQ(eof->m_type, TokenType::Eof);
+  EXPECT_EQ(eof->m_column, 4u);
+}
+
+// =============================================================================
+// Adjacent-Token Splitting
+// =============================================================================
+
+// A number immediately followed by letters splits into an Integer then an
+// Identifier (no whitespace required, no lexical error). Locks the contract.
+TEST(LexerTest, NumberFollowedByLettersSplits) {
+  std::string input = "123abc";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Integer);
+  EXPECT_EQ(t1->m_value, "123");
+  EXPECT_EQ(t1->m_int_value, 123);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Identifier);
+  EXPECT_EQ(t2->m_value, "abc");
+}
+
+// A hex literal stops at the first non-hex character; a trailing 'g' becomes a
+// separate identifier.
+TEST(LexerTest, HexLiteralFollowedByNonHexLetterSplits) {
+  std::string input = "0xFFg";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::Integer);
+  EXPECT_EQ(t1->m_value, "0xFF");
+  EXPECT_EQ(t1->m_int_value, 0xFF);
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Identifier);
+  EXPECT_EQ(t2->m_value, "g");
+}
+
+// '0x' with no following hex digit (here a non-hex letter) hits the
+// missing-digits branch and throws.
+TEST(LexerTest, HexPrefixWithoutDigitsThrows) {
+  std::string input = "0xG";
+  Lexer lexer(input);
+  EXPECT_THROW(lexer.next_token(), LexerError);
+}
+
+// Leading zeros in a decimal literal are not interpreted as octal: 007 == 7.
+TEST(LexerTest, LeadingZeroDecimalIsNotOctal) {
+  std::string input = "007";
+  Lexer lexer(input);
+
+  auto token = lexer.next_token();
+  ASSERT_TRUE(token.has_value());
+  EXPECT_EQ(token->m_type, TokenType::Integer);
+  EXPECT_EQ(token->m_value, "007");
+  EXPECT_EQ(token->m_int_value, 7);
+}
+
+// =============================================================================
+// Doc-Comment Boundary Shapes
+// =============================================================================
+
+// An empty doc comment body yields a DocComment with an empty value.
+TEST(LexerTest, DocCommentEmptyBody) {
+  std::string input = "///\nstruct";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::DocComment);
+  EXPECT_EQ(t1->m_value, "");
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::KwStruct);
+  EXPECT_EQ(t2->m_line, 2u);
+}
+
+// Only three slashes start the doc comment; a fourth slash is body content.
+TEST(LexerTest, DocCommentFourSlashesFourthIsContent) {
+  std::string input = "////text";
+  Lexer lexer(input);
+
+  auto token = lexer.next_token();
+  ASSERT_TRUE(token.has_value());
+  EXPECT_EQ(token->m_type, TokenType::DocComment);
+  EXPECT_EQ(token->m_value, "/text");
+}
+
+// Exactly one leading space is stripped; a second space is preserved.
+TEST(LexerTest, DocCommentStripsExactlyOneLeadingSpace) {
+  std::string input = "///  double";
+  Lexer lexer(input);
+
+  auto token = lexer.next_token();
+  ASSERT_TRUE(token.has_value());
+  EXPECT_EQ(token->m_type, TokenType::DocComment);
+  EXPECT_EQ(token->m_value, " double");
+}
+
+// A doc comment with no trailing newline (at EOF) still captures its body,
+// then yields Eof.
+TEST(LexerTest, DocCommentAtEofWithoutNewline) {
+  std::string input = "/// tail";
+  Lexer lexer(input);
+
+  auto t1 = lexer.next_token();
+  ASSERT_TRUE(t1.has_value());
+  EXPECT_EQ(t1->m_type, TokenType::DocComment);
+  EXPECT_EQ(t1->m_value, "tail");
+
+  auto t2 = lexer.next_token();
+  ASSERT_TRUE(t2.has_value());
+  EXPECT_EQ(t2->m_type, TokenType::Eof);
+}
