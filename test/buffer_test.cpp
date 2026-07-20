@@ -297,6 +297,16 @@ TEST(BufferTest, I32ArrayRoundtrip) {
     EXPECT_EQ(result, data);
 }
 
+// A declared count larger than the bytes actually present is rejected before the
+// reserve, so a ~4-byte count cannot drive a count*sizeof(T) allocation.
+TEST(BufferTest, DecodeArrayRejectsCountExceedingRemaining) {
+    Buffer buf;
+    encode_u32(buf, 1000000);  // claims 1,000,000 elements (<= kMaxArrayCount)
+    encode_i32(buf, 42);       // but only one element's worth of bytes follows
+    buf.reset_read();
+    EXPECT_THROW(decode_array<i32>(buf), std::runtime_error);
+}
+
 TEST(BufferTest, StringArrayRoundtrip) {
     Buffer buf;
     std::vector<std::string> data = {"hello", "world", "", "test"};

@@ -162,6 +162,12 @@ std::vector<T> decode_array(Buffer& buf) {
     if (count > kMaxArrayCount) {
         throw std::runtime_error("Array too large");
     }
+    // Every element occupies at least one wire byte, so a count larger than the
+    // bytes left in the buffer is malformed. Rejecting it here stops a ~4-byte
+    // count from driving a count*sizeof(T) reserve (allocation amplification).
+    if (count > buf.remaining()) {
+        throw std::runtime_error("Array count exceeds remaining bytes");
+    }
 
     std::vector<T> result;
     result.reserve(count);

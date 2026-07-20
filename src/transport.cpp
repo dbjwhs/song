@@ -399,11 +399,20 @@ bool TcpTransport::receive(Buffer& msg, int timeout_ms) {
             throw ProtocolError("TcpTransport: payload size exceeds maximum");
         }
 
-        std::vector<std::byte> payload_buf(hdr.payload_size);
+        // Grow the buffer as bytes actually arrive rather than pre-allocating the
+        // attacker-declared payload_size up front: a 16-byte header can declare up
+        // to kMaxPayloadSize (16 MB), and combined with the message deadline a peer
+        // that declares a huge payload but sends little now costs little memory.
+        std::vector<std::byte> payload_buf;
+        payload_buf.resize(hdr.payload_size < (64u * 1024u) ? hdr.payload_size : 64u * 1024u);
         size_t offset = 0;
         while (offset < hdr.payload_size) {
+            if (offset == payload_buf.size()) {
+                size_t grown = payload_buf.size() * 2;
+                payload_buf.resize(grown < hdr.payload_size ? grown : hdr.payload_size);
+            }
             ssize_t n = recv_bounded(payload_buf.data() + offset,
-                                     hdr.payload_size - offset);
+                                     payload_buf.size() - offset);
             if (n < 0) {
                 if (errno == EINTR) {
                     continue;

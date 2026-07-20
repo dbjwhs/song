@@ -170,9 +170,14 @@ void ServiceProcess::init_handshake() {
     // The ServiceManager/caller can set them. Default: accept all peer caps.
     negotiated_capabilities_ = init.capabilities;
 
-    // Decode method list
+    // Decode method list. Clamp the reserve to the bytes actually remaining so a
+    // hostile init with a huge method_count cannot drive an unbounded allocation
+    // (each descriptor is more than one byte); the loop still stops when the
+    // buffer is exhausted, as decode_method_descriptor throws on underflow.
     methods_.clear();
-    methods_.reserve(init.method_count);
+    size_t reserve_n = init.method_count < init_msg.remaining()
+                           ? init.method_count : init_msg.remaining();
+    methods_.reserve(reserve_n);
     for (u32 ndx = 0; ndx < init.method_count; ++ndx) {
         methods_.push_back(wire::decode_method_descriptor(init_msg));
     }
@@ -411,9 +416,14 @@ void ServiceConnection::init_handshake() {
     peer_capabilities_ = init.capabilities;
     negotiated_capabilities_ = local_capabilities_ & init.capabilities;
 
-    // Decode method list
+    // Decode method list. Clamp the reserve to the bytes actually remaining so a
+    // hostile init with a huge method_count cannot drive an unbounded allocation
+    // (each descriptor is more than one byte); the loop still stops when the
+    // buffer is exhausted, as decode_method_descriptor throws on underflow.
     methods_.clear();
-    methods_.reserve(init.method_count);
+    size_t reserve_n = init.method_count < init_msg.remaining()
+                           ? init.method_count : init_msg.remaining();
+    methods_.reserve(reserve_n);
     for (u32 ndx = 0; ndx < init.method_count; ++ndx) {
         methods_.push_back(wire::decode_method_descriptor(init_msg));
     }
