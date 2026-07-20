@@ -10,6 +10,7 @@
 #include <mutex>
 #include <functional>
 #include <atomic>
+#include <memory>
 
 namespace song {
 
@@ -124,7 +125,7 @@ using ObjectFactory = std::function<Object*(u16 constructor_id, Buffer& args)>;
 /// Manages the lifecycle of remotable objects, assigning IDs and tracking references.
 /// Objects are identified by negative integers (like DAG).
 class ObjectRegistry {
-    std::unordered_map<i32, Object*> objects_;
+    std::unordered_map<i32, std::shared_ptr<Object>> objects_;
     std::unordered_map<u32, ObjectFactory> factories_;  // type_id -> factory
     i32 next_id_ = -1;  // Start at -1, decrement for each new object
     mutable std::mutex mutex_;
@@ -160,10 +161,22 @@ public:
     /// @return Assigned object ID (negative integer)
     i32 register_object(Object* obj);
 
-    /// Look up an object by ID
+    /// Look up an object by ID (non-owning).
     /// @param id Object ID
-    /// @return Pointer to object, or nullptr if not found
+    /// @return Raw pointer to object, or nullptr if not found. Valid only while
+    ///         the registry still holds the object; do NOT retain it across a
+    ///         point where another thread may release() the same id -- use
+    ///         get_shared() on the concurrent multi-client dispatch path instead.
     Object* get(i32 id) const;
+
+    /// Look up an object by ID, returning an owning handle.
+    /// The returned shared_ptr keeps the object alive for as long as the caller
+    /// holds it, even if another thread calls release() and drops the registry's
+    /// last reference concurrently. This is the safe accessor for the
+    /// multi-client dispatch loop, where it prevents a use-after-free.
+    /// @param id Object ID
+    /// @return shared_ptr to the object, or nullptr if not found
+    std::shared_ptr<Object> get_shared(i32 id) const;
 
     /// Add a reference to an object
     /// @param id Object ID

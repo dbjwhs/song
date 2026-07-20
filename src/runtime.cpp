@@ -359,7 +359,7 @@ void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& pay
 
         Buffer response;
         try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
+            auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,
@@ -388,7 +388,7 @@ void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& pay
 
         Buffer response;
         try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
+            auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,
@@ -475,7 +475,7 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
                                 prop_hdr.property_id, &transport);
 
         // Ensure the object uses the subscription registry for fan-out
-        Object* obj = object_registry_.get(prop_hdr.object_id);
+        auto obj = object_registry_.get_shared(prop_hdr.object_id);
         if (obj) {
             obj->set_subscription_registry(&sub_registry_);
         }
@@ -582,7 +582,7 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
 
         Buffer response;
         try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
+            auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,
@@ -611,7 +611,7 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
 
         Buffer response;
         try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
+            auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,

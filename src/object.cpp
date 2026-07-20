@@ -42,10 +42,10 @@ i32 ObjectRegistry::create_object(u32 type_id, u16 constructor_id, Buffer& args)
         throw ServiceError("Factory returned null for type ID: " + std::to_string(type_id));
     }
 
-    // Assign ID and register
+    // Assign ID and register (registry owns the object via shared_ptr)
     i32 id = next_id_--;
     obj->init(id, this, type_id);
-    objects_[id] = obj;
+    objects_[id] = std::shared_ptr<Object>(obj);
 
     return id;
 }
@@ -58,11 +58,17 @@ i32 ObjectRegistry::register_object(Object* obj) {
     std::lock_guard lock(mutex_);
     i32 id = next_id_--;
     obj->init(id, this);
-    objects_[id] = obj;
+    objects_[id] = std::shared_ptr<Object>(obj);
     return id;
 }
 
 Object* ObjectRegistry::get(i32 id) const {
+    std::lock_guard lock(mutex_);
+    auto it = objects_.find(id);
+    return it != objects_.end() ? it->second.get() : nullptr;
+}
+
+std::shared_ptr<Object> ObjectRegistry::get_shared(i32 id) const {
     std::lock_guard lock(mutex_);
     auto it = objects_.find(id);
     return it != objects_.end() ? it->second : nullptr;
@@ -83,8 +89,9 @@ void ObjectRegistry::release(i32 id) {
     auto it = objects_.find(id);
     if (it != objects_.end()) {
         if (it->second->release()) {
-            // Reference count reached zero - delete object
-            delete it->second;
+            // Wire refcount reached zero: drop the registry's reference. The
+            // object's memory is freed once the last get_shared() handle (if any
+            // dispatch thread is mid-use) also drops -- never underneath it.
             objects_.erase(it);
         }
     }
@@ -102,10 +109,7 @@ bool ObjectRegistry::contains(i32 id) const {
 
 void ObjectRegistry::clear() {
     std::lock_guard lock(mutex_);
-    for (auto& [id, obj] : objects_) {
-        delete obj;
-    }
-    objects_.clear();
+    objects_.clear();  // shared_ptrs drop; each object freed when its last ref goes
 }
 
 } // namespace song

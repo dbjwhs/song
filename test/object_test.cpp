@@ -145,6 +145,28 @@ TEST_F(ObjectRegistryTest, ReleaseObject) {
     EXPECT_EQ(registry.get(id), nullptr);
 }
 
+// Regression for the dispatch use-after-free: an owning handle from get_shared()
+// must keep the object alive even if another thread release()s its last wire
+// reference mid-use. Under the old raw-pointer get()/immediate-delete model, the
+// read after release() below would be a use-after-free (ASan would trip).
+TEST_F(ObjectRegistryTest, GetSharedKeepsObjectAliveAcrossRelease) {
+    auto* obj = new TestObject(7);
+    i32 id = registry.register_object(obj);  // wire refcount 1
+
+    std::shared_ptr<Object> held = registry.get_shared(id);  // dispatch-side handle
+    ASSERT_NE(held, nullptr);
+
+    // A concurrent release drops the wire refcount to 0 and unregisters the id.
+    registry.release(id);
+    EXPECT_FALSE(registry.contains(id));
+    EXPECT_EQ(registry.get(id), nullptr);
+    EXPECT_EQ(registry.size(), 0u);
+
+    // The object is still alive because a get_shared() handle is live; reading it
+    // is safe. It is freed only when `held` drops at end of scope.
+    EXPECT_EQ(static_cast<TestObject*>(held.get())->value(), 7);
+}
+
 TEST_F(ObjectRegistryTest, AddRef) {
     auto* obj = new TestObject(42);
     i32 id = registry.register_object(obj);
