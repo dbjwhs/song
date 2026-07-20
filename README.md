@@ -382,6 +382,11 @@ while (reader.next()) {
 
 Streaming works over all transports (pipes, TCP, HMAC, TLS).
 
+`call_streaming()` buffers the whole stream before returning, so it caps how much
+it will accept from an untrusted service (`set_max_stream_chunks()` /
+`set_max_stream_bytes()`, defaults 1,048,576 chunks and 512 MB) and aborts with a
+`ServiceError` past the cap. Raise the caps for legitimately large transfers.
+
 ## Cross-Subnet Discovery (Registry)
 
 When mDNS can't reach services (different VLANs, cloud environments), use a registry service.

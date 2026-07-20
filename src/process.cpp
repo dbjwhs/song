@@ -519,8 +519,11 @@ StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, co
         transport_->send(call_msg);
     }
 
-    // Collect stream chunks until stream_end
+    // Collect stream chunks until stream_end, bounding total accumulation so an
+    // untrusted service cannot exhaust client memory by streaming without end.
     StreamReader reader(seq);
+    size_t total_chunks = 0;
+    size_t total_bytes = 0;
 
     for (;;) {
         Buffer response;
@@ -542,6 +545,18 @@ StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, co
         }
 
         if (hdr.type == wire::MsgType::stream) {
+            // Enforce cumulative caps before buffering the chunk.
+            total_chunks += 1;
+            total_bytes += hdr.payload_size;
+            if (total_chunks > max_stream_chunks_) {
+                throw ServiceError("Stream exceeded max chunk count (" +
+                                   std::to_string(max_stream_chunks_) + ")");
+            }
+            if (total_bytes > max_stream_bytes_) {
+                throw ServiceError("Stream exceeded max cumulative bytes (" +
+                                   std::to_string(max_stream_bytes_) + ")");
+            }
+
             // Extract payload (skip 16-byte header)
             Buffer chunk;
             if (hdr.payload_size > 0) {

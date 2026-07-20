@@ -341,6 +341,35 @@ TEST_F(StreamE2ETest, LargeStream) {
     }
 }
 
+// call_streaming must abort rather than buffer an unbounded stream from an
+// untrusted service: exceeding the chunk-count cap throws ServiceError.
+TEST_F(StreamE2ETest, CallStreamingAbortsPastChunkCap) {
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port_, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+    conn.set_max_stream_chunks(3);
+
+    Buffer args;
+    encode_i32(args, 100);  // service streams 100 chunks, over the cap of 3
+    EXPECT_THROW(conn.call_streaming(kStreamService, kMethod_count_to, args),
+                 ServiceError);
+}
+
+// The cumulative-byte cap also aborts an oversized stream.
+TEST_F(StreamE2ETest, CallStreamingAbortsPastByteCap) {
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port_, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+    conn.set_max_stream_bytes(16);  // 4-byte i32 chunks exceed this after a few
+
+    Buffer args;
+    encode_i32(args, 100);
+    EXPECT_THROW(conn.call_streaming(kStreamService, kMethod_count_to, args),
+                 ServiceError);
+}
+
 // Regression: the fd-based StreamWriter path must surface a broken pipe as a
 // ServiceError, not a fatal SIGPIPE. With SIGPIPE ignored, writing a chunk to a
 // pipe whose read end is closed fails the underlying write, which write()

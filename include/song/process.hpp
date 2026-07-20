@@ -109,6 +109,9 @@ class ServiceConnection {
     std::vector<wire::MethodDescriptor> methods_;  // Cached method list
     // Property notification callbacks: key = (object_id, property_id)
     std::map<std::pair<i32, u16>, std::function<void(const Buffer&)>> prop_callbacks_;
+    // Bounds on what call_streaming() will buffer from an untrusted service.
+    size_t max_stream_chunks_ = 1u << 20;               // 1,048,576 chunks
+    size_t max_stream_bytes_ = 512u * 1024u * 1024u;    // 512 MB cumulative
 
 public:
     /// Default constructor
@@ -138,8 +141,19 @@ public:
 
     /// Make a streaming call to a service method
     /// Sends the call, then collects MSG_STREAM chunks until MSG_STREAM_END.
+    /// Aborts with ServiceError if the stream exceeds the configured chunk-count
+    /// or cumulative-byte cap, so an untrusted service cannot exhaust client
+    /// memory by streaming without end.
     /// @return StreamReader containing all received chunks
     StreamReader call_streaming(u16 service_id, u16 method_id, const Buffer& args);
+
+    /// Bound how much a single call_streaming() will buffer before aborting.
+    /// Defaults: 1,048,576 chunks and 512 MB cumulative. Raise for legitimately
+    /// large transfers; a value of 0 is treated as 1 (at least one chunk/byte).
+    void set_max_stream_chunks(size_t limit) { max_stream_chunks_ = limit ? limit : 1; }
+    void set_max_stream_bytes(size_t limit) { max_stream_bytes_ = limit ? limit : 1; }
+    size_t max_stream_chunks() const { return max_stream_chunks_; }
+    size_t max_stream_bytes() const { return max_stream_bytes_; }
 
     /// Make a one-way call (no response expected)
     void call_oneway(u16 service_id, u16 method_id, const Buffer& args);
