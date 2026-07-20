@@ -658,3 +658,128 @@ TEST(ResolverTest, InheritedFieldShadowingError) {
     EXPECT_TRUE(any_error_contains(resolver, "shadows inherited field"));
 }
 
+
+// =============================================================================
+// Cross-kind duplicate detection and the inverted "first defined at line"
+// message. register_types registers by fixed kind order (enums, structs,
+// classes, services, errors), not source order, so a duplicate name spanning
+// two different kinds is flagged on whichever kind is registered second, while
+// the "first defined at line N" text points at whichever registered first.
+// =============================================================================
+
+// Extract the integer N from a "first defined at line N" duplicate-type message.
+// Returns -1 if the marker is absent.
+static int first_defined_line(const std::string& msg) {
+    const std::string marker = "first defined at line ";
+    auto pos = msg.find(marker);
+    if (pos == std::string::npos) {
+        return -1;
+    }
+    pos += marker.size();
+    int result = 0;
+    while (pos < msg.size() && msg[pos] >= '0' && msg[pos] <= '9') {
+        result = result * 10 + (msg[pos] - '0');
+        ++pos;
+    }
+    return result;
+}
+
+// A struct and an enum sharing a name collide across kinds. Because enums
+// register before structs, the LATER enum registers first, so the duplicate is
+// flagged on the earlier struct's line while the message references the enum's
+// later line -> the reported "first defined" line is GREATER than the error's
+// own line. This documents the inverted-line message.
+TEST(ResolverTest, CrossKindDuplicateStructEnumInvertedLine) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        struct Foo {
+            i32 x;
+        }
+        enum Foo {
+            a
+        }
+    )", &resolver));
+    ASSERT_EQ(resolver->errors().size(), 1);
+    EXPECT_TRUE(any_error_contains(resolver, "Duplicate type"));
+
+    const std::string msg = resolver->errors()[0].what();
+    const int reported = first_defined_line(msg);
+    EXPECT_GT(reported, 0);
+    // Inversion: the message points at a line AFTER the error's anchor line.
+    EXPECT_GT(reported, resolver->errors()[0].line());
+}
+
+// A service and a struct sharing a name collide across kinds.
+TEST(ResolverTest, CrossKindDuplicateServiceStruct) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        service S {
+            ping() -> void;
+        }
+        struct S {
+            i32 x;
+        }
+    )", &resolver));
+    EXPECT_EQ(resolver->errors().size(), 1);
+    EXPECT_TRUE(any_error_contains(resolver, "Duplicate type"));
+}
+
+// A class and an error sharing a name collide across kinds.
+TEST(ResolverTest, CrossKindDuplicateClassError) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        class C {
+            i32 x;
+        }
+        error C {
+            string m;
+        }
+    )", &resolver));
+    EXPECT_EQ(resolver->errors().size(), 1);
+    EXPECT_TRUE(any_error_contains(resolver, "Duplicate type"));
+}
+
+// =============================================================================
+// Self-referential inheritance: cycle report plus spurious shadow report.
+// (Characterization of current behavior -- see notes below.)
+// =============================================================================
+
+// Characterization: a directly self-referential struct currently produces TWO
+// errors -- the inheritance-cycle report AND a spurious "shadows inherited
+// field" error, because check_duplicate_fields walks base 'A' and collects A's
+// own field before the cycle guard breaks the walk. The arguably-correct
+// behavior would be a single cycle error; this test pins the current output so
+// an intentional fix (suppressing the spurious shadow) surfaces here.
+TEST(ResolverTest, SelfCycleAlsoReportsSpuriousShadow) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        struct A : A {
+            i32 x;
+        }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "Inheritance cycle"));
+    EXPECT_TRUE(any_error_contains(resolver, "shadows inherited field"));
+    EXPECT_EQ(resolver->errors().size(), 2);
+}
+
+// Characterization: an indirect (two-node) inheritance cycle likewise emits the
+// per-type cycle reports AND spurious shadow errors, because each type's
+// ancestor walk loops back through the cycle and collects its own field names.
+TEST(ResolverTest, IndirectCycleAlsoReportsSpuriousShadow) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        struct A : B {
+            i32 a;
+        }
+        struct B : A {
+            i32 b;
+        }
+    )", &resolver));
+    EXPECT_TRUE(any_error_contains(resolver, "Inheritance cycle"));
+    EXPECT_TRUE(any_error_contains(resolver, "shadows inherited field"));
+}
