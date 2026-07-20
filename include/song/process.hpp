@@ -22,7 +22,10 @@ class Transport;
 /// Service process handle
 /// Manages a spawned service process and its pipes
 class ServiceProcess {
-    pid_t pid_ = -1;
+    // Mutable so the const alive() can clear the pid the instant waitpid() reaps
+    // the child. Otherwise a later terminate() would signal a stale -- possibly
+    // OS-reused -- pid.
+    mutable pid_t pid_ = -1;
     Pipe to_service_;
     Pipe from_service_;
     bool reusable_ = true;

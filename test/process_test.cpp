@@ -362,12 +362,11 @@ TEST(ProcessTest, ConnectionMultipleCalls) {
 // ServiceProcess: alive()/terminate() after a natural (unreaped) death
 // =============================================================================
 
-// Characterization: alive() is const and performs the waitpid() reap when it
-// observes the child has exited, but it cannot clear pid_. A reaped process
-// therefore keeps reporting its original pid until terminate() runs, and
-// repeated alive() calls must stay false (no ECHILD-driven flip back to true /
-// double-reap misbehavior). terminate() must still complete and clear the
-// handle even though the child was already reaped.
+// alive() is const but performs the waitpid() reap when it observes the child
+// has exited, and clears pid_ (mutable) at that instant so a later terminate()
+// cannot signal a stale/reused pid. Repeated alive() calls must stay false (no
+// ECHILD-driven flip back to true / double-reap misbehavior), and terminate() on
+// the already-reaped handle must be a prompt no-op.
 TEST(ProcessTest, AliveIsStableAfterNaturalDeath) {
   std::string echo_path = get_test_service_path("echo_service");
   if (!std::filesystem::exists(echo_path)) {
@@ -387,9 +386,14 @@ TEST(ProcessTest, AliveIsStableAfterNaturalDeath) {
 
   EXPECT_FALSE(proc.alive());
   EXPECT_FALSE(proc.alive());  // double-reap must not misbehave
-  EXPECT_EQ(proc.pid(), original_pid);  // alive() cannot clear pid_
+  EXPECT_EQ(proc.pid(), -1);   // alive() cleared pid_ the instant it reaped
 
+  // terminate() is now a no-op: it must not signal the stale pid nor busy-wait
+  // the full graceful-shutdown second on an already-gone child.
+  const auto start = std::chrono::steady_clock::now();
   proc.terminate();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_LT(elapsed, std::chrono::milliseconds(500));
   EXPECT_EQ(proc.pid(), -1);
   EXPECT_FALSE(proc.alive());
 }

@@ -187,9 +187,14 @@ bool ServiceProcess::alive() const {
     pid_t result = waitpid(pid_, &status, WNOHANG);
     if (result == 0) {
         return true;  // Still running
-    } else if (result == pid_) {
-        return false;  // Process exited
     }
+    // result == pid_ : the child just exited and we reaped it here.
+    // result == -1   : the child is no longer waitable (e.g. ECHILD -- already
+    //                  reaped elsewhere).
+    // Either way the pid is dead. Clear it now so a later terminate() (including
+    // the one in the destructor) does not kill() a stale, possibly OS-reused pid
+    // and does not busy-wait a full second on an already-gone child.
+    pid_ = -1;
     return false;
 }
 
