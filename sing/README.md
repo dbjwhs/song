@@ -242,7 +242,7 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 
 | Category | Tests |
 |----------|-------|
-| IPC Calculator | 13 |
+| IPC Calculator | 26 |
 | IPC StockTicker | 15 |
 | IPC Chat | 23 |
 | IPC DataCopy | 25 |
@@ -250,7 +250,7 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 | Network Discovery | 4 |
 | Network Secure | 5 |
 | Network Backup Agent | 44 |
-| **Total** | **138** |
+| **Total** | **151** |
 
 ## Requirements
 

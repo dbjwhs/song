@@ -40,8 +40,8 @@ cd examples
 Build targets:
 - `libsong` - Static library with core runtime
 - `songc` - IDL compiler for .song files
-- `song_tests` - Unit test suite (396 tests)
-- `sing_*` - Integration test services and tests (94 tests)
+- `song_tests` - Unit test suite (908 tests)
+- `sing_*` - Integration test services and tests (151 tests across 8 projects)
 
 ## Code Style
 
@@ -121,10 +121,9 @@ Buffer resp = conn.call(service_id, method_id, request);
 
 **Runtime Introspection**: service_count(), method_count(), get_service_ids(), has_service()
 
-**Test coverage**: 490 tests (396 unit + 94 integration)
+**Test coverage**: 1059 C++ tests (908 unit + 151 integration) plus a 52-test Python client suite
 
 Not yet implemented:
-- Streaming support, property support
 - Optional types (`T?`) in C++ codegen -- songc rejects these with a CodegenError
 - Enum types used as a value (field/parameter/return) in C++ codegen -- rejected
   with a CodegenError; use the enum's underlying integer type in the IDL instead

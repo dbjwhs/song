@@ -2,7 +2,7 @@
 
 A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++ and Python code, and communicate over pipes or TCP with TLS encryption, HMAC-SHA256 security, streaming RPC, and zero-config mDNS discovery.
 
-**705 tests (598 unit + 107 integration) | Zero warnings (-Wall -Wextra -Werror) | ~31K lines of C++20**
+**1059 tests (908 unit + 151 integration) plus 52 Python client tests | Zero warnings (-Wall -Wextra -Werror) | C++20**
 
 [![CI](https://github.com/dbjwhs/song/actions/workflows/ci.yml/badge.svg)](https://github.com/dbjwhs/song/actions/workflows/ci.yml)
 
@@ -32,7 +32,7 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 
 Song is a personal learning codebase and a case study in AI-assisted systems engineering — an exploration of how far one developer working closely with [Claude Code](https://claude.com/claude-code) can push a non-trivial C++ systems project through sustained collaboration. The goal is to probe the 2026 state of AI-assisted development on something ambitious: a hand-rolled IDL compiler, custom binary wire protocol, process lifecycle management, TLS integration, and multi-transport RPC.
 
-Engineering discipline is real — zero warnings under `-Wall -Wextra -Werror`, 705 tests, documented error contracts, consistent code style. But this is not a framework seeking production adoption. Some self-imposed constraints drove choices a product team wouldn't pick, notably zero-dependency as a hard rule for the core runtime. Some advertised features are more polished than others.
+Engineering discipline is real — zero warnings under `-Wall -Wextra -Werror`, over 1,000 tests, documented error contracts, consistent code style. But this is not a framework seeking production adoption. Some self-imposed constraints drove choices a product team wouldn't pick, notably zero-dependency as a hard rule for the core runtime. Some advertised features are more polished than others.
 
 The value of this repo as a portfolio artifact isn't "built with AI" — it's the judgment visible in the result: architecture, scope management, reviewing AI output critically, and shipping honest caveats over aspirational marketing. What one engineer working closely with Claude Code can produce on a sustained multi-month effort in modern C++ is the question this repo answers.
 
@@ -438,6 +438,7 @@ See [sing/README.md](sing/README.md) for detailed documentation.
 | [TCP Calculator](sing/network/tcp_calculator/) | 9 | Calculator service over TCP sockets |
 | [Discovery](sing/network/discovery/) | 4 | mDNS zero-config service discovery |
 | [Secure](sing/network/secure/) | 5 | HMAC-SHA256 authenticated communication |
+| [Backup Agent](sing/network/backup/) | 44 | End-to-end agent: streaming, HMAC, multi-client, property notifications, mDNS |
 
 ### Running Integration Tests
 
@@ -498,7 +499,7 @@ All core features are complete and tested:
 | **Multi-Client** | Complete | `run_tcp_multi()` thread-per-client, shared object registry and subscriptions |
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
-| **Tests** | 705 total | 598 unit tests + 107 integration tests across 7 projects |
+| **Tests** | 1059 C++ + 52 Python | 908 unit + 151 integration tests across 8 projects, plus a 52-test Python client suite |
 
 ## Code Quality
 
