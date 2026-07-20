@@ -348,10 +348,13 @@ void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& pay
             write_all(write_fd, error_msg.data(), error_msg.size());
         }
     } else if (hdr.type == wire::MsgType::release) {
-        // Object release (fire-and-forget)
+        // Object release (fire-and-forget). Only the owning connection may
+        // release its object (see the transport-path handler for the rationale).
         auto release_hdr = wire::decode_object_release_header(payload);
-        object_registry_.release(release_hdr.object_id);
-        tracked_objects.erase(release_hdr.object_id);
+        if (tracked_objects.count(release_hdr.object_id)) {
+            object_registry_.release(release_hdr.object_id);
+            tracked_objects.erase(release_hdr.object_id);
+        }
         // No response for release
     } else if (hdr.type == wire::MsgType::prop_get) {
         // Property get
@@ -359,6 +362,13 @@ void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& pay
 
         Buffer response;
         try {
+            // Scope property access to the object's owning connection.
+            if (!tracked_objects.count(prop_hdr.object_id)) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::object_not_found, "Object not found");
+                write_all(write_fd, error_msg.data(), error_msg.size());
+                return;
+            }
             auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
@@ -388,6 +398,13 @@ void ServiceRuntime::handle_message_fd_impl(const wire::Header& hdr, Buffer& pay
 
         Buffer response;
         try {
+            // Same ownership scoping as prop_get.
+            if (!tracked_objects.count(prop_hdr.object_id)) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::object_not_found, "Object not found");
+                write_all(write_fd, error_msg.data(), error_msg.size());
+                return;
+            }
             auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
@@ -571,10 +588,14 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
             transport.send(error_msg);
         }
     } else if (hdr.type == wire::MsgType::release) {
-        // Object release (fire-and-forget)
+        // Object release (fire-and-forget). Only the connection that created the
+        // object (and therefore tracks it) may release it, so a peer sharing the
+        // registry cannot free -- or decref -- an object it does not own.
         auto release_hdr = wire::decode_object_release_header(payload);
-        object_registry_.release(release_hdr.object_id);
-        tracked_objects.erase(release_hdr.object_id);
+        if (tracked_objects.count(release_hdr.object_id)) {
+            object_registry_.release(release_hdr.object_id);
+            tracked_objects.erase(release_hdr.object_id);
+        }
         // No response for release
     } else if (hdr.type == wire::MsgType::prop_get) {
         // Property get
@@ -582,6 +603,15 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
 
         Buffer response;
         try {
+            // Scope to the owning connection: an id this connection did not
+            // create is reported as not-found, without revealing whether it
+            // exists on another connection.
+            if (!tracked_objects.count(prop_hdr.object_id)) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::object_not_found, "Object not found");
+                transport.send(error_msg);
+                return;
+            }
             auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(
@@ -611,6 +641,13 @@ void ServiceRuntime::handle_message_impl(const wire::Header& hdr, Buffer& payloa
 
         Buffer response;
         try {
+            // Same ownership scoping as prop_get.
+            if (!tracked_objects.count(prop_hdr.object_id)) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id, ErrorCode::object_not_found, "Object not found");
+                transport.send(error_msg);
+                return;
+            }
             auto obj = object_registry_.get_shared(prop_hdr.object_id);
             if (!obj) {
                 Buffer error_msg = wire::create_error_message(

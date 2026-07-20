@@ -64,6 +64,18 @@ Captured decode_captured(const std::vector<std::byte>& bytes) {
     return {hdr.type, hdr.sequence_id, code};
 }
 
+// Minimal remotable object with one i32 property, for object-ownership tests.
+class OwnedTestObject : public Object {
+    i32 value_ = 0;
+public:
+    void prop_get(u16, Buffer& resp) override { encode_i32(resp, value_); }
+    void prop_set(u16, Buffer& req, Buffer& resp) override {
+        value_ = decode_i32(req);
+        encode_i32(resp, value_);
+    }
+    void dispatch(u16, Buffer&, Buffer&) override {}
+};
+
 // Locate a built example service executable (mirrors process_test.cpp).
 std::string find_service(const std::string& name) {
     namespace fs = std::filesystem;
@@ -872,4 +884,86 @@ TEST(RuntimeMultiClientTest, RunTcpMultiRejectsBeyondCapAndReusesFreedSlots) {
     c2.close();
     c4.close();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));  // let workers exit
+}
+
+// =============================================================================
+// Object ownership scoping (IDOR)
+// =============================================================================
+
+// prop_get/prop_set/release must be scoped to the connection that created the
+// object. In run_tcp_multi all connections share one object_registry_ with
+// predictable ids, so without scoping one peer could read, mutate, or free
+// another peer's object. This drives handle_message with two independent
+// per-connection tracked-object sets against the same runtime.
+TEST(RuntimeObjectOwnershipTest, PropAccessAndReleaseScopedToOwner) {
+    ServiceRuntime runtime;
+    runtime.register_factory(42, [](u16, Buffer&) -> Object* {
+        return new OwnedTestObject();
+    });
+
+    MockTransport ta, tb;
+    std::unordered_set<i32> tracked_a, tracked_b;
+    ServiceRuntime::SubscriptionSet subs_a, subs_b;
+
+    auto run = [&](MockTransport& t, std::unordered_set<i32>& tracked,
+                   ServiceRuntime::SubscriptionSet& subs, Buffer msg) {
+        msg.reset_read();
+        wire::Header hdr = wire::decode_header(msg);
+        runtime.handle_message(hdr, msg, t, tracked, subs);
+    };
+
+    // Connection A creates an object of type 42.
+    Buffer empty_args;
+    run(ta, tracked_a, subs_a, wire::create_object_create_message(1, 42, 0, empty_args));
+    ASSERT_EQ(ta.sent.size(), 1u);
+    i32 obj_id = 0;
+    {
+        Buffer b;
+        b.write(ta.sent[0].data(), ta.sent[0].size());
+        b.reset_read();
+        wire::Header h = wire::decode_header(b);
+        ASSERT_EQ(h.type, wire::MsgType::result);
+        obj_id = wire::decode_object_ref(b).object_id;
+    }
+    ASSERT_EQ(tracked_a.count(obj_id), 1u);
+    ta.sent.clear();
+
+    // A sets its own object's property -> result.
+    Buffer val99;
+    encode_i32(val99, 99);
+    run(ta, tracked_a, subs_a, wire::create_property_set_message(2, 42, obj_id, 0, val99));
+    ASSERT_EQ(ta.sent.size(), 1u);
+    EXPECT_EQ(decode_captured(ta.sent[0]).type, wire::MsgType::result);
+    ta.sent.clear();
+
+    // B cannot read A's object -> object_not_found.
+    run(tb, tracked_b, subs_b, wire::create_property_get_message(3, 42, obj_id, 0));
+    ASSERT_EQ(tb.sent.size(), 1u);
+    EXPECT_EQ(decode_captured(tb.sent[0]).type, wire::MsgType::error);
+    EXPECT_EQ(decode_captured(tb.sent[0]).code, ErrorCode::object_not_found);
+    tb.sent.clear();
+
+    // B cannot mutate A's object -> object_not_found.
+    Buffer val7;
+    encode_i32(val7, 7);
+    run(tb, tracked_b, subs_b, wire::create_property_set_message(4, 42, obj_id, 0, val7));
+    ASSERT_EQ(tb.sent.size(), 1u);
+    EXPECT_EQ(decode_captured(tb.sent[0]).code, ErrorCode::object_not_found);
+    tb.sent.clear();
+
+    // B's release of A's object is a no-op (fire-and-forget, no reply).
+    run(tb, tracked_b, subs_b, wire::create_object_release_message(42, obj_id));
+    EXPECT_TRUE(tb.sent.empty());
+
+    // A's object still exists and retains 99 -- B's tampering was fully rejected.
+    run(ta, tracked_a, subs_a, wire::create_property_get_message(5, 42, obj_id, 0));
+    ASSERT_EQ(ta.sent.size(), 1u);
+    {
+        Buffer b;
+        b.write(ta.sent[0].data(), ta.sent[0].size());
+        b.reset_read();
+        wire::Header h = wire::decode_header(b);
+        ASSERT_EQ(h.type, wire::MsgType::result);
+        EXPECT_EQ(decode_i32(b), 99);
+    }
 }
