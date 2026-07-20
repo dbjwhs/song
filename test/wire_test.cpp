@@ -3,9 +3,20 @@
 
 #include <gtest/gtest.h>
 #include <song/wire.hpp>
+#include <stdexcept>
 
 using namespace song;
 using namespace song::wire;
+
+namespace {
+// Append n zero bytes to a buffer, for building deliberately-truncated payloads.
+void write_zero_bytes(Buffer& buf, size_t n) {
+    const std::byte zero{0};
+    for (size_t i = 0; i < n; ++i) {
+        buf.write(&zero, 1);
+    }
+}
+}  // namespace
 
 // =============================================================================
 // Header Encoding/Decoding
@@ -466,4 +477,134 @@ TEST(WireTest, InitMessageBadVersionStillDecodes) {
     InitMessage decoded = decode_init(buf);
     EXPECT_EQ(decoded.first_version, make_version(99, 0));
     EXPECT_EQ(decoded.current_version, make_version(99, 0));
+}
+
+// =============================================================================
+// Full-Message Object/Property Helpers: payload_size + trailing-payload survival
+// (gap: wire-fullmsg-payload-roundtrip)
+// =============================================================================
+
+TEST(WireTest, CreatePropertySetMessagePayloadRoundtrip) {
+    Buffer value;
+    encode_i32(value, 999);
+
+    Buffer msg = create_property_set_message(200, 5, -10, 3, value);
+
+    Header hdr = decode_header_validated(msg);
+    EXPECT_EQ(hdr.type, MsgType::prop_set);
+    EXPECT_EQ(hdr.sequence_id, 200);
+    EXPECT_EQ(hdr.payload_size, 12 + 4);  // PropertyHeader (12) + i32 (4)
+
+    PropertyHeader ph = decode_property_header(msg);
+    EXPECT_EQ(ph.type_id, 5u);
+    EXPECT_EQ(ph.object_id, -10);
+    EXPECT_EQ(ph.property_id, 3);
+
+    EXPECT_EQ(decode_i32(msg), 999);
+    EXPECT_FALSE(msg.has_data());  // trailing value fully consumed, nothing extra
+}
+
+TEST(WireTest, CreateObjectMethodMessagePayloadRoundtrip) {
+    Buffer args;
+    encode_string(args, "test");
+
+    Buffer msg = create_object_method_message(300, 5, -10, 7, args);
+
+    Header hdr = decode_header_validated(msg);
+    EXPECT_EQ(hdr.type, MsgType::call);  // object method calls reuse MSG_CALL
+    EXPECT_EQ(hdr.sequence_id, 300);
+    EXPECT_EQ(hdr.payload_size, 12 + 4 + 4);  // ObjectMethodHeader (12) + len (4) + "test" (4)
+
+    ObjectMethodHeader omh = decode_object_method_header(msg);
+    EXPECT_EQ(omh.type_id, 5u);
+    EXPECT_EQ(omh.object_id, -10);
+    EXPECT_EQ(omh.method_id, 7);
+
+    EXPECT_EQ(decode_string(msg), "test");
+    EXPECT_FALSE(msg.has_data());
+}
+
+TEST(WireTest, CreateObjectCreateMessagePayloadRoundtrip) {
+    Buffer args;
+    encode_i32(args, 100);
+
+    Buffer msg = create_object_create_message(42, 1, 0, args);
+
+    Header hdr = decode_header_validated(msg);
+    EXPECT_EQ(hdr.type, MsgType::create);
+    EXPECT_EQ(hdr.sequence_id, 42);
+    EXPECT_EQ(hdr.payload_size, 8 + 4);  // ObjectCreateHeader (8) + i32 (4)
+
+    ObjectCreateHeader och = decode_object_create_header(msg);
+    EXPECT_EQ(och.type_id, 1u);
+    EXPECT_EQ(och.constructor_id, 0);
+
+    EXPECT_EQ(decode_i32(msg), 100);
+    EXPECT_FALSE(msg.has_data());
+}
+
+// =============================================================================
+// decode_header_validated does NOT validate MsgType (only magic + payload_size)
+// (gap: wire-msgtype-not-validated)
+// =============================================================================
+
+TEST(WireTest, HeaderValidatedIgnoresUnknownMsgType) {
+    // 0x00 (below the first defined type), 0x11 (first undefined above prop_notify),
+    // and 0xFF should all decode without throwing, preserving the raw type byte.
+    for (u8 type_byte : {u8{0x00}, u8{0x11}, u8{0xFF}}) {
+        Buffer buf;
+        Header hdr{
+            .magic = kMagic,
+            .flags = MsgFlags::none,
+            .type = static_cast<MsgType>(type_byte),
+            .reserved = 0,
+            .payload_size = 0,
+            .sequence_id = 0
+        };
+        encode_header(buf, hdr);
+
+        Header decoded = decode_header_validated(buf);  // must not throw
+        EXPECT_EQ(static_cast<u8>(decoded.type), type_byte);
+    }
+}
+
+// =============================================================================
+// Truncated object/property/method-call payload decoders throw on underflow
+// (gap: wire-truncated-object-property-headers)
+// =============================================================================
+
+TEST(WireTest, TruncatedPropertyHeaderThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 11);  // PropertyHeader needs 12 bytes
+    EXPECT_THROW(decode_property_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedObjectCreateHeaderThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 7);  // ObjectCreateHeader needs 8 bytes
+    EXPECT_THROW(decode_object_create_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedObjectReleaseHeaderThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 7);  // ObjectReleaseHeader needs 8 bytes
+    EXPECT_THROW(decode_object_release_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedObjectMethodHeaderThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 11);  // ObjectMethodHeader needs 12 bytes
+    EXPECT_THROW(decode_object_method_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedMethodCallHeaderThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 2);  // MethodCallHeader needs 4 bytes
+    EXPECT_THROW(decode_method_call_header(buf), std::runtime_error);
+}
+
+TEST(WireTest, TruncatedObjectRefThrows) {
+    Buffer buf;
+    write_zero_bytes(buf, 7);  // ObjectRef needs 8 bytes
+    EXPECT_THROW(decode_object_ref(buf), std::runtime_error);
 }
