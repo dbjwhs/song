@@ -315,6 +315,10 @@ Song uses a truncated 8-byte (64-bit) HMAC tag rather than the full 32-byte SHA-
 
 This follows NIST SP 800-107 guidance that HMAC truncation to t bits provides t/2 bits of collision resistance, yielding 32-bit collision resistance — acceptable for the threat model (authenticated local/LAN IPC, not internet-facing).
 
+### Registry Authorization
+
+The registry example (`examples/registry`) has **no ownership or authorization model**: any peer that can reach it may register, unregister, re-point, or heartbeat any service name, and clients trust `discover()` results without verification. A peer that re-points a name can redirect another client's RPCs to an endpoint it controls. For that reason the example binds loopback (`127.0.0.1`) by default; `--all-interfaces` is an explicit opt-in for trusted, isolated networks only. A production registry needs a per-name ownership token (issued at registration, required to mutate the name) and a peer-authenticating transport — both intentionally out of scope for the demo.
+
 ### Platform Support
 
 | Platform | HMAC | TLS | mDNS |

@@ -414,7 +414,7 @@ TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
     return *this;
 }
 
-void TcpListener::listen(u16 port, int backlog) {
+void TcpListener::listen(u16 port, int backlog, const std::string& bind_address) {
     // Close existing listener if any
     close();
 
@@ -429,11 +429,18 @@ void TcpListener::listen(u16 port, int backlog) {
     int reuse = 1;
     setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
-    // Bind to port
+    // Bind to port. An empty bind_address means INADDR_ANY (all interfaces);
+    // a specific address restricts the listener to that interface (e.g.
+    // "127.0.0.1" to keep an unauthenticated service off the network).
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+    if (bind_address.empty()) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, bind_address.c_str(), &addr.sin_addr) != 1) {
+        close();
+        throw ServiceError("TcpListener: invalid bind address '" + bind_address + "'");
+    }
 
     if (bind(sock_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
         close();
