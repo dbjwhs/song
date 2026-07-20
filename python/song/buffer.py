@@ -39,6 +39,8 @@ class Buffer:
 
     def read(self, length: int) -> bytes:
         """Read raw bytes from the buffer."""
+        if length < 0:
+            raise BufferError(f"Buffer read with negative length: {length}")
         if self._read_pos + length > len(self._data):
             raise BufferError(
                 f"Buffer underflow: attempted to read {length} bytes "
@@ -77,49 +79,62 @@ class Buffer:
     # Primitive Encoding (Little Endian)
     # =========================================================================
 
+    def _pack(self, fmt: str, val) -> bytes:
+        """struct.pack that reports out-of-range values as BufferError.
+
+        The C++ Buffer works with fixed-width typed values, so an out-of-range
+        integer is a caller error there; on the Python side struct.pack would
+        raise struct.error. Normalize that to BufferError so callers see one
+        consistent exception type.
+        """
+        try:
+            return struct.pack(fmt, val)
+        except struct.error as e:
+            raise BufferError(f"Value {val!r} out of range for format '{fmt}': {e}")
+
     def encode_bool(self, val: bool) -> None:
         """Encode a boolean (1 byte)."""
         self._data.append(1 if val else 0)
 
     def encode_i8(self, val: int) -> None:
         """Encode a signed 8-bit integer."""
-        self._data.extend(struct.pack('<b', val))
+        self._data.extend(self._pack('<b', val))
 
     def encode_i16(self, val: int) -> None:
         """Encode a signed 16-bit integer."""
-        self._data.extend(struct.pack('<h', val))
+        self._data.extend(self._pack('<h', val))
 
     def encode_i32(self, val: int) -> None:
         """Encode a signed 32-bit integer."""
-        self._data.extend(struct.pack('<i', val))
+        self._data.extend(self._pack('<i', val))
 
     def encode_i64(self, val: int) -> None:
         """Encode a signed 64-bit integer."""
-        self._data.extend(struct.pack('<q', val))
+        self._data.extend(self._pack('<q', val))
 
     def encode_u8(self, val: int) -> None:
         """Encode an unsigned 8-bit integer."""
-        self._data.extend(struct.pack('<B', val))
+        self._data.extend(self._pack('<B', val))
 
     def encode_u16(self, val: int) -> None:
         """Encode an unsigned 16-bit integer."""
-        self._data.extend(struct.pack('<H', val))
+        self._data.extend(self._pack('<H', val))
 
     def encode_u32(self, val: int) -> None:
         """Encode an unsigned 32-bit integer."""
-        self._data.extend(struct.pack('<I', val))
+        self._data.extend(self._pack('<I', val))
 
     def encode_u64(self, val: int) -> None:
         """Encode an unsigned 64-bit integer."""
-        self._data.extend(struct.pack('<Q', val))
+        self._data.extend(self._pack('<Q', val))
 
     def encode_f32(self, val: float) -> None:
         """Encode a 32-bit float."""
-        self._data.extend(struct.pack('<f', val))
+        self._data.extend(self._pack('<f', val))
 
     def encode_f64(self, val: float) -> None:
         """Encode a 64-bit float."""
-        self._data.extend(struct.pack('<d', val))
+        self._data.extend(self._pack('<d', val))
 
     def encode_string(self, val: str) -> None:
         """Encode a string (length-prefixed UTF-8)."""
@@ -187,7 +202,11 @@ class Buffer:
     def decode_string(self) -> str:
         """Decode a string."""
         length = self.decode_u32()
-        return self.read(length).decode('utf-8')
+        raw = self.read(length)
+        try:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError as e:
+            raise BufferError(f"Invalid UTF-8 in decoded string: {e}")
 
     def decode_bytes(self) -> bytes:
         """Decode raw bytes."""

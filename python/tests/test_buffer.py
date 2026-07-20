@@ -220,5 +220,63 @@ class TestWireProtocol(unittest.TestCase):
             decode_header(bad_header)
 
 
+class TestBufferErrorHandling(unittest.TestCase):
+    """Buffer errors surface as BufferError, matching the C++ contract."""
+
+    def test_read_negative_length_raises(self):
+        buf = Buffer(b"abc")
+        with self.assertRaises(BufferError):
+            buf.read(-1)
+        # The read position must be intact, so remaining never exceeds size.
+        self.assertLessEqual(buf.remaining(), buf.size())
+        self.assertEqual(buf.remaining(), 3)
+
+    def test_decode_string_invalid_utf8_raises_buffer_error(self):
+        buf = Buffer()
+        buf.encode_u32(2)
+        buf.write(b"\xff\xfe")
+        buf.reset_read()
+        with self.assertRaises(BufferError):
+            buf.decode_string()
+
+    def test_decode_string_length_exceeds_data_raises(self):
+        buf = Buffer()
+        buf.encode_u32(1000)  # claim 1000 bytes
+        buf.write(b"abc")     # but only 3 present
+        buf.reset_read()
+        pos_before = buf.remaining()
+        with self.assertRaises(BufferError):
+            buf.decode_string()
+        # The failed read leaves the position after the length prefix; the field
+        # itself was not consumed and remaining stays within bounds.
+        self.assertLessEqual(buf.remaining(), buf.size())
+        self.assertEqual(buf.remaining(), pos_before - 4)  # only the u32 prefix read
+
+    def test_encode_out_of_range_raises_buffer_error(self):
+        cases = [
+            ("encode_i8", 128), ("encode_i8", -129),
+            ("encode_u8", 256), ("encode_u8", -1),
+            ("encode_u16", 65536), ("encode_u16", -1),
+            ("encode_u32", 2 ** 32), ("encode_u32", -1),
+            ("encode_i32", 2 ** 31), ("encode_i32", -(2 ** 31) - 1),
+            ("encode_u64", 2 ** 64), ("encode_i64", 2 ** 63),
+        ]
+        for method_name, value in cases:
+            with self.subTest(method=method_name, value=value):
+                buf = Buffer()
+                with self.assertRaises(BufferError):
+                    getattr(buf, method_name)(value)
+
+    def test_encode_in_range_still_works(self):
+        buf = Buffer()
+        buf.encode_i8(-128)
+        buf.encode_u8(255)
+        buf.encode_u32(2 ** 32 - 1)
+        buf.reset_read()
+        self.assertEqual(buf.decode_i8(), -128)
+        self.assertEqual(buf.decode_u8(), 255)
+        self.assertEqual(buf.decode_u32(), 2 ** 32 - 1)
+
+
 if __name__ == "__main__":
     unittest.main()
