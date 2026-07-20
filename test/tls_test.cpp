@@ -229,6 +229,45 @@ TEST_F(TlsCertTest, ReceiveZeroTimeoutDoesNotBlockForever) {
     server.join();
 }
 
+// A peer that sends a header promising a payload but closes before delivering it
+// must cause receive() to throw ServiceError, not hang or return a partial
+// message.
+TEST_F(TlsCertTest, ReceiveTruncatedPayloadThrows) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&]() {
+        auto conn = listener.accept(5000);
+        if (!conn) return;
+        // Header claims a 64-byte payload; send only the header, then close.
+        wire::Header hdr{};
+        hdr.magic = wire::kMagic;
+        hdr.type = wire::MsgType::call;
+        hdr.sequence_id = 1;
+        hdr.payload_size = 64;
+        Buffer header_only;
+        wire::encode_header(header_only, hdr);
+        conn->send(header_only);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        conn->close();
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::none);
+    auto client = make_tls_client(port, std::move(cli_config));
+
+    Buffer resp;
+    EXPECT_THROW(client.receive(resp, 5000), ServiceError);
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
 TEST_F(TlsCertTest, MultipleMessages) {
     TlsConfig srv_config(server_cert(), server_key(), ca_cert());
     srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
