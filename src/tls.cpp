@@ -21,6 +21,7 @@
 #include <netinet/tcp.h>
 #include <cstring>
 #include <cerrno>
+#include <cstdint>
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -57,6 +58,7 @@ struct TlsTransport::Impl {
     bool is_server = false;
     bool is_cert_mode = false;      // certificate (vs PSK) authentication
     bool verify_required = false;   // peer certificate must validate
+    bool verify_optional = false;   // verify if presented; result must be checked
     std::string expected_hostname;  // server name a client must find in the cert
 
     Impl() {
@@ -184,6 +186,7 @@ TlsTransport::TlsTransport(int sock, TlsConfig config,
     impl_->is_server = config.is_server();
     impl_->is_cert_mode = (config.mode() == TlsConfig::Mode::certificate);
     impl_->verify_required = (config.verify_mode() == TlsConfig::VerifyMode::required);
+    impl_->verify_optional = (config.verify_mode() == TlsConfig::VerifyMode::optional);
     impl_->expected_hostname = config.expected_hostname();
 
     // Configure TLS defaults
@@ -308,6 +311,22 @@ void TlsTransport::handshake() {
     if (ret != 0) {
         impl_->connected = false;
         throw SecurityError("TLS handshake failed: " + tls_error_string(ret));
+    }
+
+    // In OPTIONAL verify mode mbedTLS completes the handshake even when the peer
+    // certificate fails validation -- it records the result instead of aborting,
+    // and the application must inspect it. Without this check OPTIONAL silently
+    // behaves like NONE and accepts expired/self-signed/wrong-CA certs. (REQUIRED
+    // already aborts inside mbedtls_ssl_handshake(); NONE intentionally skips
+    // verification.)
+    if (impl_->verify_optional) {
+        uint32_t vr = mbedtls_ssl_get_verify_result(&impl_->ssl);
+        if (vr != 0) {
+            char info[512];
+            mbedtls_x509_crt_verify_info(info, sizeof(info), "  ", vr);
+            impl_->connected = false;
+            throw SecurityError(std::string("TLS peer certificate verification failed:\n") + info);
+        }
     }
 
     impl_->handshake_done = true;

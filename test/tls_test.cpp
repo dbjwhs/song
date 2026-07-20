@@ -573,6 +573,88 @@ TEST_F(TlsCertTest, ClientHostnameMismatchRejected) {
     server.join();
 }
 
+// VerifyMode::optional must inspect the verification result: a peer cert that
+// fails validation (wrong CA) has to be rejected, not silently accepted the way
+// mbedTLS's OPTIONAL leaves it. Without the get_verify_result() check this
+// handshake would succeed (optional == none).
+TEST_F(TlsCertTest, ClientVerifyOptionalRejectsBadCert) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        try {
+            auto conn = listener.accept(5000);
+            if (conn) {
+                Buffer msg;
+                conn->receive(msg, 1000);
+            }
+        } catch (...) {
+            // Client rejects the cert and aborts -- expected.
+        }
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), wrong_ca());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::optional);
+    cli_config.set_expected_hostname("localhost");
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)), 0);
+
+    TlsTransport client(sock, std::move(cli_config), "127.0.0.1", port);
+    EXPECT_THROW(client.handshake(), SecurityError);
+    client.close();
+
+    listener.close();
+    server.join();
+}
+
+// A valid certificate (correct CA + matching hostname) must still complete the
+// handshake under VerifyMode::optional -- the result check must not over-reject.
+TEST_F(TlsCertTest, ClientVerifyOptionalAcceptsValidCert) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto conn = listener.accept(5000);
+        if (!conn) return;
+        Buffer msg;
+        if (conn->receive(msg, 5000)) {
+            conn->send(msg);
+        }
+        conn->close();
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::optional);
+    cli_config.set_expected_hostname("localhost");
+    auto client = make_tls_client(port, std::move(cli_config));
+
+    EXPECT_TRUE(client.is_connected());
+
+    Buffer args;
+    encode_i32(args, 11);
+    Buffer call_msg = wire::create_call_message(1, 100, 200, args);
+    client.send(call_msg);
+    Buffer response;
+    ASSERT_TRUE(client.receive(response, 5000));
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
 TEST_F(TlsCertTest, InvalidCertPathThrows) {
     EXPECT_THROW({
         TlsConfig config("/nonexistent/cert.pem", "/nonexistent/key.pem", "/nonexistent/ca.pem");

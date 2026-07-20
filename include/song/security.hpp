@@ -180,7 +180,8 @@ public:
 
     enum class VerifyMode : u8 {
         none,      // Do not verify peer (testing only)
-        optional,  // Verify if peer presents a certificate
+        optional,  // If the peer presents a certificate it must validate; a peer
+                   // that presents no certificate is still accepted
         required,  // Peer must present a valid certificate (default for cert mode)
     };
 
