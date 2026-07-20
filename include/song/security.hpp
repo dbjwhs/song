@@ -177,6 +177,7 @@ private:
     std::string ca_path_;        // PEM CA certificate for peer verification
     std::string psk_;            // Pre-shared key bytes
     std::string psk_identity_;   // PSK identity string
+    std::string expected_hostname_;  // Server DNS name a client must see in the cert
     Mode mode_ = Mode::certificate;
     VerifyMode verify_ = VerifyMode::required;
     bool is_server_ = false;
@@ -231,10 +232,20 @@ public:
     const std::string& ca_path() const { return ca_path_; }
     const std::string& psk() const { return psk_; }
     const std::string& psk_identity() const { return psk_identity_; }
+    const std::string& expected_hostname() const { return expected_hostname_; }
 
     // Setters
     void set_server(bool is_server) { is_server_ = is_server; }
     void set_verify_mode(VerifyMode mode) { verify_ = mode; }
+
+    /// Set the server hostname a certificate-mode client must find in the peer
+    /// certificate's CN/SAN. Required for a client with verify_mode()==required:
+    /// without it, mbedTLS validates only the chain to the CA and accepts any
+    /// same-CA certificate for any host (MITM). Use the intended DNS name, not a
+    /// resolved IP (unless the certificate carries an iPAddress SAN).
+    void set_expected_hostname(std::string hostname) {
+        expected_hostname_ = std::move(hostname);
+    }
 };
 
 #endif // SONG_HAS_TLS

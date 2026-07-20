@@ -82,6 +82,13 @@ TEST(TlsConfigTest, SetVerifyMode) {
     EXPECT_EQ(config.verify_mode(), TlsConfig::VerifyMode::none);
 }
 
+TEST(TlsConfigTest, ExpectedHostnameDefaultsEmptyAndRoundTrips) {
+    TlsConfig config(server_cert(), server_key(), ca_cert());
+    EXPECT_TRUE(config.expected_hostname().empty());
+    config.set_expected_hostname("example.com");
+    EXPECT_EQ(config.expected_hostname(), "example.com");
+}
+
 // =============================================================================
 // Helper: make a client TLS connection to a known port
 // =============================================================================
@@ -421,9 +428,12 @@ TEST_F(TlsCertTest, WrongCaRejectsCert) {
         }
     });
 
-    // Client uses wrong CA -- verification should fail
+    // Client uses wrong CA -- verification should fail on the chain, not on the
+    // hostname. Set a valid expected hostname so the handshake reaches (and fails)
+    // the CA check rather than short-circuiting on the fail-closed hostname guard.
     TlsConfig cli_config(client_cert(), client_key(), wrong_ca());
     cli_config.set_verify_mode(TlsConfig::VerifyMode::required);
+    cli_config.set_expected_hostname("localhost");
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr{};
@@ -436,6 +446,127 @@ TEST_F(TlsCertTest, WrongCaRejectsCert) {
     EXPECT_THROW(client.handshake(), SecurityError);
 
     // Close the client socket so the server's handshake unblocks
+    client.close();
+
+    listener.close();
+    server.join();
+}
+
+// A verify-required client that supplies the correct CA and the hostname carried
+// by the server certificate (SAN DNS:localhost) completes the handshake.
+TEST_F(TlsCertTest, ClientHostnameVerificationSucceeds) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto conn = listener.accept(5000);
+        if (!conn) return;
+        Buffer msg;
+        if (conn->receive(msg, 5000)) {
+            conn->send(msg);
+        }
+        conn->close();
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::required);
+    cli_config.set_expected_hostname("localhost");
+    auto client = make_tls_client(port, std::move(cli_config));
+
+    EXPECT_TRUE(client.is_connected());
+
+    Buffer args;
+    encode_i32(args, 7);
+    Buffer call_msg = wire::create_call_message(1, 100, 200, args);
+    client.send(call_msg);
+    Buffer response;
+    ASSERT_TRUE(client.receive(response, 5000));
+
+    client.close();
+    listener.close();
+    server.join();
+}
+
+// Fail closed: verify-required with no expected hostname must refuse to handshake
+// rather than validate only the chain (which would accept any same-CA cert).
+TEST_F(TlsCertTest, ClientVerifyRequiredWithoutHostnameFailsClosed) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        try {
+            auto conn = listener.accept(5000);
+            if (conn) {
+                Buffer msg;
+                conn->receive(msg, 1000);
+            }
+        } catch (...) {
+            // Client aborts before the TLS handshake -- expected.
+        }
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::required);
+    // Deliberately no set_expected_hostname().
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)), 0);
+
+    TlsTransport client(sock, std::move(cli_config), "127.0.0.1", port);
+    EXPECT_THROW(client.handshake(), SecurityError);
+    client.close();
+
+    listener.close();
+    server.join();
+}
+
+// Correct CA but a hostname the server certificate does not carry: mbedTLS must
+// reject the peer during the handshake (proves the CN/SAN check actually runs).
+TEST_F(TlsCertTest, ClientHostnameMismatchRejected) {
+    TlsConfig srv_config(server_cert(), server_key(), ca_cert());
+    srv_config.set_verify_mode(TlsConfig::VerifyMode::none);
+
+    TlsListener listener;
+    listener.listen(srv_config, 0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        try {
+            auto conn = listener.accept(5000);
+            if (conn) {
+                Buffer msg;
+                conn->receive(msg, 1000);
+            }
+        } catch (...) {
+            // Client rejects the cert and aborts -- expected.
+        }
+    });
+
+    TlsConfig cli_config(client_cert(), client_key(), ca_cert());
+    cli_config.set_verify_mode(TlsConfig::VerifyMode::required);
+    cli_config.set_expected_hostname("not-the-server.example.com");
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)), 0);
+
+    TlsTransport client(sock, std::move(cli_config), "127.0.0.1", port);
+    EXPECT_THROW(client.handshake(), SecurityError);
     client.close();
 
     listener.close();

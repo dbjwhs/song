@@ -282,13 +282,22 @@ Song provides two security layers: HMAC-SHA256 for message authentication and TL
 ### TLS Encryption (Recommended for untrusted networks)
 
 ```cpp
-// Certificate-based TLS
+// Certificate-based TLS (server)
 TlsConfig config("server_cert.pem", "server_key.pem", "ca_cert.pem");
 TlsListener listener;
 listener.listen(config, 12345);
 auto conn = listener.accept();  // Handshake included
 
-// PSK-based TLS (lighter weight, no certificates needed)
+// Certificate-based TLS (client) -- a verifying client MUST name the server it
+// expects. mbedTLS otherwise checks only that the cert chains to the CA and would
+// accept any same-CA certificate for any host (MITM). Verify mode defaults to
+// required, so set the expected hostname (the cert's CN/SAN, not a resolved IP):
+TlsConfig client_config("client_cert.pem", "client_key.pem", "ca_cert.pem");
+client_config.set_expected_hostname("service.example.com");
+// With verify required and no expected hostname, handshake() fails closed.
+
+// PSK-based TLS (lighter weight, no certificates needed; PSK authenticates the
+// peer via the shared key, so no hostname is involved)
 TlsConfig psk_config("shared-secret-key", "my-identity", TlsConfig::Mode::psk);
 ```
 
@@ -311,7 +320,7 @@ SecureTransport secure_client(std::move(client_tcp), std::move(srv_security));
 
 ### How It Works
 
-- **TLS**: Full encryption via mbedTLS 4.x. Certificate or PSK mode. `MsgFlags::encrypted` set on all TLS messages.
+- **TLS**: Full encryption via mbedTLS 4.x. Certificate or PSK mode. `MsgFlags::encrypted` set on all TLS messages. Certificate-mode clients verify the server hostname against the cert CN/SAN (`set_expected_hostname`) and fail closed if verification is required but no hostname is set.
 - **HMAC**: SHA-256 computed over each message, 8-byte truncated tag, constant-time comparison, transparent decorator over any transport.
 - Mismatched keys/certs throw `SecurityError`
 

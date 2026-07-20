@@ -55,6 +55,9 @@ struct TlsTransport::Impl {
     bool connected = false;
     bool handshake_done = false;
     bool is_server = false;
+    bool is_cert_mode = false;      // certificate (vs PSK) authentication
+    bool verify_required = false;   // peer certificate must validate
+    std::string expected_hostname;  // server name a client must find in the cert
 
     Impl() {
         mbedtls_ssl_init(&ssl);
@@ -179,6 +182,9 @@ TlsTransport::TlsTransport(int sock, TlsConfig config,
     impl_->peer_addr = peer_addr;
     impl_->peer_port = peer_port;
     impl_->is_server = config.is_server();
+    impl_->is_cert_mode = (config.mode() == TlsConfig::Mode::certificate);
+    impl_->verify_required = (config.verify_mode() == TlsConfig::VerifyMode::required);
+    impl_->expected_hostname = config.expected_hostname();
 
     // Configure TLS defaults
     int endpoint = config.is_server() ? MBEDTLS_SSL_IS_SERVER : MBEDTLS_SSL_IS_CLIENT;
@@ -264,6 +270,34 @@ TlsTransport& TlsTransport::operator=(TlsTransport&&) noexcept = default;
 void TlsTransport::handshake() {
     if (!impl_ || !impl_->connected) {
         throw SecurityError("TLS handshake: not connected");
+    }
+
+    // A certificate-mode client must bind the expected server hostname so mbedTLS
+    // matches it against the peer certificate's CN/SAN. Without this call mbedTLS
+    // validates only the chain to the trusted CA and accepts ANY same-CA cert for
+    // ANY host, so an on-path attacker holding a valid same-CA certificate could
+    // complete the handshake and MITM the channel. If verification is required but
+    // no hostname was provided, fail closed rather than silently proceeding with
+    // the name check disabled. (Server endpoints and PSK mode do not do CN/SAN
+    // matching, so this applies only to certificate-mode clients.)
+    if (!impl_->is_server && impl_->is_cert_mode) {
+        if (impl_->expected_hostname.empty()) {
+            if (impl_->verify_required) {
+                impl_->connected = false;
+                throw SecurityError(
+                    "TLS client: certificate verification is required but no expected "
+                    "hostname was set (call TlsConfig::set_expected_hostname); refusing "
+                    "to handshake without hostname verification");
+            }
+            // verify none/optional: no name to match against; leave hostname unset.
+        } else {
+            int hret = mbedtls_ssl_set_hostname(&impl_->ssl, impl_->expected_hostname.c_str());
+            if (hret != 0) {
+                impl_->connected = false;
+                throw SecurityError("TLS: failed to set expected hostname '" +
+                                    impl_->expected_hostname + "': " + tls_error_string(hret));
+            }
+        }
     }
 
     int ret;
