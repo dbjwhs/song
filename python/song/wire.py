@@ -110,9 +110,17 @@ def decode_header(data: bytes) -> Header:
     if payload_size > MAX_PAYLOAD_SIZE:
         raise ProtocolError(f"Payload size {payload_size} exceeds maximum {MAX_PAYLOAD_SIZE}")
 
+    # An unknown message-type byte must surface as a ProtocolError (the documented
+    # contract), not the raw ValueError that MsgType(...) raises for an invalid
+    # enum value.
+    try:
+        parsed_type = MsgType(msg_type)
+    except ValueError:
+        raise ProtocolError(f"Unknown message type: 0x{msg_type:02X}")
+
     return Header(
         magic=magic,
-        msg_type=MsgType(msg_type),
+        msg_type=parsed_type,
         flags=flags,
         sequence_id=sequence_id,
         payload_size=payload_size
