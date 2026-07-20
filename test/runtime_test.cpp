@@ -12,6 +12,8 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <song/object.hpp>
+#include <song/stream.hpp>
 
 using namespace song;
 
@@ -374,4 +376,407 @@ TEST(RuntimeFdDispatchTest, MalformedCallDoesNotCrashPipeService) {
     EXPECT_EQ(decode_string(resp2), "still alive");
 
     proc.terminate();
+}
+
+
+// =============================================================================
+// Object protocol: create/release tracking and property access
+//
+// These drive the runtime's object-protocol branches (create, release,
+// prop_get, prop_set) directly through handle_message with a MockTransport,
+// exercising connection object-tracking and the object_not_found /
+// property_error reply paths that no other test covers.
+// =============================================================================
+
+namespace {
+
+// Minimal remotable object used to exercise the runtime's object-protocol
+// dispatch. Property kProp_throws makes prop_get/prop_set raise so the
+// property_error branch can be observed.
+class RuntimeDispatchObject : public Object {
+    i32 value_ = 0;
+
+public:
+    static constexpr u16 kProp_value = 1;
+    static constexpr u16 kProp_throws = 2;
+
+    explicit RuntimeDispatchObject(i32 v = 0) : value_(v) {}
+
+    void prop_get(u16 prop_id, Buffer& resp) override {
+        if (prop_id == kProp_throws) {
+            throw std::runtime_error("prop_get nope");
+        }
+        encode_i32(resp, value_);
+    }
+
+    void prop_set(u16 prop_id, Buffer& req, Buffer& resp) override {
+        if (prop_id == kProp_throws) {
+            throw std::runtime_error("prop_set nope");
+        }
+        value_ = decode_i32(req);
+        encode_i32(resp, value_);
+    }
+
+    void dispatch(u16, Buffer&, Buffer&) override {}
+};
+
+// Shared type_id for the runtime object-protocol tests.
+constexpr u32 kRuntimeObjType = 7;
+
+// Decode an ObjectRef carried in a result message captured by MockTransport.
+wire::ObjectRef result_object_ref(const std::vector<std::byte>& bytes) {
+    Buffer b;
+    b.write(bytes.data(), bytes.size());
+    b.reset_read();
+    wire::decode_header(b);
+    return wire::decode_object_ref(b);
+}
+
+// Decode a single i32 carried in a result message payload.
+i32 result_i32(const std::vector<std::byte>& bytes) {
+    Buffer b;
+    b.write(bytes.data(), bytes.size());
+    b.reset_read();
+    wire::decode_header(b);
+    return decode_i32(b);
+}
+
+// Decode the human-readable text of an error message (skips the u16 code).
+std::string error_text(const std::vector<std::byte>& bytes) {
+    Buffer b;
+    b.write(bytes.data(), bytes.size());
+    b.reset_read();
+    wire::decode_header(b);
+    decode_u16(b);
+    return decode_string(b);
+}
+
+} // namespace
+
+// Reuses RuntimeDispatchTest's runtime_/transport_/tracked_/subs_/handle() and
+// adds object-protocol message builders on top.
+class RuntimeObjectProtocolTest : public RuntimeDispatchTest {
+protected:
+    static constexpr u32 kType = kRuntimeObjType;
+
+    void register_factory() {
+        runtime_.register_factory(kType, [](u16 ctor, Buffer& args) -> Object* {
+            if (ctor == 1) {
+                return new RuntimeDispatchObject(decode_i32(args));
+            }
+            return new RuntimeDispatchObject(0);
+        });
+    }
+
+    // Create an object through the runtime; return its assigned id.
+    i32 create(u16 ctor, u32 seq) {
+        Buffer args;
+        Buffer payload;
+        wire::encode_object_create(payload, kType, ctor, args);
+        payload.reset_read();
+        auto hdr = make_header(wire::MsgType::create, seq,
+                               static_cast<u32>(payload.size()));
+        handle(hdr, payload);
+        return result_object_ref(transport_.sent.back()).object_id;
+    }
+
+    void send_release(i32 object_id, u32 seq) {
+        Buffer payload;
+        wire::encode_object_release(payload, kType, object_id);
+        payload.reset_read();
+        auto hdr = make_header(wire::MsgType::release, seq,
+                               static_cast<u32>(payload.size()));
+        handle(hdr, payload);
+    }
+
+    void send_prop_get(i32 object_id, u16 prop_id, u32 seq) {
+        Buffer payload;
+        wire::encode_property_get(payload, kType, object_id, prop_id);
+        payload.reset_read();
+        auto hdr = make_header(wire::MsgType::prop_get, seq,
+                               static_cast<u32>(payload.size()));
+        handle(hdr, payload);
+    }
+
+    void send_prop_set(i32 object_id, u16 prop_id, const Buffer& value, u32 seq) {
+        Buffer payload;
+        wire::encode_property_set(payload, kType, object_id, prop_id, value);
+        payload.reset_read();
+        auto hdr = make_header(wire::MsgType::prop_set, seq,
+                               static_cast<u32>(payload.size()));
+        handle(hdr, payload);
+    }
+};
+
+TEST_F(RuntimeObjectProtocolTest, CreateTracksObjectAndReturnsRef) {
+    register_factory();
+    i32 id = create(0, 1);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    auto d = decode_captured(transport_.sent[0]);
+    EXPECT_EQ(d.type, wire::MsgType::result);
+    EXPECT_EQ(d.seq, 1u);
+
+    wire::ObjectRef ref = result_object_ref(transport_.sent[0]);
+    EXPECT_EQ(ref.type_id, kType);
+    EXPECT_EQ(ref.object_id, id);
+
+    EXPECT_LT(id, 0);
+    EXPECT_EQ(tracked_.count(id), 1u);
+    EXPECT_NE(runtime_.objects().get(id), nullptr);
+    EXPECT_EQ(runtime_.objects().size(), 1u);
+}
+
+TEST_F(RuntimeObjectProtocolTest, ReleaseUntracksAndFreesObject) {
+    register_factory();
+    i32 id = create(0, 1);
+    ASSERT_EQ(transport_.sent.size(), 1u);
+
+    send_release(id, 0);
+
+    // Release is fire-and-forget: no new message emitted.
+    EXPECT_EQ(transport_.sent.size(), 1u);
+    EXPECT_EQ(tracked_.count(id), 0u);
+    EXPECT_EQ(runtime_.objects().get(id), nullptr);
+    EXPECT_EQ(runtime_.objects().size(), 0u);
+}
+
+TEST_F(RuntimeObjectProtocolTest, ReleaseOneKeepsOthers) {
+    register_factory();
+    i32 id1 = create(0, 1);
+    i32 id2 = create(0, 2);
+    ASSERT_NE(id1, id2);
+    EXPECT_EQ(runtime_.objects().size(), 2u);
+
+    send_release(id1, 0);
+
+    EXPECT_EQ(tracked_.count(id1), 0u);
+    EXPECT_EQ(tracked_.count(id2), 1u);
+    EXPECT_EQ(runtime_.objects().get(id1), nullptr);
+    EXPECT_NE(runtime_.objects().get(id2), nullptr);
+    EXPECT_EQ(runtime_.objects().size(), 1u);
+}
+
+TEST_F(RuntimeObjectProtocolTest, ReleaseUnknownIdIsSilentNoop) {
+    // A well-formed release for an id that was never created must be a no-op:
+    // no reply (fire-and-forget) and no throw.
+    ASSERT_NO_THROW(send_release(-4242, 0));
+    EXPECT_TRUE(transport_.sent.empty());
+    EXPECT_EQ(runtime_.objects().size(), 0u);
+}
+
+TEST_F(RuntimeObjectProtocolTest, PropGetMissingObjectRepliesObjectNotFound) {
+    send_prop_get(-999, RuntimeDispatchObject::kProp_value, 3);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    auto d = decode_captured(transport_.sent[0]);
+    EXPECT_EQ(d.type, wire::MsgType::error);
+    EXPECT_EQ(d.code, ErrorCode::object_not_found);
+    EXPECT_NE(error_text(transport_.sent[0]).find("Object not found"),
+              std::string::npos);
+}
+
+TEST_F(RuntimeObjectProtocolTest, PropSetMissingObjectRepliesObjectNotFound) {
+    Buffer value;
+    encode_i32(value, 5);
+    send_prop_set(-999, RuntimeDispatchObject::kProp_value, value, 4);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    auto d = decode_captured(transport_.sent[0]);
+    EXPECT_EQ(d.type, wire::MsgType::error);
+    EXPECT_EQ(d.code, ErrorCode::object_not_found);
+}
+
+TEST_F(RuntimeObjectProtocolTest, PropGetAccessorThrowRepliesPropertyError) {
+    register_factory();
+    i32 id = create(0, 1);
+    transport_.sent.clear();  // isolate the prop_get reply
+
+    send_prop_get(id, RuntimeDispatchObject::kProp_throws, 5);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    auto d = decode_captured(transport_.sent[0]);
+    EXPECT_EQ(d.type, wire::MsgType::error);
+    EXPECT_EQ(d.code, ErrorCode::property_error);
+    EXPECT_NE(error_text(transport_.sent[0]).find("prop_get nope"),
+              std::string::npos);
+}
+
+TEST_F(RuntimeObjectProtocolTest, PropSetAccessorThrowRepliesPropertyError) {
+    register_factory();
+    i32 id = create(0, 1);
+    transport_.sent.clear();
+
+    Buffer value;
+    encode_i32(value, 5);
+    send_prop_set(id, RuntimeDispatchObject::kProp_throws, value, 6);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    auto d = decode_captured(transport_.sent[0]);
+    EXPECT_EQ(d.type, wire::MsgType::error);
+    EXPECT_EQ(d.code, ErrorCode::property_error);
+    EXPECT_NE(error_text(transport_.sent[0]).find("prop_set nope"),
+              std::string::npos);
+}
+
+TEST_F(RuntimeObjectProtocolTest, PropGetSetHappyPathRoundTrip) {
+    register_factory();
+    i32 id = create(0, 1);  // value starts at 0
+    transport_.sent.clear();
+
+    // Initial value is 0.
+    send_prop_get(id, RuntimeDispatchObject::kProp_value, 2);
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    EXPECT_EQ(decode_captured(transport_.sent[0]).type, wire::MsgType::result);
+    EXPECT_EQ(result_i32(transport_.sent[0]), 0);
+
+    // Set to 77; prop_set echoes the stored value.
+    Buffer value;
+    encode_i32(value, 77);
+    send_prop_set(id, RuntimeDispatchObject::kProp_value, value, 3);
+    ASSERT_EQ(transport_.sent.size(), 2u);
+    EXPECT_EQ(decode_captured(transport_.sent[1]).type, wire::MsgType::result);
+    EXPECT_EQ(result_i32(transport_.sent[1]), 77);
+
+    // A subsequent get reflects the new value.
+    send_prop_get(id, RuntimeDispatchObject::kProp_value, 4);
+    ASSERT_EQ(transport_.sent.size(), 3u);
+    EXPECT_EQ(result_i32(transport_.sent[2]), 77);
+}
+
+// =============================================================================
+// capabilities(): auto-detection of the objects bit via register_factory
+// =============================================================================
+
+TEST(RuntimeCapabilityObjectsTest, ObjectsBitAbsentByDefault) {
+    ServiceRuntime runtime;
+    EXPECT_FALSE(wire::has_capability(
+        static_cast<wire::Capability>(runtime.capabilities()),
+        wire::Capability::objects));
+}
+
+TEST(RuntimeCapabilityObjectsTest, RegisterFactorySetsObjectsBit) {
+    ServiceRuntime runtime;
+    runtime.register_factory(kRuntimeObjType, [](u16, Buffer&) -> Object* {
+        return new RuntimeDispatchObject(0);
+    });
+    auto caps = static_cast<wire::Capability>(runtime.capabilities());
+    EXPECT_TRUE(wire::has_capability(caps, wire::Capability::objects));
+    EXPECT_FALSE(wire::has_capability(caps, wire::Capability::streaming));
+}
+
+TEST(RuntimeCapabilityObjectsTest, FactoryAndStreamSetBothBits) {
+    ServiceRuntime runtime;
+    runtime.register_factory(kRuntimeObjType, [](u16, Buffer&) -> Object* {
+        return new RuntimeDispatchObject(0);
+    });
+    runtime.register_stream_dispatcher(1, [](u16, Buffer&, StreamWriter&) {});
+    auto caps = static_cast<wire::Capability>(runtime.capabilities());
+    EXPECT_TRUE(wire::has_capability(caps, wire::Capability::objects));
+    EXPECT_TRUE(wire::has_capability(caps, wire::Capability::streaming));
+}
+
+TEST(RuntimeCapabilityObjectsTest, AutoDetectOrsWithManualCapability) {
+    ServiceRuntime runtime;
+    runtime.register_factory(kRuntimeObjType, [](u16, Buffer&) -> Object* {
+        return new RuntimeDispatchObject(0);
+    });
+    runtime.set_capability(wire::Capability::hmac);
+    auto caps = static_cast<wire::Capability>(runtime.capabilities());
+    EXPECT_TRUE(wire::has_capability(caps, wire::Capability::objects));
+    EXPECT_TRUE(wire::has_capability(caps, wire::Capability::hmac));
+}
+
+TEST(RuntimeCapabilityObjectsTest, InitMessageAdvertisesObjectsBit) {
+    ServiceRuntime runtime;
+    runtime.register_factory(kRuntimeObjType, [](u16, Buffer&) -> Object* {
+        return new RuntimeDispatchObject(0);
+    });
+
+    MockTransport transport;
+    runtime.send_init_confirmation_transport(transport);
+    ASSERT_EQ(transport.sent.size(), 1u);
+
+    Buffer b;
+    b.write(transport.sent[0].data(), transport.sent[0].size());
+    b.reset_read();
+    wire::Header hdr = wire::decode_header(b);
+    EXPECT_EQ(hdr.type, wire::MsgType::init);
+    wire::InitMessage init = wire::decode_init(b);
+    EXPECT_TRUE(wire::has_capability(
+        static_cast<wire::Capability>(init.capabilities),
+        wire::Capability::objects));
+}
+
+// =============================================================================
+// Stream vs regular dispatcher precedence for the same service_id
+// =============================================================================
+
+TEST_F(RuntimeDispatchTest, StreamDispatcherShadowsRegularForSameService) {
+    bool regular_called = false;
+    runtime_.register_dispatcher(5, [&regular_called](u16, Buffer&, Buffer&) {
+        regular_called = true;
+    });
+    runtime_.register_stream_dispatcher(5, [](u16, Buffer&, StreamWriter& w) {
+        Buffer chunk;
+        encode_i32(chunk, 1);
+        w.write(chunk);
+    });
+
+    Buffer payload;
+    encode_u16(payload, 5);
+    encode_u16(payload, 1);
+    payload.reset_read();
+    auto hdr = make_header(wire::MsgType::call, 20, 4);
+    handle(hdr, payload);
+
+    // The stream path handled the call; the regular dispatcher never ran.
+    EXPECT_FALSE(regular_called);
+    bool saw_stream_end = false;
+    for (const auto& m : transport_.sent) {
+        if (decode_captured(m).type == wire::MsgType::stream_end) {
+            saw_stream_end = true;
+        }
+    }
+    EXPECT_TRUE(saw_stream_end);
+}
+
+TEST_F(RuntimeDispatchTest, StreamOnlyServiceIgnoredByIntrospection) {
+    runtime_.register_stream_dispatcher(9, [](u16, Buffer&, StreamWriter&) {});
+
+    // Introspection only counts regular dispatchers.
+    EXPECT_FALSE(runtime_.has_service(9));
+    EXPECT_EQ(runtime_.service_count(), 0u);
+
+    // But a call still routes through the stream path.
+    Buffer payload;
+    encode_u16(payload, 9);
+    encode_u16(payload, 1);
+    payload.reset_read();
+    auto hdr = make_header(wire::MsgType::call, 21, 4);
+    handle(hdr, payload);
+
+    bool saw_stream_end = false;
+    for (const auto& m : transport_.sent) {
+        if (decode_captured(m).type == wire::MsgType::stream_end) {
+            saw_stream_end = true;
+        }
+    }
+    EXPECT_TRUE(saw_stream_end);
+}
+
+TEST_F(RuntimeDispatchTest, RegularOnlyServiceEmitsResultNotStream) {
+    runtime_.register_dispatcher(5, [](u16, Buffer&, Buffer& resp) {
+        encode_i32(resp, 99);
+    });
+
+    Buffer payload;
+    encode_u16(payload, 5);
+    encode_u16(payload, 1);
+    payload.reset_read();
+    auto hdr = make_header(wire::MsgType::call, 22, 4);
+    handle(hdr, payload);
+
+    ASSERT_EQ(transport_.sent.size(), 1u);
+    EXPECT_EQ(decode_captured(transport_.sent[0]).type, wire::MsgType::result);
 }
