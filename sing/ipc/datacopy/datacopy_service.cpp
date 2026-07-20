@@ -26,13 +26,27 @@ class DataCopyImpl : public IDataCopy {
 public:
     WriteResult write_chunk(const FileChunk& chunk) override {
         WriteResult result;
+        result.success = false;
+
+        // chunk.offset and chunk.data come straight off the wire from an
+        // untrusted client. Validate them before using offset to index or size
+        // the buffer: a negative offset would std::copy before the allocation
+        // (heap underflow / out-of-bounds write), and an oversized offset or
+        // chunk would drive an unbounded resize (memory-exhaustion DoS). Reject
+        // anything that would place the write outside a bounded per-file window.
+        constexpr i64 kMaxFileSize = 64 * 1024 * 1024;  // 64 MB per file
+        if (chunk.offset < 0 ||
+            chunk.data.size() > static_cast<size_t>(kMaxFileSize) ||
+            chunk.offset > kMaxFileSize - static_cast<i64>(chunk.data.size())) {
+            return result;  // success stays false
+        }
 
         auto& file = m_files[chunk.filename];
 
-        // Ensure file has enough space
+        // Ensure file has enough space (required_size is now bounded by kMaxFileSize)
         i64 required_size = chunk.offset + static_cast<i64>(chunk.data.size());
         if (static_cast<i64>(file.data.size()) < required_size) {
-            file.data.resize(required_size);
+            file.data.resize(static_cast<size_t>(required_size));
         }
 
         // Copy data at offset

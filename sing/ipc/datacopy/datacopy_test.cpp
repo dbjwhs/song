@@ -84,6 +84,27 @@ TEST_F(DataCopyTest, WriteSingleChunk) {
     EXPECT_EQ(result.total_received, 13);
 }
 
+// Security: a negative offset would make std::copy write before the buffer (an
+// out-of-bounds heap write); write_chunk must reject it. The service must
+// survive and keep serving.
+TEST_F(DataCopyTest, WriteChunkNegativeOffsetRejected) {
+    auto result = dc_->write_chunk(make_chunk("evil.txt", -100, "AAAAAAAAAAAAAAAA"));
+    EXPECT_FALSE(result.success);
+
+    auto ok = dc_->write_chunk(make_chunk("good.txt", 0, "hello", true));
+    EXPECT_TRUE(ok.success);
+}
+
+// Security: an oversized offset would drive an unbounded resize()
+// (memory-exhaustion DoS); it must be rejected, not allocated.
+TEST_F(DataCopyTest, WriteChunkOversizedOffsetRejected) {
+    auto result = dc_->write_chunk(make_chunk("evil2.txt", (i64{1} << 40), "x"));
+    EXPECT_FALSE(result.success);
+
+    auto ok = dc_->write_chunk(make_chunk("good2.txt", 0, "hi", true));
+    EXPECT_TRUE(ok.success);
+}
+
 TEST_F(DataCopyTest, WriteAndReadFile) {
     std::string content = "This is test content for the file.";
     auto chunk = make_chunk("readme.txt", 0, content, true);
