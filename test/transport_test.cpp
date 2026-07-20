@@ -774,3 +774,262 @@ TEST(TcpTransportTest, ReceiveMidPayloadEofThrows) {
 
     listener.close();
 }
+
+// =============================================================================
+// Coverage: medium/low transport gaps (magic drift, timeouts, corner ops,
+// connect failure/reconnect, listener explicit-port / re-listen)
+// =============================================================================
+
+// Doc/impl drift: receive() decodes the header with wire::decode_header (not
+// decode_header_validated), so a frame with a wrong magic but an in-range
+// payload_size is accepted rather than rejected. This pins the current
+// behavior (magic is not checked at the transport layer) against the header
+// comment that claims ProtocolError on invalid data.
+TEST(PipeTransportTest, ReceiveDoesNotValidateMagic) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+
+    wire::Header hdr{};
+    hdr.magic = 0xDEADBEEF;  // deliberately wrong
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = 0;
+    Buffer header_only;
+    wire::encode_header(header_only, hdr);
+    write_pipe.write(header_only.data(), header_only.size());
+
+    Buffer received;
+    EXPECT_TRUE(receiver.receive(received, 1000));
+    auto got = wire::decode_header(received);
+    EXPECT_EQ(got.magic, 0xDEADBEEFu);
+    EXPECT_EQ(got.type, wire::MsgType::call);
+}
+
+TEST(TcpTransportTest, ReceiveDoesNotValidateMagic) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::atomic<bool> got_msg{false};
+    std::atomic<bool> bad_magic_seen{false};
+    std::thread client_thread([&]() {
+        TcpTransport client;
+        client.connect("127.0.0.1", port, 1000);
+        Buffer msg;
+        if (client.receive(msg, 2000)) {
+            got_msg = true;
+            auto hdr = wire::decode_header(msg);
+            if (hdr.magic == 0xDEADBEEFu) {
+                bad_magic_seen = true;
+            }
+        }
+    });
+
+    auto server = listener.accept(2000);
+    ASSERT_NE(server, nullptr);
+
+    wire::Header hdr{};
+    hdr.magic = 0xDEADBEEF;
+    hdr.type = wire::MsgType::call;
+    hdr.sequence_id = 1;
+    hdr.payload_size = 0;
+    Buffer header_only;
+    wire::encode_header(header_only, hdr);
+    server->send(header_only);
+
+    client_thread.join();
+    EXPECT_TRUE(got_msg);
+    EXPECT_TRUE(bad_magic_seen);
+
+    server->close();
+    listener.close();
+}
+
+// receive() with a timeout and no data pending must throw ServiceError
+// ('read timeout'), not hang or return false. Pipe path maps ETIMEDOUT ->
+// ServiceError; the write end is held open so this is a timeout, not EOF.
+TEST(PipeTransportTest, ReceiveTimeoutThrows) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+    // write_pipe stays open (no data written) -> timeout, not EOF.
+
+    Buffer msg;
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_THROW(receiver.receive(msg, 100), ServiceError);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 90);
+}
+
+// timeout_ms == 0 (immediate poll) must throw promptly when no data is ready,
+// not block. Kept separate so the prompt-return property is asserted directly.
+TEST(PipeTransportTest, ReceiveZeroTimeoutThrowsPromptly) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+    // write_pipe held open, nothing written.
+
+    Buffer msg;
+    EXPECT_THROW(receiver.receive(msg, 0), ServiceError);
+}
+
+TEST(TcpTransportTest, ReceiveTimeoutThrows) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread client_thread([&]() {
+        TcpTransport client;
+        client.connect("127.0.0.1", port, 1000);
+        // Keep the connection open (send nothing) past the receive windows so
+        // the server sees a timeout rather than an EOF.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        client.close();
+    });
+
+    auto server = listener.accept(1000);
+    ASSERT_NE(server, nullptr);
+
+    Buffer msg;
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_THROW(server->receive(msg, 100), ServiceError);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 90);
+
+    // timeout_ms == 0 also throws promptly (poll returns 0 immediately).
+    EXPECT_THROW(server->receive(msg, 0), ServiceError);
+
+    client_thread.join();
+}
+
+// A closed PipeTransport: send() throws 'not connected'; receive() returns
+// false rather than throwing.
+TEST(PipeTransportTest, SendOnClosedThrows) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();
+    PipeTransport transport(std::move(write_pipe), std::move(read_pipe2));
+    transport.close();
+    EXPECT_FALSE(transport.is_connected());
+
+    Buffer args;
+    encode_string(args, "x");
+    Buffer msg = wire::create_call_message(1, 1, 1, args);
+    EXPECT_THROW(transport.send(msg), ServiceError);
+
+    Buffer received;
+    EXPECT_FALSE(transport.receive(received, 100));
+}
+
+// Pipe analog of TcpTransportTest.DetectPeerDisconnect: when the only writer
+// closes, receive() reports EOF by returning false (not a throw, not a hang).
+TEST(PipeTransportTest, ReceiveReturnsFalseOnPeerClose) {
+    auto [read_pipe, write_pipe] = Pipe::create_pair();
+    auto [read_pipe2, write_pipe2] = Pipe::create_pair();  // unused write side
+    PipeTransport receiver(std::move(write_pipe2), std::move(read_pipe));
+
+    // Close the sole writer feeding the receiver -> read side sees EOF.
+    write_pipe.close_write();
+
+    Buffer msg;
+    EXPECT_FALSE(receiver.receive(msg, 100));
+}
+
+// Default-constructed TcpTransport (sock_ < 0): send() throws 'not connected';
+// receive() returns false.
+TEST(TcpTransportTest, SendOnNotConnectedThrows) {
+    TcpTransport client;
+    EXPECT_FALSE(client.is_connected());
+
+    Buffer args;
+    encode_string(args, "x");
+    Buffer msg = wire::create_call_message(1, 1, 1, args);
+    EXPECT_THROW(client.send(msg), ServiceError);
+
+    Buffer received;
+    EXPECT_FALSE(client.receive(received, 100));
+}
+
+// accept() on a listener that was never started throws ServiceError
+// ('not listening'), distinct from the accept-timeout-returns-nullptr case.
+TEST(TcpListenerTest, AcceptNotListeningThrows) {
+    TcpListener listener;
+    EXPECT_FALSE(listener.is_listening());
+    EXPECT_THROW(listener.accept(100), ServiceError);
+}
+
+// getaddrinfo failure branch: '.invalid' is RFC 6761-reserved and never
+// resolves, so connect() throws ServiceError('failed to resolve host') and the
+// transport stays disconnected.
+TEST(TcpTransportTest, ConnectResolveFailureThrows) {
+    TcpTransport client;
+    EXPECT_THROW(client.connect("nonexistent.host.invalid", 12345, 500), ServiceError);
+    EXPECT_FALSE(client.is_connected());
+}
+
+// connect() called a second time must close the prior fd and rebind cleanly:
+// is_connected() stays true and peer_port() updates to the new target.
+TEST(TcpTransportTest, ReconnectClosesPriorSocket) {
+    TcpListener listener1;
+    listener1.listen(0);
+    u16 port1 = listener1.bound_port();
+
+    TcpListener listener2;
+    listener2.listen(0);
+    u16 port2 = listener2.bound_port();
+
+    TcpTransport client;
+    client.connect("127.0.0.1", port1, 1000);
+    EXPECT_TRUE(client.is_connected());
+    EXPECT_EQ(client.peer_port(), port1);
+
+    // Second connect() runs the leading close() on the prior socket.
+    client.connect("127.0.0.1", port2, 1000);
+    EXPECT_TRUE(client.is_connected());
+    EXPECT_EQ(client.peer_port(), port2);
+    EXPECT_GE(client.socket_fd(), 0);
+
+    client.close();
+    listener1.close();
+    listener2.close();
+}
+
+// timeout_ms <= 0 skips O_NONBLOCK, exercising the blocking connect() path;
+// a refused local port returns ECONNREFUSED immediately -> ServiceError.
+TEST(TcpTransportTest, ConnectBlockingRefusedThrows) {
+    TcpTransport client;
+    EXPECT_THROW(client.connect("127.0.0.1", 59998, 0), ServiceError);
+    EXPECT_FALSE(client.is_connected());
+}
+
+// Explicit (non-zero) port branch: grab an ephemeral port, release it, then
+// bind it explicitly. Covers the `else port_ = port` path.
+TEST(TcpListenerTest, ListenExplicitPort) {
+    TcpListener probe;
+    probe.listen(0);
+    u16 port = probe.bound_port();
+    probe.close();
+
+    TcpListener listener;
+    listener.listen(port);  // explicit non-zero port
+    EXPECT_TRUE(listener.is_listening());
+    EXPECT_EQ(listener.bound_port(), port);
+    listener.close();
+}
+
+// Re-listen on the same object: the second listen() must close the prior
+// socket and bind fresh without error.
+TEST(TcpListenerTest, ReListenSucceeds) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port1 = listener.bound_port();
+    EXPECT_TRUE(listener.is_listening());
+    EXPECT_GT(port1, 0);
+
+    listener.listen(0);  // exercises close() at the top of listen()
+    EXPECT_TRUE(listener.is_listening());
+    u16 port2 = listener.bound_port();
+    EXPECT_GT(port2, 0);
+
+    listener.close();
+}
