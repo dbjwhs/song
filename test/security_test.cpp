@@ -14,6 +14,14 @@ using namespace song;
 // HMAC Tests
 // =============================================================================
 
+TEST(SecurityTest, SecureZeroClearsBuffer) {
+    unsigned char buf[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    secure_zero(buf, sizeof(buf));
+    for (unsigned char b : buf) {
+        EXPECT_EQ(b, 0u);
+    }
+}
+
 TEST(SecurityTest, ComputeHmacBasic) {
     std::string key = "test-secret-key-32-bytes-long!!!";
     Buffer msg;

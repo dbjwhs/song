@@ -24,31 +24,47 @@ HmacTag compute_hmac(const void* key, size_t key_len,
     HmacTag tag{};
 
 #if defined(__APPLE__)
-    // Use CommonCrypto HMAC-SHA256
-    unsigned char full_hmac[CC_SHA256_DIGEST_LENGTH];
+    // Use CommonCrypto HMAC-SHA256 (CCHmac returns void and always fills the
+    // digest, so there is no failure return to check here).
+    unsigned char full_hmac[CC_SHA256_DIGEST_LENGTH] = {0};
     CCHmac(kCCHmacAlgSHA256, key, key_len, data, data_len, full_hmac);
     // Truncate to 8 bytes
     std::memcpy(tag.data(), full_hmac, kHmacTagSize);
 
 #elif defined(__linux__)
-    // Use OpenSSL 3.x EVP_MAC API for HMAC-SHA256
-    unsigned char full_hmac[EVP_MAX_MD_SIZE];
+    // Use OpenSSL 3.x EVP_MAC API for HMAC-SHA256. Every EVP_MAC_* call is checked
+    // and the buffer is zero-initialized: on any failure we throw rather than
+    // returning a tag built from uninitialized stack bytes (which would make
+    // sender and receiver silently disagree, and could leak 8 stack bytes onto
+    // the wire).
+    unsigned char full_hmac[EVP_MAX_MD_SIZE] = {0};
     size_t hmac_len = 0;
 
     EVP_MAC* mac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+    if (!mac) {
+        throw SecurityError("HMAC: EVP_MAC_fetch failed");
+    }
     EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+    if (!ctx) {
+        EVP_MAC_free(mac);
+        throw SecurityError("HMAC: EVP_MAC_CTX_new failed");
+    }
 
     OSSL_PARAM params[] = {
         OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0),
         OSSL_PARAM_construct_end()
     };
 
-    EVP_MAC_init(ctx, static_cast<const unsigned char*>(key), key_len, params);
-    EVP_MAC_update(ctx, static_cast<const unsigned char*>(data), data_len);
-    EVP_MAC_final(ctx, full_hmac, &hmac_len, sizeof(full_hmac));
+    bool ok = EVP_MAC_init(ctx, static_cast<const unsigned char*>(key), key_len, params) == 1 &&
+              EVP_MAC_update(ctx, static_cast<const unsigned char*>(data), data_len) == 1 &&
+              EVP_MAC_final(ctx, full_hmac, &hmac_len, sizeof(full_hmac)) == 1;
 
     EVP_MAC_CTX_free(ctx);
     EVP_MAC_free(mac);
+
+    if (!ok || hmac_len < kHmacTagSize) {
+        throw SecurityError("HMAC: HMAC-SHA256 computation failed");
+    }
 
     // Truncate to 8 bytes
     std::memcpy(tag.data(), full_hmac, kHmacTagSize);

@@ -61,6 +61,17 @@ public:
         : std::runtime_error("Security error: " + msg) {}
 };
 
+/// Overwrite a buffer with zeros in a way the compiler may not optimize away.
+/// A plain std::memset over about-to-be-freed memory is a dead store the
+/// optimizer is free to elide; the volatile stores here are not. Used to scrub
+/// key material on destruction.
+inline void secure_zero(void* data, size_t len) {
+    volatile unsigned char* p = static_cast<volatile unsigned char*>(data);
+    for (size_t ndx = 0; ndx < len; ++ndx) {
+        p[ndx] = 0;
+    }
+}
+
 /// Security configuration
 class SecurityConfig {
     std::string key_;
@@ -87,11 +98,12 @@ public:
         }
     }
 
-    /// Destructor zeroes key material before deallocation
+    /// Destructor scrubs key material before deallocation. (A moved-from config
+    /// may still hold key bytes in std::string's small-buffer storage; that minor
+    /// residual would need a fixed secure buffer type to fully eliminate.)
     ~SecurityConfig() {
         if (!key_.empty()) {
-            volatile char* p = key_.data();
-            std::memset(const_cast<char*>(static_cast<const volatile char*>(p)), 0, key_.size());
+            secure_zero(key_.data(), key_.size());
         }
     }
 
@@ -219,11 +231,10 @@ public:
         , mode_(Mode::psk)
         , verify_(VerifyMode::none) {}
 
-    /// Destructor zeroes sensitive material
+    /// Destructor scrubs sensitive material
     ~TlsConfig() {
         if (!psk_.empty()) {
-            volatile char* p = psk_.data();
-            std::memset(const_cast<char*>(static_cast<const volatile char*>(p)), 0, psk_.size());
+            secure_zero(psk_.data(), psk_.size());
         }
         if (!key_path_.empty()) {
             // Key path itself is not secret, but clear for consistency
