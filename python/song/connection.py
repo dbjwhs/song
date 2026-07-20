@@ -223,6 +223,10 @@ class ServiceConnection:
                 chunks.append(chunk)
                 received += len(chunk)
             except socket.timeout:
+                # A timeout mid-read leaves the stream mis-aligned (the partial
+                # bytes are discarded), so the connection can no longer be reused.
+                # Mark it disconnected, matching the other error paths.
+                self._connected = False
                 raise ConnectionError("Receive timeout")
             except socket.error as e:
                 self._connected = False
