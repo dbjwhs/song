@@ -6,6 +6,7 @@
 #include <song/transport.hpp>
 #include <song/wire.hpp>
 #include <thread>
+#include <song/error.hpp>
 
 using namespace song;
 
@@ -579,4 +580,225 @@ TEST(SecureTransportTest, TruncatedHmacRejected) {
     raw_sender->send(malformed);
 
     server_thread.join();
+}
+
+// =============================================================================
+// HMAC Empty-Key Tests (gap: hmac-empty-key)
+// =============================================================================
+
+// A zero-length key must still produce a deterministic, verifiable tag rather
+// than crashing in CCHmac (macOS) / EVP_MAC_init (Linux).
+TEST(SecurityTest, ComputeHmacEmptyKeyDeterministic) {
+    Buffer msg;
+    encode_string(msg, "message authenticated under an empty key");
+
+    HmacTag tag1 = compute_hmac(std::string{}, msg);
+    HmacTag tag2 = compute_hmac(std::string{}, msg);
+
+    EXPECT_EQ(tag1, tag2);
+    EXPECT_TRUE(verify_hmac(std::string{}, msg, tag1));
+}
+
+// An empty key must not collide with a real key over the same message.
+TEST(SecurityTest, ComputeHmacEmptyKeyDiffersFromRealKey) {
+    Buffer msg;
+    encode_string(msg, "same message, different keys");
+
+    HmacTag empty_key_tag = compute_hmac(std::string{}, msg);
+    HmacTag real_key_tag = compute_hmac(std::string("nonempty-real-key"), msg);
+
+    EXPECT_NE(empty_key_tag, real_key_tag);
+}
+
+// An empty key must not verify a tag that was produced with a real key.
+TEST(SecurityTest, VerifyHmacEmptyKeyRejectsRealKeyTag) {
+    Buffer msg;
+    encode_string(msg, "tag produced with a real key");
+
+    HmacTag real_key_tag = compute_hmac(std::string("nonempty-real-key"), msg);
+
+    EXPECT_FALSE(verify_hmac(std::string{}, msg, real_key_tag));
+}
+
+// The std::string overload and the raw (void*, len) overload must agree for the
+// empty-key case (both forward key.size()==0 to the same primitive).
+TEST(SecurityTest, ComputeHmacEmptyKeyOverloadsAgree) {
+    Buffer msg;
+    encode_string(msg, "cross-check the two compute_hmac overloads");
+
+    std::string empty;
+    HmacTag via_string = compute_hmac(empty, msg);
+    HmacTag via_ptr = compute_hmac(empty.data(), empty.size(), msg.data(), msg.size());
+
+    EXPECT_EQ(via_string, via_ptr);
+}
+
+// =============================================================================
+// SecurityConfig set_key("")-on-enabled and move Tests
+// (gap: securityconfig-setkey-empty-on-enabled)
+// =============================================================================
+
+// set_key() only ever raises the level to shared_secret for a non-empty key; it
+// never lowers it. Calling set_key("") on an already-enabled config therefore
+// leaves is_enabled()==true with an empty key. This pins the current behavior of
+// that previously-unexercised code path (an enabled config with set_key("")).
+TEST(SecurityConfigTest, SetEmptyKeyOnEnabledConfigStaysEnabled) {
+    SecurityConfig config("real-32-byte-shared-secret-key!!");
+    ASSERT_TRUE(config.is_enabled());
+
+    config.set_key("");
+
+    // Current contract: level is not lowered by an empty key.
+    EXPECT_TRUE(config.is_enabled());
+    EXPECT_EQ(config.level(), SecurityLevel::shared_secret);
+    EXPECT_TRUE(config.key().empty());
+}
+
+// Moving an enabled config transfers the key and level to the destination.
+TEST(SecurityConfigTest, MoveEnabledConfigPreservesKey) {
+    const std::string original = "move-preserve-32-byte-shared-key";
+    SecurityConfig a(original);
+    ASSERT_TRUE(a.is_enabled());
+
+    SecurityConfig b(std::move(a));
+
+    EXPECT_TRUE(b.is_enabled());
+    EXPECT_EQ(b.level(), SecurityLevel::shared_secret);
+    EXPECT_EQ(b.key(), original);
+}
+
+// =============================================================================
+// SecureTransport end-to-end tamper detection through receive()
+// (gap: securetransport-receive-tamper-detection)
+// =============================================================================
+
+namespace {
+
+// Build a connected full-duplex pair of raw PipeTransports for in-process
+// man-in-the-middle testing. Bytes sent on the first are received on the second
+// and vice-versa. Both directions are wired so is_connected() is true on each.
+std::pair<std::unique_ptr<PipeTransport>, std::unique_ptr<PipeTransport>>
+make_connected_pipe_transports() {
+    auto [a2b_read, a2b_write] = Pipe::create_pair();
+    auto [b2a_read, b2a_write] = Pipe::create_pair();
+    auto a = std::make_unique<PipeTransport>(std::move(a2b_write), std::move(b2a_read));
+    auto b = std::make_unique<PipeTransport>(std::move(b2a_write), std::move(a2b_read));
+    return {std::move(a), std::move(b)};
+}
+
+}  // namespace
+
+// A same-key server must reject a message whose PAYLOAD was altered in flight.
+// This drives receive()'s reconstruct/patch(offset 8)/verify path, which the
+// only prior negative tests (key mismatch, truncated HMAC) never exercised.
+TEST(SecureTransportTest, TamperedPayloadDetectedThroughReceive) {
+    const std::string key = "tamper-detect-shared-secret-32b!";
+
+    auto [client_inner, capture] = make_connected_pipe_transports();
+    auto [server_inner, relay] = make_connected_pipe_transports();
+
+    SecureTransport client(std::move(client_inner), SecurityConfig(key));
+    SecureTransport server(std::move(server_inner), SecurityConfig(key));
+
+    // Client emits a secured (HMAC-tagged) call message.
+    Buffer args;
+    encode_string(args, "authentic payload");
+    Buffer call = wire::create_call_message(7, 1, 1, args);
+    client.send(call);
+
+    // Man-in-the-middle captures the raw extended wire bytes.
+    Buffer captured;
+    ASSERT_TRUE(capture->receive(captured, 5000));
+    ASSERT_GT(captured.size(), 16u);  // header + payload + tag
+
+    // Flip the first payload byte (offset 16), leaving framing/length intact.
+    captured.data()[16] ^= std::byte{0xFF};
+
+    // Forward the tampered bytes to the same-key server.
+    relay->send(captured);
+
+    Buffer received;
+    EXPECT_THROW(server.receive(received, 5000), SecurityError);
+}
+
+// Flipping a HEADER byte the receiver does NOT re-patch (sequence_id at offset
+// 12-15; only payload_size at offset 8-11 is patched before verification) must
+// also be caught, proving header fields are covered by the HMAC.
+TEST(SecureTransportTest, TamperedHeaderDetectedThroughReceive) {
+    const std::string key = "tamper-detect-shared-secret-32b!";
+
+    auto [client_inner, capture] = make_connected_pipe_transports();
+    auto [server_inner, relay] = make_connected_pipe_transports();
+
+    SecureTransport client(std::move(client_inner), SecurityConfig(key));
+    SecureTransport server(std::move(server_inner), SecurityConfig(key));
+
+    Buffer args;
+    encode_string(args, "authentic payload");
+    Buffer call = wire::create_call_message(7, 1, 1, args);
+    client.send(call);
+
+    Buffer captured;
+    ASSERT_TRUE(capture->receive(captured, 5000));
+    ASSERT_GE(captured.size(), 16u);
+
+    // sequence_id occupies offset 12-15 and is not re-patched by receive().
+    captured.data()[12] ^= std::byte{0xFF};
+
+    relay->send(captured);
+
+    Buffer received;
+    EXPECT_THROW(server.receive(received, 5000), SecurityError);
+}
+
+// =============================================================================
+// SecureTransport null-inner branches (gap: securetransport-null-inner-branches)
+// =============================================================================
+
+// Inspectors over a null inner transport: not connected, "secure(null)", and a
+// no-throw close().
+TEST(SecureTransportTest, NullInnerInspectors) {
+    SecureTransport s(nullptr, SecurityConfig{});
+
+    EXPECT_FALSE(s.is_connected());
+    EXPECT_STREQ(s.type_name(), "secure(null)");
+    EXPECT_NO_THROW(s.close());
+}
+
+// send() over a null inner transport throws ServiceError (the !inner_ guard
+// fires before any security processing).
+TEST(SecureTransportTest, NullInnerSendThrows) {
+    SecureTransport s(nullptr, SecurityConfig("null-inner-secret-key-32-bytes!!"));
+
+    Buffer call = wire::create_call_message(1, 1, 1, Buffer{});
+    EXPECT_THROW(s.send(call), ServiceError);
+}
+
+// receive() over a null inner transport returns false rather than throwing.
+TEST(SecureTransportTest, NullInnerReceiveReturnsFalse) {
+    SecureTransport s(nullptr, SecurityConfig("null-inner-secret-key-32-bytes!!"));
+
+    Buffer m;
+    EXPECT_FALSE(s.receive(m, 0));
+}
+
+// A moved-from SecureTransport has a null inner (unique_ptr is guaranteed null
+// after move) and therefore takes all the null-guarded branches.
+TEST(SecureTransportTest, MovedFromHasNullInner) {
+    auto tcp = std::make_unique<TcpTransport>();
+    SecureTransport a(std::move(tcp), SecurityConfig("null-inner-secret-key-32-bytes!!"));
+    SecureTransport b(std::move(a));
+
+    // The inner transport moved into b.
+    EXPECT_TRUE(std::string(b.type_name()).find("tcp") != std::string::npos);
+
+    // The moved-from source now behaves as if it has a null inner transport.
+    EXPECT_FALSE(a.is_connected());
+    EXPECT_STREQ(a.type_name(), "secure(null)");
+
+    Buffer call = wire::create_call_message(1, 1, 1, Buffer{});
+    EXPECT_THROW(a.send(call), ServiceError);
+
+    Buffer received;
+    EXPECT_FALSE(a.receive(received, 0));
 }
