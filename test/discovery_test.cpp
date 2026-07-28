@@ -18,9 +18,9 @@ using namespace song;
 // =============================================================================
 
 TEST(DiscoveryTest, MakeServiceType) {
-    EXPECT_EQ(Discovery::make_service_type("calculator"), "_calculator._song._tcp");
-    EXPECT_EQ(Discovery::make_service_type("echo"), "_echo._song._tcp");
-    EXPECT_EQ(Discovery::make_service_type("test"), "_test._song._tcp");
+    EXPECT_EQ(Discovery::make_service_type("calculator"), "_calculator-song._tcp");
+    EXPECT_EQ(Discovery::make_service_type("echo"), "_echo-song._tcp");
+    EXPECT_EQ(Discovery::make_service_type("test"), "_test-song._tcp");
 }
 
 // =============================================================================

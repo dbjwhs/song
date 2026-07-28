@@ -17,7 +17,7 @@ struct DiscoveredService {
     std::string name;       // Service instance name
     std::string host;       // Hostname or IP address
     u16 port;               // Port number
-    std::string type;       // Service type (e.g., "_calculator._song._tcp")
+    std::string type;       // Service type (e.g., "_calculator-song._tcp")
     std::string domain;     // Domain (usually "local.")
 };
 
@@ -65,9 +65,14 @@ public:
 
     /// Get the full service type string for a Song service
     /// @param type Short type name (e.g., "calculator")
-    /// @return Full service type (e.g., "_calculator._song._tcp")
+    /// @return Full service type (e.g., "_calculator-song._tcp")
+    /// DNS-SD service types must be exactly two labels (_app._proto,
+    /// RFC 6763), so the song namespace rides inside the first label; the
+    /// old three-label _type._song._tcp form was rejected by dns_sd with
+    /// kDNSServiceErr_BadParam. RFC 6335 caps the label at 15 chars, so
+    /// keep type names to 10 chars or fewer.
     static std::string make_service_type(const std::string& type) {
-        return "_" + type + "._song._tcp";
+        return "_" + type + "-song._tcp";
     }
 };
 

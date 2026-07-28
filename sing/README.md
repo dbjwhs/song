@@ -132,7 +132,7 @@ mDNS-based zero-config service discovery.
 **Features:**
 - `run_tcp_discoverable()` for mDNS service registration
 - `register_discoverable_service()` for automatic discovery
-- Service type format: `_<type>._song._tcp`
+- Service type format: `_<type>-song._tcp`
 
 **What Is Covered:**
 - mDNS service registration (macOS Bonjour)

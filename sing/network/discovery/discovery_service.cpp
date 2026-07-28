@@ -86,7 +86,7 @@ int main(int argc, char* argv[]) {
 
     // Run the service with mDNS discovery registration
     // Port 0 = let OS assign an ephemeral port
-    // Service type: "testcalc" -> registered as "_testcalc._song._tcp"
+    // Service type: "testcalc" -> registered as "_testcalc-song._tcp"
     runtime.run_tcp_discoverable(0, instance_name, "testcalc");
 
     return 0;

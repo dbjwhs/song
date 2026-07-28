@@ -260,7 +260,7 @@ int main() {
     ServiceRuntime runtime;
     runtime.register_dispatcher(kService_Calculator, calc_dispatcher);
     runtime.run_tcp_discoverable(0, "MyCalculator", "calculator");
-    // Registers as "_calculator._song._tcp" on local network
+    // Registers as "_calculator-song._tcp" on local network
     // Port 0 = ephemeral port (OS-assigned)
 }
 ```
