@@ -10,6 +10,7 @@
 #include "stream.hpp"
 #include "subscription.hpp"
 #include <array>
+#include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,11 +39,27 @@ class ServiceRuntime {
     u8 next_extension_slot_ = 0;
 
 public:
+    /// Wraps each accepted TCP transport before it is served
+    using TransportWrapper =
+        std::function<std::unique_ptr<Transport>(std::unique_ptr<Transport>)>;
+
     /// Register a service dispatcher
     /// service_id: unique identifier for this service
     /// dispatcher: function that takes (method_id, request, response)
     void register_dispatcher(u16 service_id,
                            std::function<void(u16, Buffer&, Buffer&)> dispatcher);
+
+    /// Set a wrapper applied to every transport accepted by run_tcp,
+    /// run_tcp_multi, and run_tcp_discoverable, before any bytes are
+    /// exchanged. This is how a service layers security onto its TCP
+    /// serving loops, e.g. HMAC:
+    ///   runtime.set_transport_wrapper([key](auto t) -> std::unique_ptr<Transport> {
+    ///       return std::make_unique<SecureTransport>(std::move(t), SecurityConfig(key));
+    ///   });
+    /// The wrapper takes ownership and returns the transport to serve.
+    void set_transport_wrapper(TransportWrapper wrapper) {
+        transport_wrapper_ = std::move(wrapper);
+    }
 
     /// Register a streaming dispatcher
     /// service_id: unique identifier for this service
@@ -171,6 +188,12 @@ public:
 private:
     /// Release all objects tracked by a connection (prevents leaks on crash)
     void release_connection_objects(std::unordered_set<i32>& tracked);
+
+    TransportWrapper transport_wrapper_;
+
+    /// Apply the transport wrapper (identity when unset). Defined in the
+    /// .cpp: Transport is incomplete here.
+    std::unique_ptr<Transport> wrap_transport(std::unique_ptr<Transport> t);
 
     void send_init_confirmation_fd(int fd);
     void handle_message_fd(const wire::Header& hdr, Buffer& payload,

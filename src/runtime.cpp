@@ -661,6 +661,12 @@ void ServiceRuntime::client_loop(Transport& transport) {
     run_tcp(listener);
 }
 
+std::unique_ptr<Transport> ServiceRuntime::wrap_transport(
+    std::unique_ptr<Transport> t) {
+    return transport_wrapper_ ? transport_wrapper_(std::move(t))
+                              : std::move(t);
+}
+
 [[noreturn]] void ServiceRuntime::run_tcp(TcpListener& listener) {
     // Accept clients in a loop
     for (;;) {
@@ -672,7 +678,8 @@ void ServiceRuntime::client_loop(Transport& transport) {
 
         // Handle this client until they disconnect
         try {
-            client_loop(*client);
+            auto transport = wrap_transport(std::move(client));
+            client_loop(*transport);
         } catch (...) {
             // Client error, continue accepting new clients
         }
@@ -713,7 +720,8 @@ void ServiceRuntime::client_loop(Transport& transport) {
         }
 
         try {
-            client_loop(*client);
+            auto transport = wrap_transport(std::move(client));
+            client_loop(*transport);
         } catch (...) {
             // Client error, continue accepting new clients
         }
@@ -736,8 +744,10 @@ void ServiceRuntime::client_loop(Transport& transport) {
             continue;
         }
 
-        // Move the transport into a shared_ptr so the thread owns it
-        auto shared_client = std::shared_ptr<TcpTransport>(client.release());
+        // Wrap (e.g. SecureTransport) then move into a shared_ptr so the
+        // thread owns it
+        auto shared_client =
+            std::shared_ptr<Transport>(wrap_transport(std::move(client)).release());
 
         client_threads.emplace_back([this, shared_client]() {
             try {

@@ -712,6 +712,63 @@ TEST(RuntimeTcpTest, ThrowingStreamDispatcherDeliversErrorNotCleanStream) {
     server.join();
 }
 
+// The transport wrapper lets a service layer security onto the TCP serving
+// loops (SecureTransport for HMAC). run_tcp_multi never returns, so runtime
+// and listener are deliberately leaked and the server thread detached; the
+// ephemeral port is abandoned when the test process exits.
+TEST(RuntimeTcpTest, TransportWrapperAppliesToAcceptedClients) {
+    static const std::string kKey = "0123456789abcdef0123456789abcdef";
+
+    auto* runtime = new ServiceRuntime;
+    runtime->register_dispatcher(1, [](u16, Buffer& req, Buffer& resp) {
+        i32 v = decode_i32(req);
+        encode_i32(resp, v + 1);
+    });
+    runtime->set_transport_wrapper(
+        [](std::unique_ptr<Transport> t) -> std::unique_ptr<Transport> {
+            return std::make_unique<SecureTransport>(std::move(t),
+                                                     SecurityConfig(kKey));
+        });
+
+    auto* listener = new TcpListener;
+    listener->listen(0);
+    u16 port = listener->bound_port();
+    std::thread([runtime, listener]() {
+        runtime->run_tcp_multi(*listener);
+    }).detach();
+
+    // Keyed client round-trips through the wrapped transport.
+    {
+        auto tcp = std::make_unique<TcpTransport>();
+        tcp->connect("127.0.0.1", port, 5000);
+        auto sec = std::make_unique<SecureTransport>(std::move(tcp),
+                                                     SecurityConfig(kKey));
+        ServiceConnection conn(std::move(sec));
+        conn.init_handshake();
+        Buffer args;
+        encode_i32(args, 41);
+        Buffer result = conn.call(1, 1, args);
+        EXPECT_EQ(decode_i32(result), 42);
+    }
+
+    // Keyless client cannot complete a call against the wrapped server.
+    {
+        auto tcp = std::make_unique<TcpTransport>();
+        tcp->connect("127.0.0.1", port, 5000);
+        ServiceConnection conn(std::move(tcp));
+        bool rejected = false;
+        try {
+            conn.init_handshake();
+            Buffer args;
+            encode_i32(args, 1);
+            conn.call(1, 1, args);
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+    }
+}
+
 // =============================================================================
 // M2: Concurrent / Interleaved Operations
 // =============================================================================
