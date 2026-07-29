@@ -85,15 +85,21 @@ add_executable(songc
     compiler/resolver.cpp
 )
 
-# Tests
-enable_testing()
-add_subdirectory(test)
+# Tests, examples, integration tests, and fuzz harnesses assume top-level
+# context (CMAKE_SOURCE_DIR paths, gtest fetch, enable_testing). Consumers
+# embedding song via add_subdirectory get just the library and compiler.
+# (Spelled without PROJECT_IS_TOP_LEVEL: that needs CMake 3.21, floor is 3.16.)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    # Tests
+    enable_testing()
+    add_subdirectory(test)
 
-# Examples
-add_subdirectory(examples)
+    # Examples
+    add_subdirectory(examples)
 
-# Sing - Integration Tests
-add_subdirectory(sing)
+    # Sing - Integration Tests
+    add_subdirectory(sing)
 
-# Fuzz harnesses (optional, requires LLVM clang with libFuzzer)
-add_subdirectory(fuzz)
+    # Fuzz harnesses (optional, requires LLVM clang with libFuzzer)
+    add_subdirectory(fuzz)
+endif()
