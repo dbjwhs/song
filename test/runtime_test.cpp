@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <song/runtime.hpp>
 
+#include <algorithm>  // std::find; not transitively included by GCC 15 libstdc++
+
 using namespace song;
 
 // =============================================================================
