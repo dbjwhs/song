@@ -87,6 +87,10 @@ void StreamWriter::write(const Buffer& chunk) {
     }
 }
 
+void StreamWriter::abort() {
+    ended_ = true;
+}
+
 void StreamWriter::end() {
     if (ended_) {
         return;

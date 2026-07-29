@@ -651,6 +651,67 @@ TEST(RuntimeTcpTest, DispatcherCalledThroughRuntime) {
     EXPECT_EQ(call_count, 10);
 }
 
+// Regression: when a stream dispatcher throws, the StreamWriter destructor
+// used to send stream_end during unwind BEFORE the catch sent the error
+// reply. Clients stop reading at stream_end, so the failure arrived as a
+// clean-looking (possibly truncated) stream and the error was never read.
+// The runtime now aborts the writer and the error reply terminates the
+// stream. The fd dispatch path carries the identical fix.
+TEST(RuntimeTcpTest, ThrowingStreamDispatcherDeliversErrorNotCleanStream) {
+    ServiceRuntime runtime;
+
+    runtime.register_stream_dispatcher(
+        7, [](u16, Buffer&, StreamWriter& writer) {
+            Buffer chunk;
+            encode_i32(chunk, 1);
+            writer.write(chunk);  // one good chunk precedes the failure
+            throw std::runtime_error("dispatcher exploded mid-stream");
+        });
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) break;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    bool threw = false;
+    try {
+        conn.call_streaming(7, 1, args);
+    } catch (const ServiceError& e) {
+        threw = true;
+        EXPECT_NE(std::string(e.what()).find("dispatcher exploded"),
+                  std::string::npos);
+    }
+    EXPECT_TRUE(threw) << "client saw a clean stream instead of the error";
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
 // =============================================================================
 // M2: Concurrent / Interleaved Operations
 // =============================================================================

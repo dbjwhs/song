@@ -56,6 +56,13 @@ public:
     /// Signal end of stream (called automatically by destructor)
     void end();
 
+    /// Mark the stream ended WITHOUT sending stream_end. For the error path:
+    /// when a dispatcher throws, the runtime sends an error reply as the
+    /// stream terminator instead; a stream_end sent during unwind would
+    /// reach the client first and make the failure look like a clean empty
+    /// stream (the client stops at stream_end and never reads the error).
+    void abort();
+
     /// Check if the stream has been ended
     bool ended() const { return ended_; }
 

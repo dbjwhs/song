@@ -214,11 +214,17 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         // Check for streaming dispatcher first
         auto stream_it = stream_dispatchers_.find(service_id);
         if (stream_it != stream_dispatchers_.end()) {
+            StreamWriter writer(write_fd, hdr.sequence_id);
             try {
-                StreamWriter writer(write_fd, hdr.sequence_id);
                 stream_it->second(method_id, payload, writer);
                 // writer destructor sends stream_end
             } catch (const std::exception& e) {
+                // The error reply terminates the stream. Suppress the
+                // destructor's stream_end: sent during unwind it would
+                // reach the client first, which stops reading at
+                // stream_end and would never see the error (a failed
+                // stream indistinguishable from a clean empty one).
+                writer.abort();
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,
                     ErrorCode::unknown_method,
@@ -397,11 +403,15 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         // Check for streaming dispatcher first
         auto stream_it = stream_dispatchers_.find(service_id);
         if (stream_it != stream_dispatchers_.end()) {
+            StreamWriter writer(transport, hdr.sequence_id);
             try {
-                StreamWriter writer(transport, hdr.sequence_id);
                 stream_it->second(method_id, payload, writer);
                 // writer destructor sends stream_end
             } catch (const std::exception& e) {
+                // See the fd path above: abort before the error reply so
+                // the client reads the error, not a clean-looking
+                // stream_end sent during unwind.
+                writer.abort();
                 Buffer error_msg = wire::create_error_message(
                     hdr.sequence_id,
                     ErrorCode::unknown_method,
