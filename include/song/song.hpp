@@ -20,3 +20,4 @@
 #include "stream.hpp"
 #include "subscription.hpp"
 #include "error.hpp"
+#include "logging.hpp"
