@@ -12,6 +12,22 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#elif defined(__linux__) && defined(SONG_HAS_AVAHI)
+// These MUST stay outside namespace song: an #include inside a namespace
+// nests the standard library (song::std) and every declaration it drags in.
+// GCC 15 rejects the result; older GCCs never compiled this path because
+// Avahi was absent on the build hosts.
+#include <avahi-client/client.h>
+#include <avahi-client/publish.h>
+#include <avahi-client/lookup.h>
+#include <avahi-common/simple-watch.h>
+#include <avahi-common/malloc.h>
+#include <avahi-common/error.h>
+#include <avahi-common/timeval.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <mutex>
+#include <atomic>
 #endif
 
 namespace song {
@@ -344,19 +360,8 @@ std::unique_ptr<Discovery> create_discovery() {
 
 // =============================================================================
 // Linux Implementation using Avahi
+// (headers included at the top of this file, outside namespace song)
 // =============================================================================
-
-#include <avahi-client/client.h>
-#include <avahi-client/publish.h>
-#include <avahi-client/lookup.h>
-#include <avahi-common/simple-watch.h>
-#include <avahi-common/malloc.h>
-#include <avahi-common/error.h>
-#include <avahi-common/timeval.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <mutex>
-#include <atomic>
 
 namespace {
 
