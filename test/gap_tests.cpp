@@ -769,6 +769,132 @@ TEST(RuntimeTcpTest, TransportWrapperAppliesToAcceptedClients) {
     }
 }
 
+// Incremental streaming: chunks must reach the handler as they arrive, not
+// after stream_end, and the chunk timeout must be a real parameter. The old
+// hardcoded 5000 ms killed any stream whose first chunk took longer (found
+// by savannah: a real agent thinks past five seconds before its first
+// token), and the eager StreamReader hid all latency until completion.
+TEST(RuntimeTcpTest, IncrementalStreamingDeliversChunksAsTheyArrive) {
+    using Clock = std::chrono::steady_clock;
+
+    ServiceRuntime runtime;
+    runtime.register_stream_dispatcher(
+        9, [](u16, Buffer&, StreamWriter& writer) {
+            for (i32 ndx = 0; ndx < 3; ++ndx) {
+                Buffer chunk;
+                encode_i32(chunk, ndx);
+                writer.write(chunk);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) break;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    Buffer args;
+    std::vector<i32> values;
+    std::vector<Clock::time_point> arrivals;
+    conn.call_streaming(9, 1, args, [&](Buffer& chunk) {
+        values.push_back(decode_i32(chunk));
+        arrivals.push_back(Clock::now());
+    }, /*chunk_timeout_ms=*/3000);
+    auto done = Clock::now();
+
+    ASSERT_EQ(values.size(), 3u);
+    EXPECT_EQ(values[0], 0);
+    EXPECT_EQ(values[2], 2);
+    // The first chunk must have arrived well before the stream finished
+    // (server sleeps 200ms after each write; eager collection would put
+    // every arrival at effectively the same instant as completion).
+    auto lead = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    done - arrivals.front())
+                    .count();
+    EXPECT_GT(lead, 300);
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
+TEST(RuntimeTcpTest, StreamChunkTimeoutIsHonored) {
+    ServiceRuntime runtime;
+    runtime.register_stream_dispatcher(
+        9, [](u16, Buffer&, StreamWriter& writer) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            Buffer chunk;
+            encode_i32(chunk, 1);
+            writer.write(chunk);
+        });
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) break;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    // 100ms budget against an 800ms-silent dispatcher: must throw.
+    Buffer args;
+    bool timed_out = false;
+    try {
+        conn.call_streaming(9, 1, args, [](Buffer&) {}, 100);
+    } catch (const ServiceError&) {
+        timed_out = true;
+    }
+    EXPECT_TRUE(timed_out);
+
+    // Unblock and reap the server: the dispatcher finishes its delayed
+    // write into the socket we still hold, then its loop reads our
+    // shutdown and returns.
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
 // =============================================================================
 // M2: Concurrent / Interleaved Operations
 // =============================================================================

@@ -9,6 +9,7 @@
 #include "wire.hpp"
 #include "stream.hpp"
 #include <sys/types.h>
+#include <functional>
 #include <string>
 #include <vector>
 #include <map>
@@ -133,10 +134,31 @@ public:
     /// Returns the result buffer
     Buffer call(u16 service_id, u16 method_id, const Buffer& args);
 
+    /// Handler invoked for each stream chunk as it arrives (incremental
+    /// streaming). The Buffer is the chunk payload, read position at 0.
+    using StreamChunkHandler = std::function<void(Buffer&)>;
+
     /// Make a streaming call to a service method
     /// Sends the call, then collects MSG_STREAM chunks until MSG_STREAM_END.
+    /// @param chunk_timeout_ms Max wait for EACH message (chunk, end, or
+    ///        error reply). A remote agent can legitimately be silent for a
+    ///        long time between chunks, so size this to the remote
+    ///        operation, not the wire: the old hardcoded 5000 killed any
+    ///        stream whose first chunk took over five seconds.
     /// @return StreamReader containing all received chunks
-    StreamReader call_streaming(u16 service_id, u16 method_id, const Buffer& args);
+    StreamReader call_streaming(u16 service_id, u16 method_id,
+                                const Buffer& args,
+                                int chunk_timeout_ms = 5000);
+
+    /// Incremental streaming call: on_chunk fires for each chunk AS IT
+    /// ARRIVES instead of buffering the whole stream to completion. This is
+    /// the primitive; the StreamReader overload is a collector built on it.
+    /// Throws ServiceError on timeout, disconnect, or a service error
+    /// reply; chunks delivered before the throw were genuine.
+    /// @return The sequence id of the call
+    u32 call_streaming(u16 service_id, u16 method_id, const Buffer& args,
+                       const StreamChunkHandler& on_chunk,
+                       int chunk_timeout_ms = 5000);
 
     /// Make a one-way call (no response expected)
     void call_oneway(u16 service_id, u16 method_id, const Buffer& args);

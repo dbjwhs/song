@@ -458,7 +458,10 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
     return result;
 }
 
-StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, const Buffer& args) {
+u32 ServiceConnection::call_streaming(u16 service_id, u16 method_id,
+                                      const Buffer& args,
+                                      const StreamChunkHandler& on_chunk,
+                                      int chunk_timeout_ms) {
     if (proc_) {
         if (!proc_->alive()) {
             throw ServiceError("Service not running");
@@ -481,20 +484,28 @@ StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, co
         transport_->send(call_msg);
     }
 
-    // Collect stream chunks until stream_end
-    StreamReader reader(seq);
-
+    // Deliver chunks as they arrive until stream_end
     for (;;) {
         Buffer response;
         bool received = false;
-        if (proc_) {
-            received = proc_->receive(response, 5000);
-        } else {
-            received = transport_->receive(response, 5000);
+        // Transports differ on timeout style (TcpTransport throws, the pipe
+        // path returns false); normalize both into one clear ServiceError.
+        try {
+            if (proc_) {
+                received = proc_->receive(response, chunk_timeout_ms);
+            } else {
+                received = transport_->receive(response, chunk_timeout_ms);
+            }
+        } catch (const std::exception& e) {
+            throw ServiceError(
+                "Streaming receive failed (chunk timeout " +
+                std::to_string(chunk_timeout_ms) + " ms): " + e.what());
         }
 
         if (!received) {
-            throw ServiceError("Service died or timed out during streaming");
+            throw ServiceError(
+                "Service died or timed out during streaming (chunk timeout " +
+                std::to_string(chunk_timeout_ms) + " ms)");
         }
 
         auto hdr = wire::decode_header_validated(response);
@@ -510,10 +521,9 @@ StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, co
                 chunk.write(response.data() + 16, hdr.payload_size);
                 chunk.reset_read();
             }
-            reader.add_chunk(std::move(chunk));
+            on_chunk(chunk);
         } else if (hdr.type == wire::MsgType::stream_end) {
-            reader.set_complete();
-            break;
+            return seq;
         } else if (hdr.type == wire::MsgType::error) {
             u16 code = decode_u16(response);
             std::string msg = decode_string(response);
@@ -522,7 +532,22 @@ StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id, co
             throw ProtocolError("Unexpected message type during streaming");
         }
     }
+}
 
+StreamReader ServiceConnection::call_streaming(u16 service_id, u16 method_id,
+                                               const Buffer& args,
+                                               int chunk_timeout_ms) {
+    // Eager collector on top of the incremental primitive.
+    std::vector<Buffer> chunks;
+    u32 seq = call_streaming(
+        service_id, method_id, args,
+        [&chunks](Buffer& c) { chunks.push_back(std::move(c)); },
+        chunk_timeout_ms);
+    StreamReader reader(seq);
+    for (auto& c : chunks) {
+        reader.add_chunk(std::move(c));
+    }
+    reader.set_complete();
     return reader;
 }
 
