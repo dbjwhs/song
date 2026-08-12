@@ -48,6 +48,7 @@ private:
     std::string generate_class_proxy(const ClassDef& c);
     std::string generate_class_skeleton(const ClassDef& c);
     std::string generate_class_dispatcher(const ClassDef& c);
+    std::string generate_class_factory(const ClassDef& c);
 
     // Method helpers
     std::string generate_method_signature(const Method& m, bool is_interface);

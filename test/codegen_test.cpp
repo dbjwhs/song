@@ -484,6 +484,48 @@ TEST(CodegenTest, ClassDispatcher) {
     EXPECT_NE(code.find("switch (method_id)"), std::string::npos);
 }
 
+// song finding 20: the generated setter must push a property-change
+// notification, not just assign. Without this, push notifications require the
+// consumer to hand-write a setter override.
+TEST(CodegenTest, ClassSetterNotifiesPropertyChange) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        class Counter {
+            i32 value;
+            Counter();
+        }
+    )");
+
+    // The generated setter assigns, encodes the new value, and notifies with
+    // the property's id.
+    EXPECT_NE(code.find("void set_value("), std::string::npos);
+    EXPECT_NE(code.find("value_ = value;"), std::string::npos);
+    EXPECT_NE(code.find("notify_property(kProp_Counter_value,"), std::string::npos);
+}
+
+// song finding 20: codegen must emit a register_<Name> factory helper so
+// consumers register a concrete implementation without hand-writing the
+// ObjectFactory lambda that decodes constructor arguments.
+TEST(CodegenTest, ClassFactoryRegistration) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        class Counter {
+            i32 value;
+            Counter(i32 start);
+        }
+    )");
+
+    // Template helper keyed to the class type id.
+    EXPECT_NE(code.find("void register_Counter(song::ServiceRuntime& runtime)"),
+              std::string::npos);
+    EXPECT_NE(code.find("runtime.register_factory(kType_Counter,"),
+              std::string::npos);
+    // Decodes the constructor's argument into a named local (evaluation-order
+    // safe) before constructing the user's Impl.
+    EXPECT_NE(code.find("case kCtor_Counter_0:"), std::string::npos);
+    EXPECT_NE(code.find("new Impl(start)"), std::string::npos);
+}
+
 TEST(CodegenTest, ClassWithStructProperty) {
     std::string code = parse_and_generate(R"(
         namespace test;
@@ -568,6 +610,15 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
             add(i32 a, i32 b) -> i32;
             distance(Point a, Point b) -> f64;
             batch_add(i32[] values) -> i32;
+        }
+
+        // A class exercises the generated notifying setter (non-template, fully
+        // compiled here) and the register_<Name> factory template's
+        // non-dependent body (register_factory call, kType_, arg decoding).
+        class Counter {
+            i32 value;
+            Counter(i32 start);
+            add(i32 delta) -> i32;
         }
     )";
 

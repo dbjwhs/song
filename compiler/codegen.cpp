@@ -644,10 +644,16 @@ std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
         out << "    virtual " << cpp_type << " get_" << p.name << "() const { return "
             << p.name << "_; }\n";
 
-        // Setter (if not readonly)
+        // Setter (if not readonly). Generated setters push a property-change
+        // notification so subscribed clients see the new value without the
+        // consumer hand-writing an override (song finding 20).
         if (!p.readonly) {
-            out << "    virtual void set_" << p.name << "(" << type_to_param(p.type, "value")
-                << ") { " << p.name << "_ = value; }\n";
+            out << "    virtual void set_" << p.name << "(" << type_to_param(p.type, "value") << ") {\n";
+            out << "        " << p.name << "_ = value;\n";
+            out << "        Buffer song_notify_buf;\n";
+            out << "        " << encode_call(p.type, "value", "song_notify_buf") << ";\n";
+            out << "        notify_property(kProp_" << c.name << "_" << p.name << ", song_notify_buf);\n";
+            out << "    }\n";
         }
         out << "\n";
     }
@@ -781,6 +787,68 @@ std::string CodeGenerator::generate_class_dispatcher(const ClassDef& c) {
 }
 
 // =============================================================================
+// Class Factory Registration (Server Side)
+// =============================================================================
+//
+// Emits a template helper so consumers register a concrete implementation with
+// one line instead of hand-writing the ObjectFactory lambda that decodes each
+// constructor's arguments (song finding 20). Impl is the user's concrete type
+// deriving <Name>Base; the factory decodes per-constructor args in declaration
+// order and forwards them to the matching Impl constructor.
+std::string CodeGenerator::generate_class_factory(const ClassDef& c) {
+    std::ostringstream out;
+
+    out << "// Register a concrete " << c.name << " implementation with a runtime.\n";
+    out << "// Impl must derive from " << c.name << "Base and expose constructors\n";
+    out << "// matching the IDL constructor list.\n";
+    out << "template <typename Impl>\n";
+    out << "inline void register_" << c.name << "(song::ServiceRuntime& runtime) {\n";
+    out << "    runtime.register_factory(kType_" << c.name
+        << ", [](u16 constructor_id, Buffer& args) -> song::Object* {\n";
+
+    // A class with no explicit constructors still has an implicit default
+    // (id 0). No kCtor_ constant is emitted in that case, so match the literal.
+    if (c.constructors.empty()) {
+        out << "        (void)args;\n";
+        out << "        if (constructor_id == 0) {\n";
+        out << "            return new Impl();\n";
+        out << "        }\n";
+    } else {
+        out << "        switch (constructor_id) {\n";
+        for (size_t i = 0; i < c.constructors.size(); ++i) {
+            const auto& ctor = c.constructors[i];
+            out << "        case kCtor_" << c.name << "_" << i << ": {\n";
+            // Decode args into named locals first: constructor argument
+            // evaluation order is unspecified, so decoding inline would read
+            // the wire out of order.
+            if (ctor.params.empty()) {
+                out << "            (void)args;\n";
+            }
+            for (const auto& p : ctor.params) {
+                out << "            " << type_to_cpp(p.type) << " " << p.name
+                    << " = " << decode_call(p.type, "args") << ";\n";
+            }
+            out << "            return new Impl(";
+            for (size_t j = 0; j < ctor.params.size(); ++j) {
+                if (j > 0) out << ", ";
+                out << ctor.params[j].name;
+            }
+            out << ");\n";
+            out << "        }\n";
+        }
+        out << "        default: break;\n";
+        out << "        }\n";
+    }
+
+    out << "        throw std::runtime_error(\"Unknown constructor ID for " << c.name
+        << ": \" + std::to_string(constructor_id));\n";
+    out << "    });\n";
+    out << "}\n";
+
+    return out.str();
+}
+
+// =============================================================================
 // Header Generation
 // =============================================================================
 
@@ -886,6 +954,11 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
     // Class dispatchers (server side)
     for (const auto& c : ns.classes) {
         out << generate_class_dispatcher(c) << "\n";
+    }
+
+    // Class factory registration helpers (server side)
+    for (const auto& c : ns.classes) {
+        out << generate_class_factory(c) << "\n";
     }
 
     out << "} // namespace song::" << ns.name << "\n";
