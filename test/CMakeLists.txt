@@ -82,6 +82,7 @@ target_include_directories(song_tests PRIVATE
 # Provide source directory path for test cert discovery
 target_compile_definitions(song_tests PRIVATE
     SONG_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    SONG_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
 )
 
 # Discover tests for CTest

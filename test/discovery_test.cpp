@@ -209,9 +209,9 @@ TEST(DiscoveryE2ETest, DiscoverService) {
     // Register the service
     std::string service_name = "SongTestService" + std::to_string(port);  // Unique name
     bool registered = discovery->register_service(service_name, "songtest", port);
-    if (!registered) {
-        GTEST_SKIP() << "Failed to register service";
-    }
+    // is_available() was checked above; a registration failure here is a real
+    // bug (finding-10 class), not a reason to skip.
+    ASSERT_TRUE(registered) << "register_service failed on a discovery-capable host";
 
     // Give mDNS time to propagate
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -260,9 +260,7 @@ TEST(DiscoveryE2ETest, DiscoverMultipleServices) {
     bool reg1 = discovery1->register_service(name1, "multitest", port1);
     bool reg2 = discovery2->register_service(name2, "multitest", port2);
 
-    if (!reg1 || !reg2) {
-        GTEST_SKIP() << "Failed to register services";
-    }
+    ASSERT_TRUE(reg1 && reg2) << "register_service failed on a discovery-capable host";
 
     // Give mDNS time to propagate
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -348,8 +346,9 @@ TEST(DiscoveryE2ETest, ConnectToDiscoveredService) {
     std::string service_name = "EchoDiscoverable" + std::to_string(port);
     bool registered = discovery->register_service(service_name, "echodisc", port);
     if (!registered) {
-        server_thread.join();
-        GTEST_SKIP() << "Failed to register service";
+        server_thread.join();  // must reap before leaving (joinable dtor terminates)
+        ADD_FAILURE() << "register_service failed on a discovery-capable host";
+        return;
     }
 
     // Give mDNS time to propagate

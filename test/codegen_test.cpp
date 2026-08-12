@@ -598,27 +598,19 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
            << "int main() { return 0; }\n";
     }
 
-    // Find song include directory (relative to test binary location)
-    std::filesystem::path song_include;
-    for (auto candidate : {
-        std::filesystem::current_path() / ".." / "include",
-        std::filesystem::current_path() / "include",
-        std::filesystem::current_path().parent_path() / "include",
-    }) {
-        if (std::filesystem::exists(candidate / "song" / "song.hpp")) {
-            song_include = candidate;
-            break;
-        }
-    }
-
-    if (song_include.empty()) {
-        std::filesystem::remove(header_path);
-        std::filesystem::remove(source_path);
-        GTEST_SKIP() << "Could not locate song include directory";
-    }
+    // Include dir and compiler come from CMake (SONG_SOURCE_DIR /
+    // SONG_CXX_COMPILER) so this test always runs on every platform and uses
+    // the SAME compiler the build used -- rather than a cwd-relative search
+    // that skipped when it guessed wrong, and a hardcoded clang++ that would
+    // have failed on Linux. A skipping "generated code compiles" test proves
+    // nothing; this is the guard that catches codegen that won't compile.
+    std::filesystem::path song_include =
+        std::filesystem::path(SONG_SOURCE_DIR) / "include";
+    ASSERT_TRUE(std::filesystem::exists(song_include / "song" / "song.hpp"))
+        << "song include not found under SONG_SOURCE_DIR=" << SONG_SOURCE_DIR;
 
     // Compile with syntax check only (no linking needed)
-    std::string cmd = "clang++ -std=c++20 -fsyntax-only"
+    std::string cmd = std::string(SONG_CXX_COMPILER) + " -std=c++20 -fsyntax-only"
                       " -I" + song_include.string() +
                       " -I" + tmp_dir.string() +
                       " " + source_path.string() +
