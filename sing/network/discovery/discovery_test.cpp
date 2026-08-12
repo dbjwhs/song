@@ -36,19 +36,29 @@ protected:
     void SetUp() override {
         std::string path = get_service_path();
         if (!std::filesystem::exists(path)) {
-            GTEST_SKIP() << "Discovery service not found at " << path;
+            GTEST_SKIP() << "Discovery service binary not built at " << path;
         }
 
-        // Check if mDNS is available (macOS only for now)
-#ifndef __APPLE__
-        GTEST_SKIP() << "mDNS discovery only supported on macOS";
-#endif
+        // Skip ONLY when this host genuinely has no mDNS/DNS-SD stack
+        // (macOS Bonjour, or Linux with a running avahi-daemon). When it IS
+        // available, the tests run for real and a failure is a failure --
+        // not a skip. The old "#ifndef __APPLE__ skip" hid that Linux gained
+        // Avahi support, and "catch -> skip" once hid a broken service type.
+        auto discovery = create_discovery();
+        if (!discovery || !discovery->is_available()) {
+            GTEST_SKIP() << "mDNS/DNS-SD not available on this host";
+        }
 
-        // Fork and exec the discovery service
+        // Fork and exec the discovery service. The instance name MUST match
+        // the name connect() browses for -- connect("calc") calls
+        // discover_one("calc", "testcalc"), so the service must register its
+        // instance as "calc". (It previously registered "SingTestCalc" and
+        // every test connected to "calc"; the name mismatch meant these tests
+        // never actually connected -- masked because they skipped on failure.)
         server_pid_ = fork();
         if (server_pid_ == 0) {
             // Child process: exec the service
-            execl(path.c_str(), path.c_str(), "SingTestCalc", nullptr);
+            execl(path.c_str(), path.c_str(), "calc", nullptr);
             _exit(1);  // exec failed
         }
 
@@ -80,29 +90,18 @@ protected:
 // mDNS Discovery Tests
 // =============================================================================
 
+// mDNS is confirmed available in SetUp, so discover-and-connect must WORK.
+// A throw here is a real failure (a broken service type, a registration that
+// never lands), reported loudly -- not swallowed into a skip.
 TEST_F(DiscoveryTest, DiscoverAndConnect) {
-    // This test verifies that mDNS discovery finds the service
-    // and we can make RPC calls to it
-    try {
-        conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
-    } catch (const std::exception& e) {
-        GTEST_SKIP() << "mDNS discovery failed (may not be available): " << e.what();
-    }
-
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.add(10, 20), 30);
 }
 
 TEST_F(DiscoveryTest, MultipleCallsAfterDiscovery) {
-    try {
-        conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
-    } catch (const std::exception& e) {
-        GTEST_SKIP() << "mDNS discovery failed: " << e.what();
-    }
-
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
     CalculatorProxy calc(*conn_);
-
-    // Verify connection works for multiple calls
     EXPECT_EQ(calc.add(1, 2), 3);
     EXPECT_EQ(calc.multiply(3, 4), 12);
     EXPECT_EQ(calc.subtract(10, 5), 5);
@@ -110,12 +109,7 @@ TEST_F(DiscoveryTest, MultipleCallsAfterDiscovery) {
 }
 
 TEST_F(DiscoveryTest, StructReturnOverDiscovery) {
-    try {
-        conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
-    } catch (const std::exception& e) {
-        GTEST_SKIP() << "mDNS discovery failed: " << e.what();
-    }
-
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
     CalculatorProxy calc(*conn_);
     auto result = calc.divide(17, 5);
     EXPECT_EQ(result.quotient, 3);
@@ -123,12 +117,7 @@ TEST_F(DiscoveryTest, StructReturnOverDiscovery) {
 }
 
 TEST_F(DiscoveryTest, ArrayOverDiscovery) {
-    try {
-        conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
-    } catch (const std::exception& e) {
-        GTEST_SKIP() << "mDNS discovery failed: " << e.what();
-    }
-
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.sum({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), 55);
 }
