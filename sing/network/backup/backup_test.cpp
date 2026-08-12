@@ -935,9 +935,14 @@ TEST_F(BackupAgentTest, ProgressSubscribeNotification) {
 class DiscoverableBackupTest : public ::testing::Test {
 protected:
     void SetUp() override {
-#ifndef __APPLE__
-        GTEST_SKIP() << "mDNS discovery only supported on macOS";
-#endif
+        // Skip ONLY when this host has no mDNS/DNS-SD stack. The old
+        // "#ifndef __APPLE__ skip" predated Linux Avahi support and hid that
+        // this test could run there; the test also connected to the wrong
+        // instance name and swallowed the failure as a skip (see below).
+        auto discovery = create_discovery();
+        if (!discovery || !discovery->is_available()) {
+            GTEST_SKIP() << "mDNS/DNS-SD not available on this host";
+        }
         sandbox_ = fs::temp_directory_path() / ("song_backup_disc_" +
             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         fs::create_directories(sandbox_);
@@ -945,7 +950,7 @@ protected:
 
         std::string path = get_service_path();
         if (!fs::exists(path)) {
-            GTEST_SKIP() << "Backup service not found at " << path;
+            GTEST_SKIP() << "Backup service binary not built at " << path;
         }
 
         std::string root_str = sandbox_.string();
@@ -980,21 +985,19 @@ protected:
 };
 
 TEST_F(DiscoverableBackupTest, DiscoverAndConnect) {
-    // Discover backup services on local network
+    // The service advertises instance "BackupAgent" (backup_service.cpp:532),
+    // so connect() must browse for that name -- connect("backup") could never
+    // match, and the catch->skip hid it. mDNS is confirmed available in
+    // SetUp, so a discovery/connect failure here is a real failure.
     ServiceManager mgr;
-    mgr.register_discoverable_service("backup", "backup", 1);
+    mgr.register_discoverable_service("BackupAgent", "backup", 1);
 
-    // Connect via discovery (ServiceManager resolves mDNS)
-    try {
-        auto conn = std::make_unique<ServiceConnection>(mgr.connect("backup"));
-        BackupAgentProxy proxy(*conn);
+    auto conn = std::make_unique<ServiceConnection>(mgr.connect("BackupAgent"));
+    BackupAgentProxy proxy(*conn);
 
-        auto files = proxy.list_files();
-        ASSERT_EQ(files.size(), 1u);
-        EXPECT_EQ(files[0].path, "found.txt");
-    } catch (const std::exception& e) {
-        GTEST_SKIP() << "Discovery connect failed: " << e.what();
-    }
+    auto files = proxy.list_files();
+    ASSERT_EQ(files.size(), 1u);
+    EXPECT_EQ(files[0].path, "found.txt");
 }
 
 // =============================================================================
