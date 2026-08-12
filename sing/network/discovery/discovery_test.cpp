@@ -9,6 +9,7 @@
 #include <chrono>
 #include <csignal>
 #include <sys/wait.h>
+#include <unistd.h>
 
 using namespace song;
 using namespace song::calculator;
@@ -49,16 +50,21 @@ protected:
             GTEST_SKIP() << "mDNS/DNS-SD not available on this host";
         }
 
-        // Fork and exec the discovery service. The instance name MUST match
-        // the name connect() browses for -- connect("calc") calls
-        // discover_one("calc", "testcalc"), so the service must register its
-        // instance as "calc". (It previously registered "SingTestCalc" and
-        // every test connected to "calc"; the name mismatch meant these tests
-        // never actually connected -- masked because they skipped on failure.)
+        // Each of these tests is an INDEPENDENT service scenario, so give each
+        // its own instance name. ctest runs each test in its own process, and
+        // a single literal name reused across rapid separate processes let a
+        // just-withdrawn mDNS record briefly shadow the new one on Linux/avahi
+        // (asynchronous withdrawal). That same-name-restart hazard is covered
+        // explicitly by DiscoveryRestart; here, a per-process unique name
+        // models independent services correctly (cf. test/discovery_test.cpp,
+        // which appends the port for the same reason). The instance name must
+        // match what connect() browses for, so the service, the local
+        // registration, and every connect() all use instance_name_.
+        instance_name_ = "calc" + std::to_string(::getpid());
         server_pid_ = fork();
         if (server_pid_ == 0) {
             // Child process: exec the service
-            execl(path.c_str(), path.c_str(), "calc", nullptr);
+            execl(path.c_str(), path.c_str(), instance_name_.c_str(), nullptr);
             _exit(1);  // exec failed
         }
 
@@ -67,7 +73,7 @@ protected:
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         // Register as discoverable service
-        mgr_.register_discoverable_service("calc", "testcalc", 1);
+        mgr_.register_discoverable_service(instance_name_, "testcalc", 1);
     }
 
     void TearDown() override {
@@ -82,6 +88,7 @@ protected:
     }
 
     pid_t server_pid_ = -1;
+    std::string instance_name_;
     ServiceManager mgr_;
     std::unique_ptr<ServiceConnection> conn_;
 };
@@ -94,13 +101,13 @@ protected:
 // A throw here is a real failure (a broken service type, a registration that
 // never lands), reported loudly -- not swallowed into a skip.
 TEST_F(DiscoveryTest, DiscoverAndConnect) {
-    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect(instance_name_));
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.add(10, 20), 30);
 }
 
 TEST_F(DiscoveryTest, MultipleCallsAfterDiscovery) {
-    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect(instance_name_));
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.add(1, 2), 3);
     EXPECT_EQ(calc.multiply(3, 4), 12);
@@ -109,7 +116,7 @@ TEST_F(DiscoveryTest, MultipleCallsAfterDiscovery) {
 }
 
 TEST_F(DiscoveryTest, StructReturnOverDiscovery) {
-    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect(instance_name_));
     CalculatorProxy calc(*conn_);
     auto result = calc.divide(17, 5);
     EXPECT_EQ(result.quotient, 3);
@@ -117,7 +124,7 @@ TEST_F(DiscoveryTest, StructReturnOverDiscovery) {
 }
 
 TEST_F(DiscoveryTest, ArrayOverDiscovery) {
-    conn_ = std::make_unique<ServiceConnection>(mgr_.connect("calc"));
+    conn_ = std::make_unique<ServiceConnection>(mgr_.connect(instance_name_));
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.sum({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), 55);
 }
