@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # macOS: clang, Bonjour is built in -- discovery tests run for real.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+      - name: Build (everything, so no platform-guarded code rots uncompiled)
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # Linux: GCC + Avahi. Installing libavahi-client-dev compiles song's Avahi
+  # discovery path (it once shipped uncompilable -- includes nested inside
+  # namespace song -- because no build host had the headers). Running the
+  # daemon means the discovery tests run for REAL here, not skip.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + mDNS stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake libssl-dev \
+            libavahi-client-dev avahi-daemon avahi-utils dbus
+      - name: Start Avahi (so discovery is genuinely available, not skipped)
+        run: |
+          sudo systemctl start dbus || sudo service dbus start
+          sudo systemctl start avahi-daemon || sudo service avahi-daemon start
+          sleep 2
+          # Fail early if the daemon isn't up -- a skipped discovery leg is a
+          # silent lie, which is exactly what this CI exists to prevent.
+          systemctl is-active avahi-daemon || pgrep -x avahi-daemon
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug 2>&1 | tee cfg.log
+      - name: Fail if Avahi was not found (the mDNS path must compile here)
+        run: "! grep -q 'Avahi not found' cfg.log"
+      - name: Build (everything, incl. the Avahi discovery path)
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
