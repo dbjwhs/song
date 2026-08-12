@@ -143,17 +143,20 @@ public:
     /// @param name Service instance name (e.g., "MyCalculator")
     /// @param type Service type (e.g., "calculator")
     /// Note: Uses ephemeral port when port=0 for automatic port allocation
-    [[noreturn]] void run_tcp_discoverable(u16 port,
-                                          const std::string& name,
-                                          const std::string& type);
+    /// Returns (deregistering from mDNS) on SIGTERM/SIGINT, so a service that
+    /// restarts does not leave a stale record advertising a dead port.
+    void run_tcp_discoverable(u16 port,
+                             const std::string& name,
+                             const std::string& type);
 
     /// Run TCP service loop with mDNS registration using existing listener
     /// @param listener Existing TcpListener (must already be listening)
     /// @param name Service instance name
     /// @param type Service type
-    [[noreturn]] void run_tcp_discoverable(TcpListener& listener,
-                                          const std::string& name,
-                                          const std::string& type);
+    /// Returns (deregistering from mDNS) on SIGTERM/SIGINT.
+    void run_tcp_discoverable(TcpListener& listener,
+                             const std::string& name,
+                             const std::string& type);
 
     /// Multi-client TCP service loop (thread-per-client)
     /// Accepts multiple concurrent clients, each in its own thread.

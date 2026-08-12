@@ -5,6 +5,7 @@
 #include "song/transport.hpp"
 #include "song/discovery.hpp"
 #include <unistd.h>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <cerrno>
@@ -686,17 +687,28 @@ std::unique_ptr<Transport> ServiceRuntime::wrap_transport(
     }
 }
 
-[[noreturn]] void ServiceRuntime::run_tcp_discoverable(u16 port,
-                                                       const std::string& name,
-                                                       const std::string& type) {
+// SIGTERM/SIGINT during a discoverable serve loop set this flag; the accept
+// loop notices, breaks, and returns -- so the local `discovery` unique_ptr's
+// destructor deregisters from mDNS. Without this, a SIGTERM'd service dies
+// without unwinding and leaves a stale record advertising its now-dead port,
+// which peers then resolve on a quick restart (found by the Linux discovery
+// tests once they stopped skipping). Async-signal-safe: a flag write only.
+namespace {
+volatile std::sig_atomic_t g_discoverable_stop = 0;
+void discoverable_signal_handler(int) { g_discoverable_stop = 1; }
+}  // namespace
+
+void ServiceRuntime::run_tcp_discoverable(u16 port,
+                                          const std::string& name,
+                                          const std::string& type) {
     TcpListener listener;
     listener.listen(port);
     run_tcp_discoverable(listener, name, type);
 }
 
-[[noreturn]] void ServiceRuntime::run_tcp_discoverable(TcpListener& listener,
-                                                       const std::string& name,
-                                                       const std::string& type) {
+void ServiceRuntime::run_tcp_discoverable(TcpListener& listener,
+                                          const std::string& name,
+                                          const std::string& type) {
     // Create discovery and register the service
     auto discovery = create_discovery();
     bool registered = false;
@@ -712,12 +724,21 @@ std::unique_ptr<Transport> ServiceRuntime::wrap_transport(
                   << listener.bound_port() << std::endl;
     }
 
-    // Accept clients in a loop (same as run_tcp)
-    for (;;) {
-        auto client = listener.accept(-1);
-        if (!client) {
+    // Deregister cleanly on termination signals. accept() polls with a finite
+    // timeout so the loop re-checks the flag even without an EINTR wake.
+    g_discoverable_stop = 0;
+    std::signal(SIGTERM, discoverable_signal_handler);
+    std::signal(SIGINT, discoverable_signal_handler);
+
+    while (!g_discoverable_stop) {
+        std::unique_ptr<TcpTransport> client;
+        try {
+            client = listener.accept(250);  // ms; nullptr on timeout
+        } catch (...) {
+            if (g_discoverable_stop) break;
             continue;
         }
+        if (!client) continue;  // timeout -- re-check the stop flag
 
         try {
             auto transport = wrap_transport(std::move(client));
@@ -725,6 +746,11 @@ std::unique_ptr<Transport> ServiceRuntime::wrap_transport(
         } catch (...) {
             // Client error, continue accepting new clients
         }
+    }
+
+    // Returning destroys `discovery`, whose destructor deregisters from mDNS.
+    if (registered) {
+        std::cerr << "[" << name << "] Deregistering from mDNS" << std::endl;
     }
 }
 

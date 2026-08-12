@@ -121,3 +121,57 @@ TEST_F(DiscoveryTest, ArrayOverDiscovery) {
     CalculatorProxy calc(*conn_);
     EXPECT_EQ(calc.sum({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), 55);
 }
+
+// Regression for the mDNS staleness fix (runtime.cpp): a SIGTERM'd
+// discoverable service now deregisters cleanly, so a same-name service that
+// starts afterward is the one peers resolve -- not the dead prior instance on
+// its now-closed port. This is savannah's node-restart path: savannahd --mdns
+// re-registers the same node name with a NEW ephemeral port on every restart.
+// If deregistration regresses, the second connect resolves the stale dead
+// port and throws.
+TEST(DiscoveryRestart, ResolvesLiveServiceAfterSameNameRestart) {
+    auto discovery = create_discovery();
+    if (!discovery || !discovery->is_available()) {
+        GTEST_SKIP() << "mDNS/DNS-SD not available on this host";
+    }
+    std::string path = get_service_path();
+    if (!std::filesystem::exists(path)) {
+        GTEST_SKIP() << "Discovery service binary not built at " << path;
+    }
+
+    auto start_service = [&]() -> pid_t {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execl(path.c_str(), path.c_str(), "calcrestart", nullptr);
+            _exit(1);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        return pid;
+    };
+    auto stop_service = [](pid_t pid) {
+        kill(pid, SIGTERM);   // clean deregister via runtime's signal handler
+        int status;
+        waitpid(pid, &status, 0);
+    };
+
+    // First instance: register, resolve, use.
+    pid_t p1 = start_service();
+    {
+        ServiceManager mgr;
+        mgr.register_discoverable_service("calcrestart", "testcalc", 1);
+        auto conn = std::make_unique<ServiceConnection>(mgr.connect("calcrestart"));
+        EXPECT_EQ(CalculatorProxy(*conn).add(1, 1), 2);
+    }
+    stop_service(p1);  // its record must be gone after this
+
+    // Same-name restart on a fresh ephemeral port. The peer must resolve THIS
+    // live instance, not the stale one -- a successful RPC proves it.
+    pid_t p2 = start_service();
+    {
+        ServiceManager mgr;
+        mgr.register_discoverable_service("calcrestart", "testcalc", 1);
+        auto conn = std::make_unique<ServiceConnection>(mgr.connect("calcrestart"));
+        EXPECT_EQ(CalculatorProxy(*conn).add(2, 3), 5);
+    }
+    stop_service(p2);
+}
