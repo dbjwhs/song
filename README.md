@@ -35,8 +35,8 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **Three Transport Modes**: Local pipes, explicit TCP, or zero-config mDNS discovery -- all behind a unified API
 - **TLS Encryption**: Full mbedTLS 4.x integration with certificate and PSK modes, PIMPL-hidden from public API
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
-- **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS.
-- **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients.
+- **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS. Wired by hand against the runtime, not yet generated from the IDL `stream` modifier (see Known limitations).
+- **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients over TCP (the pipe path has no transport to push through).
 - **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
 - **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
@@ -363,6 +363,14 @@ while (reader.next()) {
 
 Streaming works over all transports (pipes, TCP, HMAC, TLS).
 
+Note that streaming is wired by hand against the runtime, as shown above. The
+IDL parser accepts a `stream` modifier on a method, but the code generator does
+not yet emit streaming proxies for it: a `stream` method still generates a
+unary proxy. You register the stream dispatcher and call `call_streaming`
+yourself, on a service id distinct from the unary dispatcher's (the runtime
+resolves stream dispatchers ahead of unary ones per service id, so they must
+not share). See the Known limitations section.
+
 ## Cross-Subnet Discovery (Registry)
 
 When mDNS can't reach services (different VLANs, cloud environments), use a registry service.
@@ -573,6 +581,9 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 **Known limitations:**
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
 - **mDNS requires platform library** -- Bonjour on macOS (built-in), Avahi on Linux (`libavahi-client-dev`). Both optional; builds without them, discovery tests skip.
+- **IDL `stream` methods are not code-generated** -- The parser accepts the `stream` modifier, but codegen still emits a unary proxy for such a method. Streaming is wired by hand against the runtime (`call_streaming` on the client, `register_stream_dispatcher` on a service id distinct from the unary dispatcher's on the server). The generator does not yet do this for you.
+- **Property push is TCP-only** -- `SubscriptionRegistry` fans `MSG_PROP_NOTIFY` out to subscribed transports over `run_tcp_multi()`. The single-client pipe path (`run()`) has no transport to push through and logs a warning if it receives a subscribe. Calls and subscriptions may share one connection: the client demuxes interleaved notifications from call replies.
+- **Remote objects are connection-scoped** -- An object and its subscription state live on the creating connection. A different client cannot re-acquire an object by id, and object ids carry no ownership check. Treat a remote object as a view owned by one client, not a shared registry.
 
 ## References
 
