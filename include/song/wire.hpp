@@ -47,6 +47,7 @@ enum class MsgType : u8 {
     prop_subscribe   = 0x0E,  // Client -> Service: subscribe to property changes
     prop_unsubscribe = 0x0F,  // Client -> Service: unsubscribe from property changes
     prop_notify      = 0x10,  // Service -> Client: property value changed (unsolicited)
+    object_call      = 0x11,  // Client -> Service: object method call (ObjectMethodHeader)
 };
 
 // Message flags

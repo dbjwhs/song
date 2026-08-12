@@ -651,6 +651,90 @@ TEST(RuntimeTcpTest, DispatcherCalledThroughRuntime) {
     EXPECT_EQ(call_count, 10);
 }
 
+namespace {
+// A minimal remote object: add(delta) mutates and returns the running total.
+class CounterObject : public Object {
+public:
+    explicit CounterObject(i32 start) : value_(start) {}
+    void prop_get(u16, Buffer& resp) override { encode_i32(resp, value_); }
+    void prop_set(u16, Buffer&, Buffer&) override {}
+    void dispatch(u16 method_id, Buffer& req, Buffer& resp) override {
+        if (method_id == 1) {                 // add(i32 delta) -> i32
+            value_ += decode_i32(req);
+            encode_i32(resp, value_);
+        } else {
+            throw std::runtime_error("unknown method id");
+        }
+    }
+private:
+    i32 value_;
+};
+}  // namespace
+
+// Regression for the object-method-dispatch bug: create_object_method_message
+// stamped MsgType::call, so the server decoded an object frame as a
+// service-call header and mis-dispatched into an unrelated service --
+// Object::dispatch() was never reached from anywhere in src/. This drives a
+// real client -> wire -> Object::dispatch round-trip with per-object state.
+TEST(RuntimeTcpTest, ObjectMethodCallReachesDispatch) {
+    ServiceRuntime runtime;
+    runtime.register_factory(42, [](u16 /*ctor*/, Buffer& args) -> Object* {
+        return new CounterObject(decode_i32(args));  // ctor arg = start value
+    });
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) break;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) break;
+                if (hdr.type == wire::MsgType::shutdown) break;
+                if (hdr.type == wire::MsgType::init_ack) continue;
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    // Construct CounterObject(start=10) on the server.
+    Buffer ctor_args;
+    encode_i32(ctor_args, 10);
+    auto ref = conn.create_object(42, 0, ctor_args);
+    ASSERT_LT(ref.object_id, 0);  // server object ids are negative
+
+    // add(5) -> 15, add(7) -> 22: proves dispatch AND per-object state.
+    Buffer a1;
+    encode_i32(a1, 5);
+    Buffer r1 = conn.call_object(42, ref.object_id, 1, a1);
+    EXPECT_EQ(decode_i32(r1), 15);
+    Buffer a2;
+    encode_i32(a2, 7);
+    Buffer r2 = conn.call_object(42, ref.object_id, 1, a2);
+    EXPECT_EQ(decode_i32(r2), 22);
+
+    // Unknown method id surfaces as a ServiceError, not a silent mis-dispatch.
+    Buffer a3;
+    encode_i32(a3, 1);
+    EXPECT_THROW(conn.call_object(42, ref.object_id, 99, a3), ServiceError);
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}
+
 // Regression: when a stream dispatcher throws, the StreamWriter destructor
 // used to send stream_end during unwind BEFORE the catch sent the error
 // reply. Clients stop reading at stream_end, so the failure arrived as a

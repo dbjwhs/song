@@ -418,7 +418,7 @@ Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id,
     Header hdr{
         .magic = kMagic,
         .flags = MsgFlags::none,
-        .type = MsgType::call,  // Uses MSG_CALL type, but with object header format
+        .type = MsgType::object_call,  // object method frame (ObjectMethodHeader)
         .reserved = 0,
         .payload_size = static_cast<u32>(payload.size()),
         .sequence_id = sequence_id

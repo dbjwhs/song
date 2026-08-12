@@ -357,6 +357,38 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
         }
+    } else if (hdr.type == wire::MsgType::object_call) {
+        // Object method call -> Object::dispatch (distinct from a plain
+        // service call: the payload is an ObjectMethodHeader, not a
+        // MethodCallHeader). Without this branch the frame decoded as a
+        // service call and mis-dispatched into an unrelated service.
+        auto method_hdr = wire::decode_object_method_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(method_hdr.object_id);
+            if (!obj) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                write_all(write_fd, error_msg.data(), error_msg.size());
+                return;
+            }
+
+            obj->dispatch(method_hdr.method_id, payload, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            write_all(write_fd, result_msg.data(), result_msg.size());
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_method,
+                e.what()
+            );
+            write_all(write_fd, error_msg.data(), error_msg.size());
+        }
     }
 }
 
@@ -540,6 +572,36 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
             Buffer error_msg = wire::create_error_message(
                 hdr.sequence_id,
                 ErrorCode::property_error,
+                e.what()
+            );
+            transport.send(error_msg);
+        }
+    } else if (hdr.type == wire::MsgType::object_call) {
+        // Object method call -> Object::dispatch (see the fd path for why this
+        // is distinct from a plain service call).
+        auto method_hdr = wire::decode_object_method_header(payload);
+
+        Buffer response;
+        try {
+            Object* obj = object_registry_.get(method_hdr.object_id);
+            if (!obj) {
+                Buffer error_msg = wire::create_error_message(
+                    hdr.sequence_id,
+                    ErrorCode::object_not_found,
+                    "Object not found"
+                );
+                transport.send(error_msg);
+                return;
+            }
+
+            obj->dispatch(method_hdr.method_id, payload, response);
+
+            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
+            transport.send(result_msg);
+        } catch (const std::exception& e) {
+            Buffer error_msg = wire::create_error_message(
+                hdr.sequence_id,
+                ErrorCode::unknown_method,
                 e.what()
             );
             transport.send(error_msg);

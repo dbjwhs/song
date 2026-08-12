@@ -449,8 +449,17 @@ TEST(ObjectMessageTest, ObjectMethodMessage) {
     msg.reset_read();
     auto hdr = wire::decode_header_validated(msg);
 
-    EXPECT_EQ(hdr.type, wire::MsgType::call);  // Object methods use MSG_CALL type
+    // Object method frames carry their own MsgType so the server routes them
+    // to Object::dispatch -- NOT MsgType::call, which decodes as a service
+    // call header and mis-dispatches (the bug this type distinction fixes).
+    EXPECT_EQ(hdr.type, wire::MsgType::object_call);
     EXPECT_EQ(hdr.sequence_id, 300u);
+
+    auto obj_hdr = wire::decode_object_method_header(msg);
+    EXPECT_EQ(obj_hdr.type_id, 5u);
+    EXPECT_EQ(obj_hdr.object_id, -10);
+    EXPECT_EQ(obj_hdr.method_id, 7u);
+    EXPECT_EQ(decode_string(msg), "test");
 }
 
 } // namespace song::test
