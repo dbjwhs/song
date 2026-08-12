@@ -111,6 +111,28 @@ std::string CodeGenerator::decode_call(const Type& t, const std::string& buf_nam
     return "decode_" + get_user_type(t) + "(" + buf_name + ")";
 }
 
+// Emit a doc comment, prefixing EVERY line with indent + "/// " (song finding
+// 4). The parser joins consecutive /// lines with '\n'; emitting the raw string
+// after a single "/// " left continuation lines as bare, non-comment text that
+// broke the generated C++. An optional suffix (e.g. " (interface)") lands on the
+// last line. No-op on empty docs.
+static void emit_doc(std::ostream& out, const std::string& doc,
+                     const std::string& indent = "", const std::string& suffix = "") {
+    if (doc.empty()) return;
+    size_t start = 0;
+    for (;;) {
+        size_t nl = doc.find('\n', start);
+        bool last = (nl == std::string::npos);
+        out << indent << "/// " << doc.substr(start, last ? std::string::npos : nl - start);
+        if (last) {
+            out << suffix << "\n";
+            break;
+        }
+        out << "\n";
+        start = nl + 1;
+    }
+}
+
 // =============================================================================
 // Struct Generation
 // =============================================================================
@@ -119,14 +141,14 @@ std::string CodeGenerator::generate_struct_def(const StructDef& s) {
     std::ostringstream out;
 
     if (!s.doc.empty()) {
-        out << "/// " << s.doc << "\n";
+        emit_doc(out, s.doc);
     }
 
     out << "struct " << s.name << " {\n";
 
     for (const auto& f : s.fields) {
         if (!f.doc.empty()) {
-            out << "    /// " << f.doc << "\n";
+            emit_doc(out, f.doc, "    ");
         }
         out << "    " << type_to_cpp(f.type) << " " << f.name << ";\n";
     }
@@ -190,6 +212,57 @@ std::string generate_struct_array_decode(const StructDef& s) {
     return out.str();
 }
 
+// Enum serialization (song finding 5). An enum used as a struct field, method
+// parameter, or property makes encode_call/decode_call emit encode_<Enum> /
+// decode_<Enum>; without these definitions that code never compiled. The enum
+// travels as its underlying integer (u32 for flags, i32 otherwise).
+static const char* enum_wire_suffix(const EnumDef& e) {
+    return e.is_flags ? "u32" : "i32";
+}
+
+std::string generate_enum_encode(const EnumDef& e) {
+    std::ostringstream out;
+    const char* w = enum_wire_suffix(e);
+    out << "inline void encode_" << e.name << "(Buffer& buf, " << e.name << " val) {\n";
+    out << "    encode_" << w << "(buf, static_cast<" << w << ">(val));\n";
+    out << "}\n";
+    return out.str();
+}
+
+std::string generate_enum_decode(const EnumDef& e) {
+    std::ostringstream out;
+    const char* w = enum_wire_suffix(e);
+    out << "inline " << e.name << " decode_" << e.name << "(Buffer& buf) {\n";
+    out << "    return static_cast<" << e.name << ">(decode_" << w << "(buf));\n";
+    out << "}\n";
+    return out.str();
+}
+
+std::string generate_enum_array_encode(const EnumDef& e) {
+    std::ostringstream out;
+    out << "inline void encode_array_" << e.name << "(Buffer& buf, const std::vector<" << e.name << ">& arr) {\n";
+    out << "    encode_u32(buf, static_cast<u32>(arr.size()));\n";
+    out << "    for (const auto& val : arr) {\n";
+    out << "        encode_" << e.name << "(buf, val);\n";
+    out << "    }\n";
+    out << "}\n";
+    return out.str();
+}
+
+std::string generate_enum_array_decode(const EnumDef& e) {
+    std::ostringstream out;
+    out << "inline std::vector<" << e.name << "> decode_array_" << e.name << "(Buffer& buf) {\n";
+    out << "    u32 count = decode_u32(buf);\n";
+    out << "    std::vector<" << e.name << "> arr;\n";
+    out << "    arr.reserve(count);\n";
+    out << "    for (u32 i = 0; i < count; ++i) {\n";
+    out << "        arr.push_back(decode_" << e.name << "(buf));\n";
+    out << "    }\n";
+    out << "    return arr;\n";
+    out << "}\n";
+    return out.str();
+}
+
 // =============================================================================
 // Enum Generation
 // =============================================================================
@@ -198,7 +271,7 @@ std::string CodeGenerator::generate_enum_def(const EnumDef& e) {
     std::ostringstream out;
 
     if (!e.doc.empty()) {
-        out << "/// " << e.doc << "\n";
+        emit_doc(out, e.doc);
     }
 
     out << "enum class " << e.name << " : ";
@@ -208,7 +281,7 @@ std::string CodeGenerator::generate_enum_def(const EnumDef& e) {
     for (size_t i = 0; i < e.items.size(); ++i) {
         const auto& item = e.items[i];
         if (!item.doc.empty()) {
-            out << "    /// " << item.doc << "\n";
+            emit_doc(out, item.doc, "    ");
         }
         out << "    " << item.name;
         if (item.value.has_value()) {
@@ -282,7 +355,7 @@ std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
     std::ostringstream out;
 
     if (!s.doc.empty()) {
-        out << "/// " << s.doc << "\n";
+        emit_doc(out, s.doc);
     }
     out << "class " << s.name << "Proxy {\n";
     out << "    ServiceConnection& m_conn;\n";
@@ -296,7 +369,7 @@ std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
                        get_primitive(m.return_type) == PrimitiveType::void_;
 
         if (!m.doc.empty()) {
-            out << "    /// " << m.doc << "\n";
+            emit_doc(out, m.doc, "    ");
         }
 
         out << "    " << return_type << " " << m.name << "(";
@@ -333,7 +406,7 @@ std::string CodeGenerator::generate_service_interface(const ServiceDef& s) {
     std::ostringstream out;
 
     if (!s.doc.empty()) {
-        out << "/// " << s.doc << " (interface)\n";
+        emit_doc(out, s.doc, "", " (interface)");
     }
     out << "class I" << s.name << " {\n";
     out << "public:\n";
@@ -343,7 +416,7 @@ std::string CodeGenerator::generate_service_interface(const ServiceDef& s) {
         std::string return_type = type_to_cpp(m.return_type);
 
         if (!m.doc.empty()) {
-            out << "    /// " << m.doc << "\n";
+            emit_doc(out, m.doc, "    ");
         }
 
         out << "    virtual " << return_type << " " << m.name << "(";
@@ -454,7 +527,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
     std::ostringstream out;
 
     if (!c.doc.empty()) {
-        out << "/// " << c.doc << "\n";
+        emit_doc(out, c.doc);
     }
     out << "class " << c.name << "Proxy {\n";
     out << "    ServiceConnection& m_conn;\n";
@@ -512,7 +585,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
         std::string cpp_type = type_to_cpp(p.type);
 
         if (!p.doc.empty()) {
-            out << "    /// " << p.doc << "\n";
+            emit_doc(out, p.doc, "    ");
         }
 
         // Getter
@@ -541,7 +614,7 @@ std::string CodeGenerator::generate_class_proxy(const ClassDef& c) {
                        get_primitive(m.return_type) == PrimitiveType::void_;
 
         if (!m.doc.empty()) {
-            out << "    /// " << m.doc << "\n";
+            emit_doc(out, m.doc, "    ");
         }
 
         out << "    " << return_type << " " << m.name << "(";
@@ -604,7 +677,7 @@ std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
     }
 
     if (!c.doc.empty()) {
-        out << "/// " << c.doc << " (server implementation base)\n";
+        emit_doc(out, c.doc, "", " (server implementation base)");
     }
 
     // Determine base class
@@ -637,7 +710,7 @@ std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
         std::string cpp_type = type_to_cpp(p.type);
 
         if (!p.doc.empty()) {
-            out << "    /// " << p.doc << "\n";
+            emit_doc(out, p.doc, "    ");
         }
 
         // Getter
@@ -663,7 +736,7 @@ std::string CodeGenerator::generate_class_skeleton(const ClassDef& c) {
         std::string return_type = type_to_cpp(m.return_type);
 
         if (!m.doc.empty()) {
-            out << "    /// " << m.doc << "\n";
+            emit_doc(out, m.doc, "    ");
         }
 
         out << "    virtual " << return_type << " " << m.name << "(";
@@ -899,6 +972,17 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
         out << generate_enum_def(e) << "\n";
     }
 
+    // Enum serialization (song finding 5): enums are user types, so a struct
+    // field / method param / property of enum type calls encode_<Enum> /
+    // decode_<Enum>. Emit them (and array helpers) before structs, which may
+    // reference them. Enums cannot nest a struct, so no forward decls needed.
+    for (const auto& e : ns.enums) {
+        out << generate_enum_encode(e) << "\n";
+        out << generate_enum_decode(e) << "\n";
+        out << generate_enum_array_encode(e) << "\n";
+        out << generate_enum_array_decode(e) << "\n";
+    }
+
     // Structs
     for (const auto& s : ns.structs) {
         out << generate_struct_def(s) << "\n";
@@ -990,6 +1074,17 @@ std::string CodeGenerator::generate_types_header(const Namespace& ns) {
     // Enums
     for (const auto& e : ns.enums) {
         out << generate_enum_def(e) << "\n";
+    }
+
+    // Enum serialization (song finding 5): enums are user types, so a struct
+    // field / method param / property of enum type calls encode_<Enum> /
+    // decode_<Enum>. Emit them (and array helpers) before structs, which may
+    // reference them. Enums cannot nest a struct, so no forward decls needed.
+    for (const auto& e : ns.enums) {
+        out << generate_enum_encode(e) << "\n";
+        out << generate_enum_decode(e) << "\n";
+        out << generate_enum_array_encode(e) << "\n";
+        out << generate_enum_array_decode(e) << "\n";
     }
 
     // Structs

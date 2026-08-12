@@ -186,6 +186,62 @@ TEST(CodegenTest, FlagsEnum) {
     EXPECT_NE(code.find("execute = 4"), std::string::npos);
 }
 
+// song finding 4: a multi-line /// doc comment (the parser joins the lines with
+// '\n') must have EVERY line prefixed with ///, or the continuation lines emit
+// as bare, non-comment text and the generated C++ fails to compile.
+TEST(CodegenTest, MultiLineDocCommentStaysComment) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        /// First line.
+        /// Second line.
+        /// Third line.
+        struct Doc {
+            i32 x;
+        }
+    )");
+
+    EXPECT_NE(code.find("/// First line."), std::string::npos);
+    // The bug emitted "Second line." with no /// prefix. Assert the prefixed
+    // form is present and the bare form is not.
+    EXPECT_NE(code.find("/// Second line."), std::string::npos);
+    EXPECT_NE(code.find("/// Third line."), std::string::npos);
+    EXPECT_EQ(code.find("\nSecond line."), std::string::npos);
+}
+
+// song finding 5: an enum used as a struct field calls encode_<Enum> /
+// decode_<Enum>, which must actually be emitted (they were not, so any enum in
+// a struct failed to compile). The enum travels as its underlying integer.
+TEST(CodegenTest, EnumSerializationEmitted) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        enum Status {
+            idle,
+            running
+        }
+        flags Perms {
+            read = 0x01,
+            write = 0x02
+        }
+        struct Job {
+            Status state;
+            Perms perms;
+            Status[] history;
+        }
+    )");
+
+    // Scalar codecs, keyed to the underlying integer (i32 for enum, u32 flags).
+    EXPECT_NE(code.find("void encode_Status(Buffer& buf, Status val)"), std::string::npos);
+    EXPECT_NE(code.find("encode_i32(buf, static_cast<i32>(val));"), std::string::npos);
+    EXPECT_NE(code.find("Status decode_Status(Buffer& buf)"), std::string::npos);
+    EXPECT_NE(code.find("static_cast<Status>(decode_i32(buf))"), std::string::npos);
+    EXPECT_NE(code.find("encode_u32(buf, static_cast<u32>(val));"), std::string::npos);
+    // Array helpers so enum[] fields work too.
+    EXPECT_NE(code.find("encode_array_Status(Buffer& buf"), std::string::npos);
+    EXPECT_NE(code.find("decode_array_Status(Buffer& buf)"), std::string::npos);
+    // The struct's encode actually calls into them.
+    EXPECT_NE(code.find("encode_Status(buf, val.state)"), std::string::npos);
+}
+
 // =============================================================================
 // Service Generation
 // =============================================================================
@@ -604,6 +660,8 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
             Point end;
             f64 length;
             i32[] tags;
+            Operation op;
+            Operation[] ops;
         }
 
         service Calculator {
@@ -615,6 +673,9 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
         // A class exercises the generated notifying setter (non-template, fully
         // compiled here) and the register_<Name> factory template's
         // non-dependent body (register_factory call, kType_, arg decoding).
+        // The multi-line doc checks finding 4: continuation lines stay comments.
+        /// A counter object.
+        /// Second doc line, must remain a comment.
         class Counter {
             i32 value;
             Counter(i32 start);
