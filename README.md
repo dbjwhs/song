@@ -35,7 +35,7 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **Three Transport Modes**: Local pipes, explicit TCP, or zero-config mDNS discovery -- all behind a unified API
 - **TLS Encryption**: Full mbedTLS 4.x integration with certificate and PSK modes, PIMPL-hidden from public API
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
-- **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them. Works over pipes, TCP, HMAC, and TLS. Wired by hand against the runtime, not yet generated from the IDL `stream` modifier (see Known limitations).
+- **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them (or an incremental per-chunk handler). Works over pipes, TCP, HMAC, and TLS. Generated from the IDL `stream` modifier: proxy, `StreamWriter&` interface, and stream dispatcher.
 - **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients over TCP (the pipe path has no transport to push through).
 - **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
@@ -363,13 +363,15 @@ while (reader.next()) {
 
 Streaming works over all transports (pipes, TCP, HMAC, TLS).
 
-Note that streaming is wired by hand against the runtime, as shown above. The
-IDL parser accepts a `stream` modifier on a method, but the code generator does
-not yet emit streaming proxies for it: a `stream` method still generates a
-unary proxy. You register the stream dispatcher and call `call_streaming`
-yourself, on a service id distinct from the unary dispatcher's (the runtime
-resolves stream dispatchers ahead of unary ones per service id, so they must
-not share). See the Known limitations section.
+The example above wires streaming by hand, but you do not have to: a method
+marked `stream` in the IDL is code-generated. Codegen emits a `call_streaming`
+client proxy (with a typed per-chunk handler), a service interface method that
+takes a `StreamWriter&`, and a `dispatch_<Service>_stream` dispatcher, all on a
+second service id `kService_<Service>_Stream` (the runtime resolves stream
+dispatchers ahead of unary ones per service id, so the two cannot share). For
+example, `stream watch(i32 count) -> Tick;` generates a client
+`watch(count, on_chunk)` and a server `virtual void watch(i32 count,
+StreamWriter& writer)`.
 
 ## Cross-Subnet Discovery (Registry)
 
@@ -581,7 +583,6 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 **Known limitations:**
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
 - **mDNS requires platform library** -- Bonjour on macOS (built-in), Avahi on Linux (`libavahi-client-dev`). Both optional; builds without them, discovery tests skip.
-- **IDL `stream` methods are not code-generated** -- The parser accepts the `stream` modifier, but codegen still emits a unary proxy for such a method. Streaming is wired by hand against the runtime (`call_streaming` on the client, `register_stream_dispatcher` on a service id distinct from the unary dispatcher's on the server). The generator does not yet do this for you.
 - **Property push is TCP-only** -- `SubscriptionRegistry` fans `MSG_PROP_NOTIFY` out to subscribed transports over `run_tcp_multi()`. The single-client pipe path (`run()`) has no transport to push through and logs a warning if it receives a subscribe. Calls and subscriptions may share one connection: the client demuxes interleaved notifications from call replies.
 - **Remote objects are creator-scoped, not durably shared** -- The object registry is shared across TCP clients, so a client that already knows an object id can call it. But an object is reference-counted to its *creating* connection and deleted when that connection drops, even if another client still holds the id: there is no reliable handoff, and a client that disconnects and reconnects cannot re-acquire the object it made. Object ids also carry no ownership check, so any client can read, mutate, or release any object by id. Treat a remote object as a view owned by one client for the life of its connection, not a durable shared registry. A refcount-scoped lifetime (survive while any client references it) plus per-object ownership is a known future improvement, not yet done.
 
