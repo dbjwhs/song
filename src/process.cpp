@@ -395,6 +395,50 @@ const std::vector<wire::MethodDescriptor>& ServiceConnection::methods() const {
     return methods_;
 }
 
+void ServiceConnection::dispatch_notification(Buffer& msg) {
+    // msg read position is at the property header (wire header already consumed).
+    auto prop_hdr = wire::decode_property_header(msg);
+    auto it = prop_callbacks_.find({prop_hdr.object_id, prop_hdr.property_id});
+    if (it != prop_callbacks_.end()) {
+        Buffer value;
+        if (msg.remaining() > 0) {
+            value.write(msg.data() + msg.read_pos(), msg.remaining());
+            value.reset_read();
+        }
+        it->second(value);
+    }
+}
+
+Buffer ServiceConnection::recv_reply(u32 seq, int timeout_ms) {
+    // Loop so an unsolicited MSG_PROP_NOTIFY arriving between our request and
+    // its reply is delivered to the subscriber instead of tripping the
+    // sequence-id check and killing the call (song finding 18). Calls and
+    // subscriptions can therefore share one connection.
+    for (;;) {
+        Buffer response;
+        bool received = proc_ ? proc_->receive(response, timeout_ms)
+                              : transport_->receive(response, timeout_ms);
+        if (!received) {
+            throw ServiceError("Service died or timed out");
+        }
+
+        response.reset_read();
+        auto hdr = wire::decode_header_validated(response);
+
+        if (hdr.type == wire::MsgType::prop_notify) {
+            dispatch_notification(response);
+            continue;  // keep waiting for our own reply
+        }
+
+        if (hdr.sequence_id != seq) {
+            throw ProtocolError("Sequence ID mismatch");
+        }
+
+        response.reset_read();
+        return response;
+    }
+}
+
 Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args) {
     // For local connections, check process health
     if (proc_) {
@@ -421,25 +465,10 @@ Buffer ServiceConnection::call(u16 service_id, u16 method_id, const Buffer& args
         transport_->send(call_msg);
     }
 
-    // Wait for response
-    Buffer response;
-    bool received = false;
-    if (proc_) {
-        received = proc_->receive(response, 5000);
-    } else {
-        received = transport_->receive(response, 5000);
-    }
-
-    if (!received) {
-        throw ServiceError("Service died or timed out");
-    }
-
-    // Decode response header
+    // Wait for the reply, transparently dispatching any interleaved property
+    // notifications so a live subscription cannot corrupt this call (finding 18).
+    Buffer response = recv_reply(seq, 5000);
     auto hdr = wire::decode_header_validated(response);
-
-    if (hdr.sequence_id != seq) {
-        throw ProtocolError("Sequence ID mismatch");
-    }
 
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);
@@ -643,17 +672,7 @@ void ServiceConnection::poll_notifications(int timeout_ms) {
     auto hdr = wire::decode_header(msg);
 
     if (hdr.type == wire::MsgType::prop_notify) {
-        auto prop_hdr = wire::decode_property_header(msg);
-        auto it = prop_callbacks_.find({prop_hdr.object_id, prop_hdr.property_id});
-        if (it != prop_callbacks_.end()) {
-            // Remaining data in msg is the property value
-            Buffer value;
-            if (msg.remaining() > 0) {
-                value.write(msg.data() + msg.read_pos(), msg.remaining());
-                value.reset_read();
-            }
-            it->second(value);
-        }
+        dispatch_notification(msg);
     }
 }
 
@@ -697,20 +716,9 @@ wire::ObjectRef ServiceConnection::create_object(u32 type_id, u16 constructor_id
         transport_->send(msg);
     }
 
-    // Wait for response
-    Buffer response;
-    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
-
-    if (!received) {
-        throw ServiceError("Service died or timed out during object creation");
-    }
-
-    // Decode response header
+    // Wait for the reply, dispatching any interleaved notifications (finding 18).
+    Buffer response = recv_reply(seq, 5000);
     auto hdr = wire::decode_header_validated(response);
-
-    if (hdr.sequence_id != seq) {
-        throw ProtocolError("Sequence ID mismatch");
-    }
 
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);
@@ -777,20 +785,9 @@ Buffer ServiceConnection::get_property(u32 type_id, i32 object_id, u16 property_
         transport_->send(msg);
     }
 
-    // Wait for response
-    Buffer response;
-    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
-
-    if (!received) {
-        throw ServiceError("Service died or timed out during property get");
-    }
-
-    // Decode response header
+    // Wait for the reply, dispatching any interleaved notifications (finding 18).
+    Buffer response = recv_reply(seq, 5000);
     auto hdr = wire::decode_header_validated(response);
-
-    if (hdr.sequence_id != seq) {
-        throw ProtocolError("Sequence ID mismatch");
-    }
 
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);
@@ -835,20 +832,9 @@ Buffer ServiceConnection::set_property(u32 type_id, i32 object_id, u16 property_
         transport_->send(msg);
     }
 
-    // Wait for response
-    Buffer response;
-    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
-
-    if (!received) {
-        throw ServiceError("Service died or timed out during property set");
-    }
-
-    // Decode response header
+    // Wait for the reply, dispatching any interleaved notifications (finding 18).
+    Buffer response = recv_reply(seq, 5000);
     auto hdr = wire::decode_header_validated(response);
-
-    if (hdr.sequence_id != seq) {
-        throw ProtocolError("Sequence ID mismatch");
-    }
 
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);
@@ -893,20 +879,9 @@ Buffer ServiceConnection::call_object(u32 type_id, i32 object_id, u16 method_id,
         transport_->send(msg);
     }
 
-    // Wait for response
-    Buffer response;
-    bool received = proc_ ? proc_->receive(response, 5000) : transport_->receive(response, 5000);
-
-    if (!received) {
-        throw ServiceError("Service died or timed out during object method call");
-    }
-
-    // Decode response header
+    // Wait for the reply, dispatching any interleaved notifications (finding 18).
+    Buffer response = recv_reply(seq, 5000);
     auto hdr = wire::decode_header_validated(response);
-
-    if (hdr.sequence_id != seq) {
-        throw ProtocolError("Sequence ID mismatch");
-    }
 
     if (hdr.type == wire::MsgType::error) {
         u16 code = decode_u16(response);

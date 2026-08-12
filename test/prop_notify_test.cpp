@@ -193,6 +193,76 @@ TEST(PropNotifyE2ETest, SubscribeAndReceiveNotification) {
     server.join();
 }
 
+// song finding 18: a call and an active subscription share one connection. If
+// an unsolicited prop_notify lands between a request and its reply, the reply
+// path must dispatch the notify and keep waiting -- not trip the sequence-id
+// check and kill the call. The server here deterministically pushes a
+// notification BEFORE the call's result to force exactly that interleaving.
+TEST(PropNotifyE2ETest, NotificationDoesNotCorruptInFlightCall) {
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener]() {
+        auto client = listener.accept(5000);
+        if (!client) return;
+        try {
+            Buffer init_msg = wire::create_init_message(
+                wire::kFirstVersion, wire::kCurrentVersion,
+                static_cast<u32>(wire::Capability::properties));
+            client->send(init_msg);
+
+            // Read until the client's call arrives (skip init_ack + subscribe).
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) return;
+                auto hdr = wire::decode_header(msg);
+                if (hdr.type == wire::MsgType::call) {
+                    // Interleave: push a notification, THEN the call's result.
+                    Buffer nval;
+                    encode_i32(nval, 42);
+                    client->send(wire::create_property_notify_message(100, -1, 1, nval));
+
+                    Buffer rpayload;
+                    encode_i32(rpayload, 777);
+                    client->send(wire::create_result_message(hdr.sequence_id, rpayload));
+                    break;
+                }
+                // init_ack / prop_subscribe: keep reading.
+            }
+            Buffer tail;
+            client->receive(tail, 500);  // let the client finish before close
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    int notified = 0;
+    i32 notified_value = 0;
+    conn.subscribe_property(100, -1, 1, [&](const Buffer& value) {
+        Buffer copy;
+        copy.write(value.data(), value.size());
+        copy.reset_read();
+        notified_value = decode_i32(copy);
+        ++notified;
+    });
+
+    // Before the fix, the interleaved prop_notify made this throw
+    // ProtocolError("Sequence ID mismatch").
+    Buffer result = conn.call(1, 1, Buffer{});
+    i32 result_value = decode_i32(result);
+
+    EXPECT_EQ(result_value, 777);     // the call still received its own reply
+    EXPECT_EQ(notified, 1);           // and the notification was delivered
+    EXPECT_EQ(notified_value, 42);
+
+    listener.close();
+    server.join();
+}
+
 TEST(PropNotifyE2ETest, UnsubscribeStopsNotifications) {
     TcpListener listener;
     listener.listen(0);

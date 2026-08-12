@@ -108,6 +108,18 @@ class ServiceConnection {
     // Property notification callbacks: key = (object_id, property_id)
     std::map<std::pair<i32, u16>, std::function<void(const Buffer&)>> prop_callbacks_;
 
+    // Receive the reply to request `seq`, transparently dispatching any
+    // interleaved MSG_PROP_NOTIFY to prop_callbacks_ so an active subscription
+    // cannot corrupt an in-flight call (song finding 18). Returns the response
+    // buffer with read position at 0 (header not yet consumed); its type is
+    // result or error. Throws ServiceError on timeout/disconnect.
+    Buffer recv_reply(u32 seq, int timeout_ms);
+
+    // Dispatch one MSG_PROP_NOTIFY. `msg` read position must be just past the
+    // wire header (at the property header). Shared by recv_reply and
+    // poll_notifications.
+    void dispatch_notification(Buffer& msg);
+
 public:
     /// Default constructor
     ServiceConnection() = default;

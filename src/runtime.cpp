@@ -4,6 +4,7 @@
 #include "song/runtime.hpp"
 #include "song/transport.hpp"
 #include "song/discovery.hpp"
+#include "song/logging.hpp"
 #include <unistd.h>
 #include <csignal>
 #include <cstdlib>
@@ -389,6 +390,14 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
             );
             write_all(write_fd, error_msg.data(), error_msg.size());
         }
+    } else if (hdr.type == wire::MsgType::prop_subscribe ||
+               hdr.type == wire::MsgType::prop_unsubscribe) {
+        // Property push fans MSG_PROP_NOTIFY out to subscriber Transports; the
+        // pipe path (run()) has only a raw stdout fd and no subscriber model,
+        // so it cannot honor subscriptions. Say so loudly rather than dropping
+        // the message silently (song finding 17). Serve over --tcp for push.
+        Log::warn("prop_subscribe/unsubscribe ignored: property push is "
+                  "unsupported over the pipe transport; serve over --tcp");
     }
 }
 
