@@ -310,6 +310,19 @@ std::string CodeGenerator::generate_service_ids(const Namespace& ns) {
     for (const auto& s : ns.services) {
         out << "constexpr u16 kService_" << s.name << " = " << service_id++ << ";\n";
 
+        // A service with any `stream` method gets a second service id for its
+        // streaming dispatcher. The runtime resolves stream dispatchers ahead
+        // of unary ones per service id, so the two cannot share an id (song
+        // finding 6 / wishlist 3). Method ids stay global across both.
+        bool has_stream = false;
+        for (const auto& m : s.methods) {
+            if (m.is_stream) { has_stream = true; break; }
+        }
+        if (has_stream) {
+            out << "constexpr u16 kService_" << s.name << "_Stream = "
+                << service_id++ << ";\n";
+        }
+
         u16 method_id = 1;
         for (const auto& m : s.methods) {
             out << "constexpr u16 kMethod_" << s.name << "_" << m.name
@@ -372,6 +385,34 @@ std::string CodeGenerator::generate_service_proxy(const ServiceDef& s) {
             emit_doc(out, m.doc, "    ");
         }
 
+        if (m.is_stream) {
+            // Streaming method (song finding 6): the declared return type is the
+            // element type of each chunk. on_chunk fires per decoded chunk as it
+            // arrives, over the service's _Stream id. Size chunk_timeout_ms to the
+            // operation, not the wire (see call_streaming).
+            out << "    void " << m.name << "(";
+            out << generate_method_params(m.params);
+            if (!m.params.empty()) out << ", ";
+            out << "const std::function<void(" << return_type << "&)>& on_chunk";
+            out << ", int chunk_timeout_ms = 30000) {\n";
+
+            out << "        Buffer req;\n";
+            for (const auto& p : m.params) {
+                out << "        " << encode_call(p.type, p.name, "req") << ";\n";
+            }
+
+            out << "        m_conn.call_streaming(kService_" << s.name
+                << "_Stream, kMethod_" << s.name << "_" << m.name << ", req,\n";
+            out << "            [&on_chunk](Buffer& song_chunk) {\n";
+            out << "                " << return_type << " value = "
+                << decode_call(m.return_type, "song_chunk") << ";\n";
+            out << "                on_chunk(value);\n";
+            out << "            },\n";
+            out << "            chunk_timeout_ms);\n";
+            out << "    }\n\n";
+            continue;
+        }
+
         out << "    " << return_type << " " << m.name << "(";
         out << generate_method_params(m.params);
         out << ") {\n";
@@ -419,6 +460,16 @@ std::string CodeGenerator::generate_service_interface(const ServiceDef& s) {
             emit_doc(out, m.doc, "    ");
         }
 
+        if (m.is_stream) {
+            // Streaming method: the implementation writes chunks to the
+            // StreamWriter instead of returning a value (song finding 6).
+            out << "    virtual void " << m.name << "(";
+            out << generate_method_params(m.params);
+            if (!m.params.empty()) out << ", ";
+            out << "StreamWriter& writer) = 0;\n";
+            continue;
+        }
+
         out << "    virtual " << return_type << " " << m.name << "(";
         out << generate_method_params(m.params);
         out << ") = 0;\n";
@@ -439,7 +490,10 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
         << "u16 method_id, Buffer& request, Buffer& response) {\n";
     out << "    switch (method_id) {\n";
 
+    bool has_stream = false;
     for (const auto& m : s.methods) {
+        if (m.is_stream) { has_stream = true; continue; }  // stream dispatcher below
+
         out << "        case kMethod_" << s.name << "_" << m.name << ": {\n";
 
         // Decode parameters from request buffer
@@ -476,6 +530,38 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
     out << "            throw std::runtime_error(\"Unknown method ID: \" + std::to_string(method_id));\n";
     out << "    }\n";
     out << "}\n";
+
+    // Streaming dispatcher (song finding 6): streaming methods write chunks to a
+    // StreamWriter and are registered on kService_<Name>_Stream, distinct from
+    // the unary dispatcher above. Register with runtime.register_stream_dispatcher.
+    if (has_stream) {
+        out << "\ninline void dispatch_" << s.name << "_stream(I" << s.name
+            << "& impl, u16 method_id, Buffer& request, StreamWriter& writer) {\n";
+        out << "    switch (method_id) {\n";
+
+        for (const auto& m : s.methods) {
+            if (!m.is_stream) continue;
+
+            out << "        case kMethod_" << s.name << "_" << m.name << ": {\n";
+            for (const auto& p : m.params) {
+                out << "            " << type_to_cpp(p.type) << " " << p.name
+                    << " = " << decode_call(p.type, "request") << ";\n";
+            }
+            out << "            impl." << m.name << "(";
+            for (size_t i = 0; i < m.params.size(); ++i) {
+                out << m.params[i].name << ", ";
+            }
+            out << "writer);\n";
+            out << "            break;\n";
+            out << "        }\n";
+        }
+
+        out << "        default:\n";
+        out << "            throw std::runtime_error(\"Unknown streaming method ID: \" "
+               "+ std::to_string(method_id));\n";
+        out << "    }\n";
+        out << "}\n";
+    }
 
     return out.str();
 }
@@ -935,7 +1021,8 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
     out << "#include <string>\n";
     out << "#include <vector>\n";
     out << "#include <optional>\n";
-    out << "#include <stdexcept>\n\n";
+    out << "#include <stdexcept>\n";
+    out << "#include <functional>\n\n";
 
     out << "namespace song::" << ns.name << " {\n\n";
     out << "using namespace song;\n\n";

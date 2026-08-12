@@ -186,6 +186,46 @@ TEST(CodegenTest, FlagsEnum) {
     EXPECT_NE(code.find("execute = 4"), std::string::npos);
 }
 
+// song finding 6: a `stream` method must generate a streaming proxy, not a
+// unary one -- a client call_streaming with a typed chunk handler, a
+// StreamWriter-based service interface, and a separate stream dispatcher on a
+// distinct service id. Previously `is_stream` was parsed and ignored.
+TEST(CodegenTest, StreamMethodGeneratesStreamingProxy) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        struct Tick {
+            i32 seq;
+        }
+        service Feed {
+            poll(i32 x) -> i32;
+            stream watch(i32 count) -> Tick;
+        }
+    )");
+
+    // A distinct stream service id; unary and stream methods keep global ids.
+    EXPECT_NE(code.find("kService_Feed = 1"), std::string::npos);
+    EXPECT_NE(code.find("kService_Feed_Stream = 2"), std::string::npos);
+
+    // Client proxy: typed chunk handler over call_streaming on the _Stream id.
+    EXPECT_NE(code.find("void watch(i32 count, const std::function<void(Tick&)>& on_chunk"),
+              std::string::npos);
+    EXPECT_NE(code.find("m_conn.call_streaming(kService_Feed_Stream, kMethod_Feed_watch"),
+              std::string::npos);
+    EXPECT_NE(code.find("Tick value = decode_Tick(song_chunk)"), std::string::npos);
+
+    // Server interface: streaming method takes a StreamWriter, returns void.
+    EXPECT_NE(code.find("virtual void watch(i32 count, StreamWriter& writer) = 0;"),
+              std::string::npos);
+
+    // Separate stream dispatcher; the unary dispatcher does NOT dispatch watch.
+    EXPECT_NE(code.find("void dispatch_Feed_stream(IFeed& impl, u16 method_id, "
+                        "Buffer& request, StreamWriter& writer)"), std::string::npos);
+    EXPECT_NE(code.find("impl.watch(count, writer)"), std::string::npos);
+
+    // The unary proxy for `poll` still uses plain call().
+    EXPECT_NE(code.find("m_conn.call(kService_Feed, kMethod_Feed_poll"), std::string::npos);
+}
+
 // song finding 4: a multi-line /// doc comment (the parser joins the lines with
 // '\n') must have EVERY line prefixed with ///, or the continuation lines emit
 // as bare, non-comment text and the generated C++ fails to compile.
@@ -668,6 +708,10 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
             add(i32 a, i32 b) -> i32;
             distance(Point a, Point b) -> f64;
             batch_add(i32[] values) -> i32;
+            // Streaming method (finding 6): compile-checks the generated
+            // call_streaming proxy, the StreamWriter interface, and the
+            // separate stream dispatcher on kService_Calculator_Stream.
+            stream ticker(i32 count) -> Point;
         }
 
         // A class exercises the generated notifying setter (non-template, fully
