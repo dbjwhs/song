@@ -36,6 +36,7 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **TLS Encryption**: Full mbedTLS 4.x integration with certificate and PSK modes, PIMPL-hidden from public API
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
 - **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them (or an incremental per-chunk handler). Works over pipes, TCP, HMAC, and TLS. Generated from the IDL `stream` modifier: proxy, `StreamWriter&` interface, and stream dispatcher.
+- **Generated Enum Names**: Every IDL enum gets an inline `<Enum>_name()` in the generated header, returning the item name as a string literal (or `"<unknown>"` for a value outside the enum) so enums print as names instead of integers.
 - **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients over TCP (the pipe path has no transport to push through).
 - **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
@@ -153,6 +154,33 @@ service Calculator {
 # Generates: calculator_Calculator_impl.cpp (stub implementation)
 # Re-running appends sync report showing new/removed/modified methods
 ```
+
+Every enum in the IDL also gets a string helper in the generated header:
+
+```song
+enum Status { idle, running, stopped }
+```
+
+```cpp
+// Generated alongside the enum definition and its encode/decode helpers:
+inline const char* Status_name(Status v) {
+    switch (v) {
+        case Status::idle: return "idle";
+        case Status::running: return "running";
+        case Status::stopped: return "stopped";
+    }
+    return "<unknown>";
+}
+
+std::cout << "state now " << Status_name(job.state) << "\n";  // "running", not "1"
+```
+
+The name is the IDL item name verbatim. A value that is not one of the declared
+items returns `"<unknown>"`, which is what a flags enum yields for any combined
+value: the helper maps single declared values, it does not decompose bitmasks.
+Items that alias an existing value are skipped, since only one of them could be
+recovered from the value anyway. This is emitted by the default single-header
+output; `--split` types headers do not carry it yet.
 
 ### 3. Generate Python Client (Optional)
 
