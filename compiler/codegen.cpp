@@ -2,6 +2,7 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "codegen.hpp"
+#include <algorithm>
 #include <sstream>
 #include <cstdint>
 #include <cctype>
@@ -234,6 +235,33 @@ std::string generate_enum_decode(const EnumDef& e) {
     const char* w = enum_wire_suffix(e);
     out << "inline " << e.name << " decode_" << e.name << "(Buffer& buf) {\n";
     out << "    return static_cast<" << e.name << ">(decode_" << w << "(buf));\n";
+    out << "}\n";
+    return out.str();
+}
+
+// Enum to string. Debug/logging output for an enum field used to mean printing
+// a bare integer; this maps the value back to the item name it was written as.
+// Duplicate values (aliases) are skipped so the generated switch stays legal,
+// and anything out of range falls through to "<unknown>".
+std::string generate_enum_name(const EnumDef& e) {
+    std::ostringstream out;
+    out << "inline const char* " << e.name << "_name(" << e.name << " v) {\n";
+    out << "    switch (v) {\n";
+
+    std::vector<int64_t> seen;
+    int64_t next = 0;
+    for (const auto& item : e.items) {
+        int64_t value = item.value.has_value() ? item.value.value() : next;
+        next = value + 1;
+        if (std::find(seen.begin(), seen.end(), value) != seen.end()) {
+            continue;
+        }
+        seen.push_back(value);
+        out << "        case " << e.name << "::" << item.name << ": return \"" << item.name << "\";\n";
+    }
+
+    out << "    }\n";
+    out << "    return \"<unknown>\";\n";
     out << "}\n";
     return out.str();
 }
@@ -1064,6 +1092,7 @@ std::string CodeGenerator::generate_header(const Namespace& ns) {
     // decode_<Enum>. Emit them (and array helpers) before structs, which may
     // reference them. Enums cannot nest a struct, so no forward decls needed.
     for (const auto& e : ns.enums) {
+        out << generate_enum_name(e) << "\n";
         out << generate_enum_encode(e) << "\n";
         out << generate_enum_decode(e) << "\n";
         out << generate_enum_array_encode(e) << "\n";
