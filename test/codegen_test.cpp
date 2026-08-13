@@ -282,6 +282,35 @@ TEST(CodegenTest, EnumSerializationEmitted) {
     EXPECT_NE(code.find("encode_Status(buf, val.state)"), std::string::npos);
 }
 
+// Enum to string: every enum gets an inline <Enum>_name() so an enum value can
+// be logged as the item name it was declared as instead of a bare integer.
+TEST(CodegenTest, EnumNameEmitted) {
+    std::string code = parse_and_generate(R"(
+        namespace test;
+        enum Status {
+            idle,
+            running
+        }
+        flags Perms {
+            read = 0x01,
+            write = 0x02
+        }
+    )");
+
+    // Plain enum.
+    EXPECT_NE(code.find("inline const char* Status_name(Status v)"), std::string::npos);
+    EXPECT_NE(code.find("case Status::idle: return \"idle\";"), std::string::npos);
+    EXPECT_NE(code.find("case Status::running: return \"running\";"), std::string::npos);
+
+    // Flags enum gets the same helper, keyed to its declared values.
+    EXPECT_NE(code.find("inline const char* Perms_name(Perms v)"), std::string::npos);
+    EXPECT_NE(code.find("case Perms::read: return \"read\";"), std::string::npos);
+    EXPECT_NE(code.find("case Perms::write: return \"write\";"), std::string::npos);
+
+    // Anything outside the enum falls through to a fixed sentinel.
+    EXPECT_NE(code.find("return \"<unknown>\";"), std::string::npos);
+}
+
 // =============================================================================
 // Service Generation
 // =============================================================================
@@ -750,8 +779,14 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
     {
         std::ofstream sf(source_path);
         ASSERT_TRUE(sf.is_open());
+        // The strcmp call type-checks the generated Operation_name() helper,
+        // so the enum-to-string emitter is compiled here too.
         sf << "#include \"song_codegen_test.hpp\"\n"
-           << "int main() { return 0; }\n";
+           << "#include <cstring>\n"
+           << "int main() {\n"
+           << "    return std::strcmp(song::calculator::Operation_name(\n"
+           << "        song::calculator::Operation::Multiply), \"Multiply\");\n"
+           << "}\n";
     }
 
     // Include dir and compiler come from CMake (SONG_SOURCE_DIR /
