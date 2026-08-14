@@ -26,6 +26,29 @@ CalculatorProxy calc(conn);
 std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 ```
 
+## Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Components](#components)
+- [Building](#building)
+- [Quick Start](#quick-start)
+- [Network Distribution](#network-distribution)
+- [Security](#security)
+- [Streaming](#streaming)
+- [Cross-Subnet Discovery (Registry)](#cross-subnet-discovery-registry)
+- [Integration Test Suite (Sing)](#integration-test-suite-sing)
+- [Scaffold Sync](#scaffold-sync)
+- [Status](#status)
+- [Code Quality](#code-quality)
+- [Performance](#performance)
+- [Wire Protocol Design Decisions](#wire-protocol-design-decisions)
+- [Design Philosophy](#design-philosophy)
+- [Cross-Language Wire Compatibility](#cross-language-wire-compatibility)
+- [Platform Support & Limitations](#platform-support--limitations)
+- [References](#references)
+- [License](#license)
+
 ## Features
 
 - **Zero Dependencies**: No protobuf, no gRPC, no reflection library. Just POSIX and platform crypto.
