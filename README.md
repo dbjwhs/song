@@ -33,6 +33,7 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - [Components](#components)
 - [Building](#building)
 - [Quick Start](#quick-start)
+- [IDL Reference](#idl-reference)
 - [Network Distribution](#network-distribution)
 - [Security](#security)
 - [Streaming](#streaming)
@@ -270,6 +271,138 @@ int main() {
     std::cout << "17 / 5 = " << div.quotient << " r " << div.remainder << "\n";
 }
 ```
+
+## IDL Reference
+
+A `.song` file is one `namespace` declaration followed by any number of
+definitions, in any order. `//` starts a comment and `///` starts a doc comment,
+which is carried through into the generated C++ and Python.
+
+### Primitive Types
+
+| IDL | C++ | Python |
+|-----|-----|--------|
+| `bool` | `bool` | `bool` |
+| `i8` `i16` `i32` `i64` | `i8` `i16` `i32` `i64` | `int` |
+| `u8` `u16` `u32` `u64` | `u8` `u16` `u32` `u64` | `int` |
+| `f32` `f64` | `f32` `f64` | `float` |
+| `string` | `std::string` | `str` |
+| `bytes` | `std::vector<std::byte>` | `bytes` |
+| `void` | `void` | `None` |
+
+Two modifiers apply to any type, primitive or user-defined:
+
+| Form | C++ | Python |
+|------|-----|--------|
+| `T[]` | `std::vector<T>` | `list[T]` |
+| `T[][]` | `std::vector<std::vector<T>>` | `list[list[T]]` |
+| `T?` | `std::optional<T>` | `Optional[T]` |
+
+### Structs
+
+Value types. Fields are encoded in declaration order, with no tags and no
+padding on the wire.
+
+```song
+struct Quote {
+    /// Doc comments land on the generated field.
+    string symbol;
+    i64 price_cents;
+    string[] tags;      // array field
+    i64? last_trade;    // optional field
+}
+```
+
+Each struct gets `encode_<Name>()` and `decode_<Name>()` helpers in the
+generated header, plus array variants used when the struct appears as `T[]`.
+
+### Enums and Flags
+
+`enum` generates an `i32`-backed `enum class`; `flags` generates a `u32`-backed
+one. Items auto-number from 0, or from the last explicit value plus one. The
+resolver rejects duplicate item names and duplicate values.
+
+```song
+enum Status { idle, running, stopped }              // 0, 1, 2
+enum Level { low = 1, high = 10 }                   // explicit values
+flags Permissions { read = 1, write = 2, exec = 4 } // u32-backed
+```
+
+Every enum also gets an inline `<Enum>_name()` string helper (see
+[Quick Start](#2-generate-code)).
+
+### Services
+
+A stateless RPC interface. Each method is `name(params) -> return_type;`, and
+`void` is a valid return type. The `stream` modifier marks a server-push method
+(see [Streaming](#streaming)).
+
+```song
+service StockTicker {
+    get_quote(string symbol) -> Quote;
+    get_quotes(string[] symbols) -> Quote[];
+    list_symbols() -> string[];
+    stream watch(i32 count) -> Quote;
+}
+```
+
+Generates `kService_<Name>`, a `<Name>Proxy` client, an `I<Name>` interface, and
+a `dispatch_<Name>()` server dispatcher.
+
+### Classes
+
+Reference types with remote lifetime. A class holds properties, constructors,
+and methods. A member written `TypeName name;` is a property; `readonly` makes
+it get-only. A member whose name matches the class is a constructor.
+
+```song
+class Counter {
+    i32 value;              // read/write property
+    readonly i64 created;   // get-only property
+    Counter();              // constructors (overloads allowed)
+    Counter(i32 start);
+    increment() -> void;
+    add(i32 delta) -> i32;
+}
+```
+
+Generates `kType_<Name>`, `kProp_<Name>_<prop>` ids, a `<Name>Proxy` client, and
+a `<Name>Base` server class with `prop_get`, `prop_set`, and `dispatch`. Classes
+may inherit with `class Derived : Base`, which chains all three to the base.
+
+### Errors
+
+An `error` type declares a payload, and a method may declare which ones it
+raises with a `throws` clause listing one or more error types.
+
+```song
+error NotFound {
+    string key;
+}
+
+service Store {
+    get(string key) -> string throws NotFound;
+}
+```
+
+### Accepted but Not Yet Generated
+
+The parser and resolver run ahead of the code generators in a few places. These
+forms compile without complaint and are fully validated, but emit nothing:
+
+- **`error` types and `throws` clauses**: validated (a `throws` name must resolve
+  to an `error` type) but neither the C++ nor the Python generator emits them.
+  Failures currently travel as the wire protocol's error message, not as a
+  generated type.
+- **Struct inheritance**: `struct S : Base` is checked (the base must be a
+  struct, with cycles and field shadowing rejected), but the generated struct
+  does not inherit and base fields are not encoded. Class inheritance is
+  generated; struct inheritance is not.
+- **The `optional` method modifier**: accepted on service and class methods, no
+  effect on output. Optional *types* (`T?`) on fields, parameters, and returns
+  are fully generated.
+- **`T[]?`**: generates as `std::vector<T>`. The array modifier wins and the
+  optional is dropped rather than nesting.
 
 ## Network Distribution
 
