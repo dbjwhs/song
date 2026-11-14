@@ -228,202 +228,6 @@ void ServiceRuntime::release_connection_objects(std::unordered_set<i32>& tracked
     tracked.clear();
 }
 
-void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
-                                       int write_fd,
-                                       std::unordered_set<i32>& tracked_objects) {
-    if (hdr.type == wire::MsgType::call) {
-        // Decode method call header
-        auto [service_id, method_id] = wire::decode_method_call_header(payload);
-
-        // Streaming methods go to the stream dispatcher (see routes_to_stream)
-        auto stream_it = stream_dispatchers_.find(service_id);
-        if (stream_it != stream_dispatchers_.end() &&
-            routes_to_stream(service_id, method_id)) {
-            StreamWriter writer(write_fd, hdr.sequence_id);
-            try {
-                stream_it->second(method_id, payload, writer);
-                // writer destructor sends stream_end
-            } catch (const std::exception& e) {
-                // The error reply terminates the stream. Suppress the
-                // destructor's stream_end: sent during unwind it would
-                // reach the client first, which stops reading at
-                // stream_end and would never see the error (a failed
-                // stream indistinguishable from a clean empty one).
-                writer.abort();
-                Buffer error_msg = wire::create_error_message(
-                    hdr.sequence_id,
-                    ErrorCode::unknown_method,
-                    e.what()
-                );
-                write_all(write_fd, error_msg.data(), error_msg.size());
-            }
-            return;
-        }
-
-        // Find regular dispatcher
-        auto it = dispatchers_.find(service_id);
-        if (it == dispatchers_.end()) {
-            // Unknown service - send error
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::unknown_service,
-                "Unknown service ID"
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-            return;
-        }
-
-        // Dispatch to service
-        Buffer response;
-        try {
-            it->second(method_id, payload, response);
-
-            // Send result
-            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(write_fd, result_msg.data(), result_msg.size());
-        } catch (const std::exception& e) {
-            // Send error
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::unknown_method,
-                e.what()
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-        }
-    } else if (hdr.type == wire::MsgType::create) {
-        // Object creation
-        auto create_hdr = wire::decode_object_create_header(payload);
-
-        Buffer response;
-        try {
-            // Create object using factory
-            i32 object_id = object_registry_.create_object(
-                create_hdr.type_id, create_hdr.constructor_id, payload);
-
-            // Track this object for cleanup on disconnect
-            tracked_objects.insert(object_id);
-
-            // Send object reference as result
-            wire::ObjectRef ref{create_hdr.type_id, object_id};
-            wire::encode_object_ref(response, ref);
-
-            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(write_fd, result_msg.data(), result_msg.size());
-        } catch (const std::exception& e) {
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::object_creation_failed,
-                e.what()
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-        }
-    } else if (hdr.type == wire::MsgType::release) {
-        // Object release (fire-and-forget)
-        auto release_hdr = wire::decode_object_release_header(payload);
-        object_registry_.release(release_hdr.object_id);
-        tracked_objects.erase(release_hdr.object_id);
-        // No response for release
-    } else if (hdr.type == wire::MsgType::prop_get) {
-        // Property get
-        auto prop_hdr = wire::decode_property_header(payload);
-
-        Buffer response;
-        try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
-            if (!obj) {
-                Buffer error_msg = wire::create_error_message(
-                    hdr.sequence_id,
-                    ErrorCode::object_not_found,
-                    "Object not found"
-                );
-                write_all(write_fd, error_msg.data(), error_msg.size());
-                return;
-            }
-
-            obj->prop_get(prop_hdr.property_id, response);
-
-            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(write_fd, result_msg.data(), result_msg.size());
-        } catch (const std::exception& e) {
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::property_error,
-                e.what()
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-        }
-    } else if (hdr.type == wire::MsgType::prop_set) {
-        // Property set
-        auto prop_hdr = wire::decode_property_header(payload);
-
-        Buffer response;
-        try {
-            Object* obj = object_registry_.get(prop_hdr.object_id);
-            if (!obj) {
-                Buffer error_msg = wire::create_error_message(
-                    hdr.sequence_id,
-                    ErrorCode::object_not_found,
-                    "Object not found"
-                );
-                write_all(write_fd, error_msg.data(), error_msg.size());
-                return;
-            }
-
-            obj->prop_set(prop_hdr.property_id, payload, response);
-
-            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(write_fd, result_msg.data(), result_msg.size());
-        } catch (const std::exception& e) {
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::property_error,
-                e.what()
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-        }
-    } else if (hdr.type == wire::MsgType::object_call) {
-        // Object method call -> Object::dispatch (distinct from a plain
-        // service call: the payload is an ObjectMethodHeader, not a
-        // MethodCallHeader). Without this branch the frame decoded as a
-        // service call and mis-dispatched into an unrelated service.
-        auto method_hdr = wire::decode_object_method_header(payload);
-
-        Buffer response;
-        try {
-            Object* obj = object_registry_.get(method_hdr.object_id);
-            if (!obj) {
-                Buffer error_msg = wire::create_error_message(
-                    hdr.sequence_id,
-                    ErrorCode::object_not_found,
-                    "Object not found"
-                );
-                write_all(write_fd, error_msg.data(), error_msg.size());
-                return;
-            }
-
-            obj->dispatch(method_hdr.method_id, payload, response);
-
-            Buffer result_msg = wire::create_result_message(hdr.sequence_id, response);
-            write_all(write_fd, result_msg.data(), result_msg.size());
-        } catch (const std::exception& e) {
-            Buffer error_msg = wire::create_error_message(
-                hdr.sequence_id,
-                ErrorCode::unknown_method,
-                e.what()
-            );
-            write_all(write_fd, error_msg.data(), error_msg.size());
-        }
-    } else if (hdr.type == wire::MsgType::prop_subscribe ||
-               hdr.type == wire::MsgType::prop_unsubscribe) {
-        // Property push fans MSG_PROP_NOTIFY out to subscriber Transports; the
-        // pipe path (run()) has only a raw stdout fd and no subscriber model,
-        // so it cannot honor subscriptions. Say so loudly rather than dropping
-        // the message silently (song finding 17). Serve over --tcp for push.
-        Log::warn("prop_subscribe/unsubscribe ignored: property push is "
-                  "unsupported over the pipe transport; serve over --tcp");
-    }
-}
-
 void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
                                    Transport& transport,
                                    std::unordered_set<i32>& tracked_objects) {
@@ -695,6 +499,13 @@ void ServiceRuntime::client_loop(Transport& transport) {
 
     // Track objects created by this connection for cleanup on disconnect
     std::unordered_set<i32> tracked_objects;
+    SubscriptionSet subscriptions;
+
+    // Replies and property notifications go out through a Transport over
+    // stdout, so the pipe path shares one dispatch path with TCP and a pipe
+    // client can subscribe to property changes like any other. The loop
+    // below still does its own reads; this transport is only written to.
+    PipeTransport transport(Pipe(-1, STDOUT_FILENO), Pipe(STDIN_FILENO, -1));
 
     // Main loop
     for (;;) {
@@ -747,7 +558,13 @@ void ServiceRuntime::client_loop(Transport& transport) {
         }
 
         // Handle message
-        handle_message_fd(hdr, payload, STDOUT_FILENO, tracked_objects);
+        try {
+            handle_message(hdr, payload, transport, tracked_objects, subscriptions);
+        } catch (const ServiceError&) {
+            // A reply could not be written: the parent is gone.
+            release_connection_objects(tracked_objects);
+            std::exit(0);
+        }
     }
 }
 

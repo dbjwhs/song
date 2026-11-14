@@ -23,3 +23,8 @@ target_include_directories(crash_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_executable(registry_service registry/registry_service.cpp)
 target_link_libraries(registry_service song)
 target_include_directories(registry_service PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+# Property service (object with a notifying property, served over pipes)
+add_executable(props_service props/props_service.cpp)
+target_link_libraries(props_service song)
+target_include_directories(props_service PRIVATE ${CMAKE_SOURCE_DIR}/include)

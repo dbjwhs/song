@@ -5,6 +5,8 @@
 #include <song/song.hpp>
 #include <thread>
 #include <atomic>
+#include <filesystem>
+#include <vector>
 
 using namespace song;
 
@@ -314,4 +316,71 @@ TEST(PropNotifyE2ETest, UnsubscribeStopsNotifications) {
 
     listener.close();
     server.join();
+}
+
+// Property push over the pipe transport (savannah finding 17). run() used to
+// drop prop_subscribe because the pipe path had no Transport to push through;
+// it now shares the TCP dispatch path, so a pipe client subscribes like any
+// other. The notification for a set arrives interleaved with the set's own
+// reply and must reach the callback.
+TEST(PropNotifyE2ETest, PipeClientReceivesPropertyPush) {
+    constexpr u32 kType_Counter = 100;
+    constexpr u16 kProp_value = 1;
+
+    std::filesystem::path base = std::filesystem::current_path();
+    std::filesystem::path service_path;
+    for (const auto& candidate : {base / "examples" / "props_service",
+                                  base / ".." / "examples" / "props_service",
+                                  base.parent_path() / "examples" / "props_service"}) {
+        if (std::filesystem::exists(candidate)) {
+            service_path = candidate;
+            break;
+        }
+    }
+    if (service_path.empty()) {
+        GTEST_SKIP() << "props_service not found";
+    }
+
+    ServiceManager mgr;
+    mgr.register_service("props", service_path.string(), 1);
+    ServiceConnection conn = mgr.connect("props");
+
+    Buffer ctor_args;
+    wire::ObjectRef ref = conn.create_object(kType_Counter, 0, ctor_args);
+    ASSERT_NE(ref.object_id, 0);
+
+    std::vector<i32> pushed;
+    conn.subscribe_property(kType_Counter, ref.object_id, kProp_value,
+                            [&pushed](const Buffer& value) {
+        Buffer copy;
+        copy.write(value.data(), value.size());
+        copy.reset_read();
+        pushed.push_back(decode_i32(copy));
+    });
+
+    for (i32 ndx = 1; ndx <= 3; ++ndx) {
+        Buffer value;
+        encode_i32(value, ndx * 7);
+        Buffer stored = conn.set_property(kType_Counter, ref.object_id, kProp_value, value);
+        EXPECT_EQ(decode_i32(stored), ndx * 7);
+    }
+
+    ASSERT_EQ(pushed.size(), 3u);
+    EXPECT_EQ(pushed[0], 7);
+    EXPECT_EQ(pushed[1], 14);
+    EXPECT_EQ(pushed[2], 21);
+
+    // After unsubscribe a set still succeeds and pushes nothing.
+    conn.unsubscribe_property(kType_Counter, ref.object_id, kProp_value);
+    Buffer value;
+    encode_i32(value, 99);
+    conn.set_property(kType_Counter, ref.object_id, kProp_value, value);
+    try {
+        conn.poll_notifications(100);
+    } catch (const ServiceError&) {
+        // Nothing arrived: a quiet poll reports its timeout by throwing.
+    }
+    EXPECT_EQ(pushed.size(), 3u);
+
+    conn.release_object(kType_Counter, ref.object_id);
 }

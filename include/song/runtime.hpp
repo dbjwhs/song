@@ -210,9 +210,6 @@ private:
     bool routes_to_stream(u16 service_id, u16 method_id) const;
 
     void send_init_confirmation_fd(int fd);
-    void handle_message_fd(const wire::Header& hdr, Buffer& payload,
-                          int write_fd,
-                          std::unordered_set<i32>& tracked_objects);
     void client_loop(Transport& transport);
 };
 

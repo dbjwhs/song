@@ -61,7 +61,7 @@ std::cout << calc.add(5, 3) << "\n";   // → 8 (type-safe RPC call)
 - **HMAC-SHA256 Security**: Constant-time verification, transparent decorator over any transport, platform-adaptive crypto (CommonCrypto/OpenSSL)
 - **Streaming RPC**: Server-side `StreamWriter` sends incremental chunks, client-side `StreamReader` collects them (or an incremental per-chunk handler). Works over pipes, TCP, HMAC, and TLS. Generated from the IDL `stream` modifier: proxy, `StreamWriter&` interface, and stream dispatcher.
 - **Generated Enum Names**: Every IDL enum gets an inline `<Enum>_name()` in the generated header, returning the item name as a string literal (or `"<unknown>"` for a value outside the enum) so enums print as names instead of integers.
-- **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients over TCP (the pipe path has no transport to push through).
+- **Property Notifications**: Subscribe to property changes on remote objects. Thread-safe `SubscriptionRegistry` fans out `MSG_PROP_NOTIFY` to all subscribed clients, over pipes and TCP alike.
 - **Multi-Client Support**: `run_tcp_multi()` accepts concurrent clients (thread-per-client), all sharing the same object registry and subscription fan-out.
 - **Version Negotiation**: Protocol v1.1 with semver major/minor rules, 32-bit capability bitfield (feature + extension + vendor slots), bidirectional `init_ack` handshake, and runtime-toggleable dynamic extensions
 - **Object Lifecycle**: Reference-counted remote objects with create/release/property access/method dispatch
@@ -767,7 +767,7 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 **Known limitations:**
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
 - **mDNS requires platform library** -- Bonjour on macOS (built-in), Avahi on Linux (`libavahi-client-dev`). Both optional; builds without them, discovery tests skip.
-- **Property push is TCP-only** -- `SubscriptionRegistry` fans `MSG_PROP_NOTIFY` out to subscribed transports over `run_tcp_multi()`. The single-client pipe path (`run()`) has no transport to push through and logs a warning if it receives a subscribe. Calls and subscriptions may share one connection: the client demuxes interleaved notifications from call replies.
+- **Property push shares the call connection** -- `SubscriptionRegistry` fans `MSG_PROP_NOTIFY` out to subscribed transports over pipes (`run()`) and TCP. Calls and subscriptions may share one connection: the client demuxes interleaved notifications from call replies. `poll_notifications(timeout)` throws `ServiceError` when nothing arrives within the timeout.
 - **Remote objects are creator-scoped, not durably shared** -- The object registry is shared across TCP clients, so a client that already knows an object id can call it. But an object is reference-counted to its *creating* connection and deleted when that connection drops, even if another client still holds the id: there is no reliable handoff, and a client that disconnects and reconnects cannot re-acquire the object it made. Object ids also carry no ownership check, so any client can read, mutate, or release any object by id. Treat a remote object as a view owned by one client for the life of its connection, not a durable shared registry. A refcount-scoped lifetime (survive while any client references it) plus per-object ownership is a known future improvement, not yet done.
 
 ## References
