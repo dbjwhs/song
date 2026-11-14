@@ -16,7 +16,12 @@ from .wire import (
     encode_header,
     decode_header,
 )
-from .connection import ServiceConnection, ConnectionError
+from .connection import (
+    ServiceConnection,
+    ConnectionError,
+    SecurityError,
+    ServiceError,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -29,4 +34,6 @@ __all__ = [
     "decode_header",
     "ServiceConnection",
     "ConnectionError",
+    "SecurityError",
+    "ServiceError",
 ]

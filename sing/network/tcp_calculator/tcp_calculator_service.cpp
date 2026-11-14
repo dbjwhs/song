@@ -3,7 +3,9 @@
 
 #include "calculator.hpp"
 #include <song/logging.hpp>
+#include <song/security.hpp>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 using namespace song;
@@ -85,6 +87,17 @@ int main(int argc, char* argv[]) {
     Log::debug("Calculator service ready: " +
                std::to_string(runtime.service_count()) + " service(s), " +
                std::to_string(runtime.method_count()) + " method(s)");
+
+    // Optional second argument: a shared secret. Every client is then
+    // served through SecureTransport (HMAC-SHA256 on each message).
+    if (argc > 2) {
+        std::string key = argv[2];
+        runtime.set_transport_wrapper(
+            [key](std::unique_ptr<Transport> t) -> std::unique_ptr<Transport> {
+                return std::make_unique<SecureTransport>(std::move(t), SecurityConfig(key));
+            });
+        Log::info("HMAC authentication enabled");
+    }
 
     // Run the service on TCP (not pipes)
     Log::info("Listening on port " + std::to_string(port));

@@ -7,9 +7,12 @@ Service connection for Song RPC clients.
 Handles TCP communication with Song services.
 """
 
+import hashlib
+import hmac
 import socket
+import struct
 import threading
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Tuple, Union
 
 from .buffer import Buffer
 from .wire import (
@@ -42,6 +45,16 @@ class VersionMismatchError(Exception):
     pass
 
 
+class SecurityError(Exception):
+    """Raised when HMAC verification of a received message fails."""
+    pass
+
+
+# HMAC-SHA256 truncated to 8 bytes, appended to the payload (see
+# SecureTransport in the C++ runtime).
+HMAC_TAG_SIZE = 8
+
+
 class ServiceConnection:
     """
     Connection to a Song RPC service.
@@ -49,7 +62,8 @@ class ServiceConnection:
     Thread-safe for concurrent calls (uses sequence IDs for correlation).
     """
 
-    def __init__(self, host: str, port: int, timeout: float = 5.0):
+    def __init__(self, host: str, port: int, timeout: float = 5.0,
+                 key: Optional[Union[bytes, str]] = None):
         """
         Create a connection to a Song service.
 
@@ -57,10 +71,17 @@ class ServiceConnection:
             host: Service hostname or IP address
             port: Service port number
             timeout: Connection and read timeout in seconds
+            key: Shared secret for HMAC-SHA256 message authentication, for a
+                service that wraps its clients in SecureTransport. Every
+                message in both directions is then tagged and verified.
+                None talks to an unauthenticated service.
         """
         self._host = host
         self._port = port
         self._timeout = timeout
+        if isinstance(key, str):
+            key = key.encode("utf-8")
+        self._key: Optional[bytes] = key if key else None
         self._socket: Optional[socket.socket] = None
         self._sequence_id = 0
         self._lock = threading.Lock()
@@ -91,16 +112,12 @@ class ServiceConnection:
         """Receive and validate init message from service."""
         from .wire import MAGIC
 
-        # Read header
-        header_data = self._recv_exact(HEADER_SIZE)
-        header = decode_header(header_data)
+        header, payload_data = self._recv_message()
 
         if header.msg_type != MsgType.init:
             raise ProtocolError(f"Expected init message, got {header.msg_type}")
 
-        # Read payload
-        if header.payload_size > 0:
-            payload_data = self._recv_exact(header.payload_size)
+        if payload_data:
             buf = Buffer(payload_data)
 
             # Parse init message:
@@ -168,22 +185,16 @@ class ServiceConnection:
 
             # Build and send message
             message = create_call_message(seq_id, service_id, method_id, request.data())
-            self._send_all(message)
+            self._send_message(message)
 
             # Receive response
-            header_data = self._recv_exact(HEADER_SIZE)
-            header = decode_header(header_data)
+            header, payload = self._recv_message()
 
             # Validate sequence ID
             if header.sequence_id != seq_id:
                 raise ProtocolError(
                     f"Sequence ID mismatch: expected {seq_id}, got {header.sequence_id}"
                 )
-
-            # Read payload
-            payload = b""
-            if header.payload_size > 0:
-                payload = self._recv_exact(header.payload_size)
 
             # Handle response type
             if header.msg_type == MsgType.result:
@@ -234,25 +245,20 @@ class ServiceConnection:
             seq_id = self._sequence_id
 
             message = create_call_message(seq_id, service_id, method_id, request.data())
-            self._send_all(message)
+            self._send_message(message)
 
             finished = False
             if chunk_timeout is not None:
                 self._socket.settimeout(chunk_timeout)
             try:
                 while True:
-                    header_data = self._recv_exact(HEADER_SIZE)
-                    header = decode_header(header_data)
+                    header, payload = self._recv_message()
 
                     if header.sequence_id != seq_id:
                         raise ProtocolError(
                             f"Sequence ID mismatch in stream: expected {seq_id}, "
                             f"got {header.sequence_id}"
                         )
-
-                    payload = b""
-                    if header.payload_size > 0:
-                        payload = self._recv_exact(header.payload_size)
 
                     if header.msg_type == MsgType.stream:
                         yield Buffer(payload)
@@ -277,6 +283,49 @@ class ServiceConnection:
                     self.close()
                 elif chunk_timeout is not None and self._socket:
                     self._socket.settimeout(self._timeout)
+
+    def _tag(self, message: bytes) -> bytes:
+        """HMAC tag over the raw wire bytes of an untagged message."""
+        return hmac.new(self._key, message, hashlib.sha256).digest()[:HMAC_TAG_SIZE]
+
+    def _send_message(self, message: bytes) -> None:
+        """Send one wire message (header + payload), tagging it when keyed."""
+        if self._key is None:
+            self._send_all(message)
+            return
+
+        # The tag rides at the end of the payload: payload_size (offset 8)
+        # grows by the tag size, and the tag covers the original bytes.
+        payload_size = struct.unpack_from('<I', message, 8)[0]
+        patched = (message[:8] + struct.pack('<I', payload_size + HMAC_TAG_SIZE)
+                   + message[12:])
+        self._send_all(patched + self._tag(message))
+
+    def _recv_message(self) -> Tuple[Header, bytes]:
+        """Receive one wire message, verifying and stripping its tag when keyed."""
+        header_data = self._recv_exact(HEADER_SIZE)
+        header = decode_header(header_data)
+
+        body = b""
+        if header.payload_size > 0:
+            body = self._recv_exact(header.payload_size)
+
+        if self._key is None:
+            return header, body
+
+        if len(body) < HMAC_TAG_SIZE:
+            self.close()
+            raise SecurityError("message payload too short for HMAC verification")
+
+        payload, received_tag = body[:-HMAC_TAG_SIZE], body[-HMAC_TAG_SIZE:]
+        original = (header_data[:8] + struct.pack('<I', len(payload))
+                    + header_data[12:] + payload)
+        if not hmac.compare_digest(self._tag(original), received_tag):
+            self.close()
+            raise SecurityError("HMAC verification failed - message may be tampered")
+
+        header.payload_size = len(payload)
+        return header, payload
 
     def _send_all(self, data: bytes) -> None:
         """Send all data to socket."""

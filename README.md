@@ -761,14 +761,15 @@ Song's wire protocol is language-independent. The Python client library implemen
 from song.connection import ServiceConnection
 from song.generated.calculator import CalculatorProxy
 
-conn = ServiceConnection.connect_tcp("localhost", 12345)
+conn = ServiceConnection("localhost", 12345)   # key=b"..." for an HMAC service
+conn.connect()
 calc = CalculatorProxy(conn)
 
 result = calc.add(5, 3)        # Python encodes → wire → C++ decodes → C++ encodes → wire → Python decodes
 div = calc.divide(17, 5)       # Returns DivResult(quotient=3, remainder=2)
 ```
 
-The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. It covers unary and streaming calls over plain TCP; HMAC, TLS, discovery, objects, and properties are C++ only. Both languages serialize to the same byte layout, verified by cross-language integration tests.
+The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. It covers unary and streaming calls over TCP, with optional HMAC-SHA256 authentication (`key=`) matching the C++ `SecureTransport`; TLS, discovery, objects, and properties are C++ only. Both languages serialize to the same byte layout, verified by cross-language integration tests.
 
 ## Platform Support & Limitations
 
