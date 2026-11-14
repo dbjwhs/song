@@ -9,7 +9,7 @@ Handles TCP communication with Song services.
 
 import socket
 import threading
-from typing import Optional
+from typing import Iterator, Optional
 
 from .buffer import Buffer
 from .wire import (
@@ -196,6 +196,87 @@ class ServiceConnection:
 
             else:
                 raise ProtocolError(f"Unexpected response type: {header.msg_type}")
+
+    def call_streaming(self, service_id: int, method_id: int, request: Buffer,
+                       chunk_timeout: Optional[float] = None) -> Iterator[Buffer]:
+        """
+        Make a streaming RPC call, yielding each chunk as it arrives.
+
+        The service answers with zero or more stream messages followed by a
+        stream_end. An error reply terminates the stream instead: chunks
+        yielded before it were genuine, then ServiceError is raised.
+
+        The connection is held for the life of the stream. Abandoning the
+        iterator before it is exhausted leaves unread chunks on the socket,
+        so the connection is closed.
+
+        Args:
+            service_id: Target service ID (the service's stream ID)
+            method_id: Target method ID
+            request: Buffer containing encoded method arguments
+            chunk_timeout: Max seconds to wait for EACH message. Size it to
+                the remote operation, which may be silent for a long time
+                between chunks. None uses the connection timeout.
+
+        Yields:
+            Buffer holding one chunk's payload
+
+        Raises:
+            ConnectionError: If not connected, on timeout, or on disconnect
+            ServiceError: If the service ends the stream with an error
+            ProtocolError: If protocol violation occurs
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to service")
+
+        with self._lock:
+            self._sequence_id += 1
+            seq_id = self._sequence_id
+
+            message = create_call_message(seq_id, service_id, method_id, request.data())
+            self._send_all(message)
+
+            finished = False
+            if chunk_timeout is not None:
+                self._socket.settimeout(chunk_timeout)
+            try:
+                while True:
+                    header_data = self._recv_exact(HEADER_SIZE)
+                    header = decode_header(header_data)
+
+                    if header.sequence_id != seq_id:
+                        raise ProtocolError(
+                            f"Sequence ID mismatch in stream: expected {seq_id}, "
+                            f"got {header.sequence_id}"
+                        )
+
+                    payload = b""
+                    if header.payload_size > 0:
+                        payload = self._recv_exact(header.payload_size)
+
+                    if header.msg_type == MsgType.stream:
+                        yield Buffer(payload)
+
+                    elif header.msg_type == MsgType.stream_end:
+                        finished = True
+                        return
+
+                    elif header.msg_type == MsgType.error:
+                        finished = True
+                        code, text = decode_error_message(Buffer(payload))
+                        raise ServiceError(text, code)
+
+                    else:
+                        raise ProtocolError(
+                            f"Unexpected message in stream: {header.msg_type}"
+                        )
+            finally:
+                if not finished:
+                    # Abandoned or failed mid-stream: the socket position is
+                    # unknown, so the connection cannot be reused.
+                    self.close()
+                elif chunk_timeout is not None and self._socket:
+                    self._socket.settimeout(self._timeout)
 
     def _send_all(self, data: bytes) -> None:
         """Send all data to socket."""

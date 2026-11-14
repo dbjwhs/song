@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional, List
+from typing import Iterator, Optional, List
 
 from song.buffer import Buffer
 from song.connection import ServiceConnection
@@ -96,21 +96,31 @@ class CalculatorProxy:
     def sum_matrix(self, matrix: list[list[float]]) -> float:
         """Sum all elements in a 2D matrix"""
         req = Buffer()
-        # TODO: encode array of list[float]
+        req.encode_u32(len(matrix))
+        for _item in matrix:
+            req.encode_u32(len(_item))
+            for _item in _item:
+                req.encode_f64(_item)
         resp = self._conn.call(SERVICE_Calculator, METHOD_Calculator_sum_matrix, req)
         return resp.decode_f64()
 
     def transpose(self, matrix: list[list[int]]) -> list[list[int]]:
         """Transpose a 2D matrix (swap rows and columns)"""
         req = Buffer()
-        # TODO: encode array of list[int]
+        req.encode_u32(len(matrix))
+        for _item in matrix:
+            req.encode_array_i32(_item)
         resp = self._conn.call(SERVICE_Calculator, METHOD_Calculator_transpose, req)
-        return # TODO: decode array of list[int]
+        return [resp.decode_array_i32() for _ in range(resp.decode_u32())]
 
     def flatten_3d(self, cube: list[list[list[int]]]) -> list[int]:
         """Flatten a 3D array to 1D"""
         req = Buffer()
-        # TODO: encode array of list[list[int]]
+        req.encode_u32(len(cube))
+        for _item in cube:
+            req.encode_u32(len(_item))
+            for _item in _item:
+                req.encode_array_i32(_item)
         resp = self._conn.call(SERVICE_Calculator, METHOD_Calculator_flatten_3d, req)
         return resp.decode_array_i32()
 

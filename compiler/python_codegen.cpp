@@ -297,6 +297,20 @@ std::string PythonCodeGenerator::generate_service_ids(const Namespace& ns) {
     for (const auto& s : ns.services) {
         out << "SERVICE_" << s.name << " = " << service_id++ << "\n";
 
+        // Mirror the C++ generator: a service with any `stream` method takes
+        // a second service id for its streaming dispatcher. Skipping it here
+        // would shift every later service's id away from the C++ side.
+        bool has_stream = false;
+        for (const auto& m : s.methods) {
+            if (m.is_stream) {
+                has_stream = true;
+                break;
+            }
+        }
+        if (has_stream) {
+            out << "SERVICE_" << s.name << "_STREAM = " << service_id++ << "\n";
+        }
+
         u16 method_id = 1;
         for (const auto& m : s.methods) {
             out << "METHOD_" << s.name << "_" << m.name << " = " << method_id++ << "\n";
@@ -340,6 +354,35 @@ std::string PythonCodeGenerator::generate_service_proxy(const ServiceDef& s) {
         bool is_void = is_primitive(m.return_type) &&
                        get_primitive(m.return_type) == PrimitiveType::void_;
 
+        if (m.is_stream) {
+            // Streaming method: a generator yielding one decoded value per
+            // chunk as it arrives, over the service's _STREAM id. The
+            // declared return type is the element type of each chunk.
+            out << "    def " << m.name << "(self" << generate_method_params(m.params)
+                << ", chunk_timeout: Optional[float] = None) -> Iterator["
+                << return_type << "]:\n";
+
+            if (!m.doc.empty()) {
+                out << "        \"\"\"" << m.doc << "\"\"\"\n";
+            }
+
+            out << "        req = Buffer()\n";
+            for (const auto& p : m.params) {
+                out << "        " << encode_call(p.type, p.name) << "\n";
+            }
+
+            out << "        for resp in self._conn.call_streaming(SERVICE_" << s.name
+                << "_STREAM, METHOD_" << s.name << "_" << m.name
+                << ", req, chunk_timeout):\n";
+            if (is_void) {
+                out << "            yield None\n";
+            } else {
+                out << "            yield " << decode_call(m.return_type) << "\n";
+            }
+            out << "\n";
+            continue;
+        }
+
         // Method signature
         out << "    def " << m.name << "(self" << generate_method_params(m.params)
             << ") -> " << return_type << ":\n";
@@ -381,7 +424,7 @@ std::string PythonCodeGenerator::generate_module(const Namespace& ns) {
 
     out << "from dataclasses import dataclass\n";
     out << "from enum import IntEnum\n";
-    out << "from typing import Optional, List\n";
+    out << "from typing import Iterator, Optional, List\n";
     out << "\n";
     out << "from song.buffer import Buffer\n";
     out << "from song.connection import ServiceConnection\n";

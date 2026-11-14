@@ -40,6 +40,11 @@ class MsgType(IntEnum):
     release = 0x0A    # Client -> Service: release object
     prop_get = 0x0B   # Client -> Service: get property
     prop_set = 0x0C   # Client -> Service: set property
+    init_ack = 0x0D   # Client -> Service: version/capability acknowledgment
+    prop_subscribe = 0x0E    # Client -> Service: subscribe to property changes
+    prop_unsubscribe = 0x0F  # Client -> Service: unsubscribe
+    prop_notify = 0x10       # Service -> Client: property value changed
+    object_call = 0x11       # Client -> Service: object method call
 
 
 @dataclass

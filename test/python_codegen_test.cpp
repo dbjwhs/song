@@ -585,3 +585,63 @@ print("OK")
 
     EXPECT_EQ(ret, 0) << "Python decode verification failed";
 }
+
+// =============================================================================
+// Streaming
+// =============================================================================
+
+TEST(PythonCodegenTest, StreamMethodGeneratesIteratorProxy) {
+    std::string code = parse_and_generate_python(R"(
+        namespace test;
+        struct Tick {
+            i32 n;
+        }
+        service Feed {
+            latest() -> i32;
+            stream watch(i32 count) -> Tick;
+        }
+    )");
+
+    EXPECT_NE(code.find("from typing import Iterator, Optional, List"), std::string::npos);
+    EXPECT_NE(code.find("def watch(self, count: int, chunk_timeout: Optional[float] = None)"
+                        " -> Iterator[Tick]:"),
+              std::string::npos);
+    EXPECT_NE(code.find("for resp in self._conn.call_streaming(SERVICE_Feed_STREAM, "
+                        "METHOD_Feed_watch, req, chunk_timeout):"),
+              std::string::npos);
+    EXPECT_NE(code.find("yield decode_Tick(resp)"), std::string::npos);
+
+    // The unary method on the same service still goes through call().
+    EXPECT_NE(code.find("resp = self._conn.call(SERVICE_Feed, METHOD_Feed_latest, req)"),
+              std::string::npos);
+}
+
+// A service with stream methods takes two service ids (unary + stream), as
+// in the C++ generator. The Python generator used to hand out one, which
+// shifted every later service's id off the C++ side.
+TEST(PythonCodegenTest, StreamServiceIdsMatchCppNumbering) {
+    std::string code = parse_and_generate_python(R"(
+        namespace test;
+        service First {
+            stream watch() -> i32;
+        }
+        service Second {
+            ping() -> i32;
+        }
+    )");
+
+    EXPECT_NE(code.find("SERVICE_First = 1\n"), std::string::npos);
+    EXPECT_NE(code.find("SERVICE_First_STREAM = 2\n"), std::string::npos);
+    EXPECT_NE(code.find("SERVICE_Second = 3\n"), std::string::npos);
+}
+
+TEST(PythonCodegenTest, ServiceWithoutStreamsHasNoStreamId) {
+    std::string code = parse_and_generate_python(R"(
+        namespace test;
+        service Plain {
+            ping() -> i32;
+        }
+    )");
+
+    EXPECT_EQ(code.find("_STREAM"), std::string::npos);
+}

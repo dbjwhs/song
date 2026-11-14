@@ -551,11 +551,27 @@ The example above wires streaming by hand, but you do not have to: a method
 marked `stream` in the IDL is code-generated. Codegen emits a `call_streaming`
 client proxy (with a typed per-chunk handler), a service interface method that
 takes a `StreamWriter&`, and a `dispatch_<Service>_stream` dispatcher, all on a
-second service id `kService_<Service>_Stream` (the runtime resolves stream
-dispatchers ahead of unary ones per service id, so the two cannot share). For
-example, `stream watch(i32 count) -> Tick;` generates a client
-`watch(count, on_chunk)` and a server `virtual void watch(i32 count,
-StreamWriter& writer)`.
+second service id `kService_<Service>_Stream`. For example,
+`stream watch(i32 count) -> Tick;` generates a client `watch(count, on_chunk)`
+and a server `virtual void watch(i32 count, StreamWriter& writer)`.
+
+Hand-wired services may put a stream dispatcher and a unary dispatcher on one
+service id: the runtime routes each call by the flags passed to
+`register_method` (`MethodFlags::streaming` goes to the stream dispatcher). A
+method never declared with `register_method` on a shared id goes to the stream
+dispatcher.
+
+The Python generator emits the same method as a generator on
+`SERVICE_<Service>_STREAM`, yielding one decoded value per chunk as it arrives:
+
+```python
+for tick in proxy.watch(10, chunk_timeout=60.0):
+    print(tick)
+```
+
+`ServiceConnection.call_streaming` is the underlying primitive. An error reply
+ends the stream by raising `ServiceError`; abandoning the iterator early closes
+the connection, since unread chunks remain on the socket.
 
 ## Cross-Subnet Discovery (Registry)
 
@@ -752,7 +768,7 @@ result = calc.add(5, 3)        # Python encodes → wire → C++ decodes → C++
 div = calc.divide(17, 5)       # Returns DivResult(quotient=3, remainder=2)
 ```
 
-The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. Both languages serialize to the same byte layout, verified by cross-language integration tests.
+The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. It covers unary and streaming calls over plain TCP; HMAC, TLS, discovery, objects, and properties are C++ only. Both languages serialize to the same byte layout, verified by cross-language integration tests.
 
 ## Platform Support & Limitations
 
