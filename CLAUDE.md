@@ -75,7 +75,7 @@ Notes on running tests:
 - `test/`: all unit tests, linked into one `song_tests` binary. It compiles the `compiler/*.cpp` sources directly (minus `main.cpp`), so compiler internals are testable without going through the CLI.
 - `sing/`: integration projects (`ipc/` over pipes, `network/` over TCP). Each has a `.song` file, the generated header, a service executable, and a gtest binary named `sing_<kind>_<project>_test`.
 - `examples/`: hand-written (non-IDL) services, including `registry_service`, the cross-subnet discovery registry.
-- `python/song/`: a pure-Python reimplementation of Buffer, wire, and connection (not FFI). It must stay byte-compatible with the C++ runtime.
+- `python/song/`: a pure-Python reimplementation of Buffer, wire, and connection (not FFI). It must stay byte-compatible with the C++ runtime. Client only: unary and streaming calls over TCP, optional HMAC (`key=`); no TLS, discovery, objects, or properties.
 - `fuzz/`: libFuzzer harnesses for the wire and buffer decoders.
 
 ### Generated code is checked in and not rebuilt by CMake
@@ -103,9 +103,15 @@ A change to wire layout or Buffer encoding has to land in three places: `src/wir
 
 ### Constraints that are easy to violate
 
-- Property push only works over `run_tcp_multi()`. The pipe path (`run()`) has no transport to push through and logs a warning on subscribe.
+- Every serving loop, pipe and TCP, goes through the one `ServiceRuntime::handle_message`. Do not add a per-transport dispatch copy; the old fd-only one silently lacked property push.
+- A stream dispatcher and a unary dispatcher may share a service id only because calls are routed by `register_method` flags. An undeclared method on a shared id goes to the stream dispatcher. Generated code still uses a separate `kService_<Name>_Stream` id.
+- Size limits: 16 MB per message payload, and a string or byte array may be that large. Decoders must check a length prefix against `Buffer::remaining()` before allocating.
 - Remote objects are owned by their creating connection and destroyed when it drops, even if another client holds the id. Object ids carry no ownership check.
 - The parser and resolver accept more than the generators emit: `error` types and `throws` clauses, struct inheritance, and the `optional` method modifier validate but generate nothing; `T[]?` generates as a plain `std::vector<T>`. See "Accepted but Not Yet Generated" in README.md before assuming an IDL feature works end to end.
+
+## Downstream consumer
+
+`../savannah` builds against this checkout: it links `build/libsong.a`, runs `build/songc` on its own IDL at build time, and includes the public headers. A change to wire layout, `songc` output, or `include/song/` can break it, so after such a change rebuild savannah and run its tests (`cmake --build ../savannah/build && ctest --test-dir ../savannah/build`). Its CLAUDE.md keeps a numbered list of song findings.
 
 ## Documentation
 
