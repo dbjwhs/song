@@ -64,6 +64,13 @@ public:
     /// Register a streaming dispatcher
     /// service_id: unique identifier for this service
     /// dispatcher: function that takes (method_id, request, stream_writer)
+    ///
+    /// A stream dispatcher may share its service id with a unary dispatcher
+    /// (register_dispatcher). On a shared id each call is routed by the
+    /// method's declared flags: register_method(..., MethodFlags::streaming)
+    /// sends it here, any other declared method goes to the unary
+    /// dispatcher. A method that was never declared with register_method
+    /// goes to the stream dispatcher.
     void register_stream_dispatcher(u16 service_id, StreamDispatcher dispatcher);
 
     // -------------------------------------------------------------------------
@@ -197,6 +204,10 @@ private:
     /// Apply the transport wrapper (identity when unset). Defined in the
     /// .cpp: Transport is incomplete here.
     std::unique_ptr<Transport> wrap_transport(std::unique_ptr<Transport> t);
+
+    /// True when a call to (service_id, method_id) belongs to the stream
+    /// dispatcher rather than the unary one.
+    bool routes_to_stream(u16 service_id, u16 method_id) const;
 
     void send_init_confirmation_fd(int fd);
     void handle_message_fd(const wire::Header& hdr, Buffer& payload,

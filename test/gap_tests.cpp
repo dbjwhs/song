@@ -1186,3 +1186,99 @@ TEST(CrashRecoveryTest, ServerDisconnectDuringStream) {
     listener.close();
     server.join();
 }
+
+// Regression (savannah finding 7): a stream dispatcher used to shadow the
+// unary dispatcher registered on the same service id, so every unary call
+// on that id was handed to the stream dispatcher. On a shared id the
+// runtime now routes by the flags given to register_method.
+TEST(RuntimeTcpTest, StreamAndUnaryDispatchersShareOneServiceId) {
+    constexpr u16 kShared = 9;
+    constexpr u16 kUnaryMethod = 1;
+    constexpr u16 kStreamMethod = 2;
+    constexpr u16 kUndeclaredMethod = 3;
+
+    ServiceRuntime runtime;
+
+    runtime.register_dispatcher(
+        kShared, [](u16 method_id, Buffer&, Buffer& response) {
+            encode_i32(response, 1000 + method_id);
+        });
+    runtime.register_stream_dispatcher(
+        kShared, [](u16 method_id, Buffer&, StreamWriter& writer) {
+            for (i32 ndx = 0; ndx < 3; ++ndx) {
+                Buffer chunk;
+                encode_i32(chunk, 2000 + method_id);
+                writer.write(chunk);
+            }
+        });
+    runtime.register_method(kShared, kUnaryMethod);
+    runtime.register_method(kShared, kStreamMethod, wire::MethodFlags::streaming);
+
+    TcpListener listener;
+    listener.listen(0);
+    u16 port = listener.bound_port();
+
+    std::thread server([&listener, &runtime]() {
+        auto client = listener.accept(5000);
+        if (!client) {
+            return;
+        }
+        try {
+            runtime.send_init_confirmation_transport(*client);
+            std::unordered_set<i32> tracked;
+            for (;;) {
+                Buffer msg;
+                if (!client->receive(msg, 5000)) {
+                    break;
+                }
+                auto hdr = wire::decode_header(msg);
+                if (hdr.magic != wire::kMagic) {
+                    break;
+                }
+                if (hdr.type == wire::MsgType::shutdown) {
+                    break;
+                }
+                if (hdr.type == wire::MsgType::init_ack) {
+                    continue;
+                }
+                runtime.handle_message(hdr, msg, *client, tracked);
+            }
+        } catch (...) {}
+    });
+
+    auto tcp = std::make_unique<TcpTransport>();
+    tcp->connect("127.0.0.1", port, 5000);
+    ServiceConnection conn(std::move(tcp));
+    conn.init_handshake();
+
+    // Declared unary: reaches the unary dispatcher, one result.
+    Buffer unary_args;
+    Buffer unary_reply = conn.call(kShared, kUnaryMethod, unary_args);
+    EXPECT_EQ(decode_i32(unary_reply), 1000 + kUnaryMethod);
+
+    // Declared streaming: reaches the stream dispatcher, three chunks.
+    Buffer stream_args;
+    std::vector<i32> seen;
+    conn.call_streaming(kShared, kStreamMethod, stream_args,
+                        [&seen](Buffer& chunk) { seen.push_back(decode_i32(chunk)); });
+    ASSERT_EQ(seen.size(), 3u);
+    EXPECT_EQ(seen[0], 2000 + kStreamMethod);
+
+    // Unary still works after a stream on the same connection.
+    Buffer again_args;
+    Buffer again_reply = conn.call(kShared, kUnaryMethod, again_args);
+    EXPECT_EQ(decode_i32(again_reply), 1000 + kUnaryMethod);
+
+    // Undeclared method on a shared id keeps the old precedence: stream.
+    Buffer undeclared_args;
+    seen.clear();
+    conn.call_streaming(kShared, kUndeclaredMethod, undeclared_args,
+                        [&seen](Buffer& chunk) { seen.push_back(decode_i32(chunk)); });
+    ASSERT_EQ(seen.size(), 3u);
+    EXPECT_EQ(seen[0], 2000 + kUndeclaredMethod);
+
+    Buffer shutdown = wire::create_shutdown_message();
+    conn.transport()->send(shutdown);
+    listener.close();
+    server.join();
+}

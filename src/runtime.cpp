@@ -126,6 +126,28 @@ void ServiceRuntime::register_method(u16 service_id, u16 method_id, wire::Method
     methods_.push_back(wire::MethodDescriptor{service_id, method_id, flags, 0});
 }
 
+bool ServiceRuntime::routes_to_stream(u16 service_id, u16 method_id) const {
+    if (stream_dispatchers_.find(service_id) == stream_dispatchers_.end()) {
+        return false;
+    }
+    if (dispatchers_.find(service_id) == dispatchers_.end()) {
+        return true;
+    }
+
+    // Both dispatchers share this service id: the method's declared flags
+    // decide. Without this, the stream dispatcher shadowed every unary
+    // method on the id.
+    for (const auto& m : methods_) {
+        if (m.service_id == service_id && m.method_id == method_id) {
+            return (static_cast<u16>(m.flags) &
+                    static_cast<u16>(wire::MethodFlags::streaming)) != 0;
+        }
+    }
+
+    // Undeclared method on a shared id: keep the historical precedence.
+    return true;
+}
+
 void ServiceRuntime::register_factory(u32 type_id, ObjectFactory factory) {
     object_registry_.register_factory(type_id, std::move(factory));
 }
@@ -213,9 +235,10 @@ void ServiceRuntime::handle_message_fd(const wire::Header& hdr, Buffer& payload,
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
 
-        // Check for streaming dispatcher first
+        // Streaming methods go to the stream dispatcher (see routes_to_stream)
         auto stream_it = stream_dispatchers_.find(service_id);
-        if (stream_it != stream_dispatchers_.end()) {
+        if (stream_it != stream_dispatchers_.end() &&
+            routes_to_stream(service_id, method_id)) {
             StreamWriter writer(write_fd, hdr.sequence_id);
             try {
                 stream_it->second(method_id, payload, writer);
@@ -442,9 +465,10 @@ void ServiceRuntime::handle_message(const wire::Header& hdr, Buffer& payload,
         // Decode method call header
         auto [service_id, method_id] = wire::decode_method_call_header(payload);
 
-        // Check for streaming dispatcher first
+        // Streaming methods go to the stream dispatcher (see routes_to_stream)
         auto stream_it = stream_dispatchers_.find(service_id);
-        if (stream_it != stream_dispatchers_.end()) {
+        if (stream_it != stream_dispatchers_.end() &&
+            routes_to_stream(service_id, method_id)) {
             StreamWriter writer(transport, hdr.sequence_id);
             try {
                 stream_it->second(method_id, payload, writer);
