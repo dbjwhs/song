@@ -133,7 +133,8 @@ struct Header {
 };
 static_assert(sizeof(Header) == 16, "Header must be 16 bytes");
 
-// Maximum payload size (larger than individual field limits)
+// Maximum payload size of one message. Enforced when a message is built
+// (create_*_message) and again on every receive path.
 constexpr size_t kMaxPayloadSize = 16 * 1024 * 1024;  // 16 MB
 // Note: kMaxStringSize, kMaxBytesSize, kMaxArrayCount are defined in buffer.hpp
 

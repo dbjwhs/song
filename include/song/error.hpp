@@ -50,7 +50,8 @@ namespace song {
 // Buffer:
 //   - encode_*:   throws std::runtime_error on capacity overflow
 //   - decode_*:   throws std::runtime_error on buffer underflow (read past end)
-//   - Strings/bytes: throws on size > kMaxStringSize/kMaxBytesSize
+//   - Strings/bytes: throws on size > kMaxStringSize/kMaxBytesSize (16 MB),
+//                    or on a length prefix larger than the data present
 //
 // ObjectRegistry:
 //   - create_object(): throws std::runtime_error if factory not found

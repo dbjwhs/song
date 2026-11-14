@@ -240,6 +240,9 @@ std::string decode_string(Buffer& buf) {
     if (len > kMaxStringSize) {
         throw std::runtime_error("String too large");
     }
+    if (len > buf.remaining()) {
+        throw std::runtime_error("String length exceeds remaining data");
+    }
     std::string result(len, '\0');
     buf.read(result.data(), len);
     return result;
@@ -249,6 +252,9 @@ std::vector<std::byte> decode_bytes(Buffer& buf) {
     u32 len = decode_u32(buf);
     if (len > kMaxBytesSize) {
         throw std::runtime_error("Byte array too large");
+    }
+    if (len > buf.remaining()) {
+        throw std::runtime_error("Byte array length exceeds remaining data");
     }
     std::vector<std::byte> result(len);
     buf.read(result.data(), len);

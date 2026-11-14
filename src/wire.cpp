@@ -8,6 +8,20 @@
 namespace song {
 namespace wire {
 
+namespace {
+
+// Size of an outgoing message's payload. Refuses to build a message the
+// peer is bound to reject: every receive path drops a header whose
+// payload_size is over the cap.
+u32 checked_payload_size(size_t size) {
+    if (size > kMaxPayloadSize) {
+        throw ProtocolError("Message payload exceeds maximum size (16 MB)");
+    }
+    return static_cast<u32>(size);
+}
+
+} // anonymous namespace
+
 void encode_header(Buffer& buf, const Header& hdr) {
     encode_u32(buf, hdr.magic);
     encode_u8(buf, static_cast<u8>(hdr.flags));
@@ -100,7 +114,7 @@ Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilit
         .flags = MsgFlags::none,
         .type = MsgType::init,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0
     };
     encode_header(buf, hdr);
@@ -126,7 +140,7 @@ Buffer create_init_message(u16 first_version, u16 current_version, u32 capabilit
         .flags = MsgFlags::none,
         .type = MsgType::init,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0
     };
     encode_header(buf, hdr);
@@ -144,7 +158,7 @@ Buffer create_call_message(u32 sequence_id, u16 service_id, u16 method_id, const
         .flags = MsgFlags::none,
         .type = MsgType::call,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -159,7 +173,7 @@ Buffer create_result_message(u32 sequence_id, const Buffer& result) {
         .flags = MsgFlags::none,
         .type = MsgType::result,
         .reserved = 0,
-        .payload_size = static_cast<u32>(result.size()),
+        .payload_size = checked_payload_size(result.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -178,7 +192,7 @@ Buffer create_error_message(u32 sequence_id, ErrorCode code, const std::string& 
         .flags = MsgFlags::none,
         .type = MsgType::error,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -211,7 +225,7 @@ Buffer create_init_ack_message(u16 first_version, u16 current_version, u32 capab
         .flags = MsgFlags::none,
         .type = MsgType::init_ack,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0
     };
     encode_header(buf, hdr);
@@ -230,7 +244,7 @@ Buffer create_stream_message(u32 sequence_id, const Buffer& chunk) {
         .flags = MsgFlags::none,
         .type = MsgType::stream,
         .reserved = 0,
-        .payload_size = static_cast<u32>(chunk.size()),
+        .payload_size = checked_payload_size(chunk.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -348,7 +362,7 @@ Buffer create_object_create_message(u32 sequence_id, u32 type_id, u16 constructo
         .flags = MsgFlags::none,
         .type = MsgType::create,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -366,7 +380,7 @@ Buffer create_object_release_message(u32 type_id, i32 object_id) {
         .flags = MsgFlags::none,
         .type = MsgType::release,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0  // No sequence for fire-and-forget
     };
     encode_header(buf, hdr);
@@ -384,7 +398,7 @@ Buffer create_property_get_message(u32 sequence_id, u32 type_id, i32 object_id, 
         .flags = MsgFlags::none,
         .type = MsgType::prop_get,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -402,7 +416,7 @@ Buffer create_property_set_message(u32 sequence_id, u32 type_id, i32 object_id, 
         .flags = MsgFlags::none,
         .type = MsgType::prop_set,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -420,7 +434,7 @@ Buffer create_object_method_message(u32 sequence_id, u32 type_id, i32 object_id,
         .flags = MsgFlags::none,
         .type = MsgType::object_call,  // object method frame (ObjectMethodHeader)
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = sequence_id
     };
     encode_header(buf, hdr);
@@ -442,7 +456,7 @@ Buffer create_property_subscribe_message(u32 type_id, i32 object_id, u16 propert
         .flags = MsgFlags::none,
         .type = MsgType::prop_subscribe,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0  // Fire-and-forget
     };
     encode_header(buf, hdr);
@@ -460,7 +474,7 @@ Buffer create_property_unsubscribe_message(u32 type_id, i32 object_id, u16 prope
         .flags = MsgFlags::none,
         .type = MsgType::prop_unsubscribe,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0  // Fire-and-forget
     };
     encode_header(buf, hdr);
@@ -478,7 +492,7 @@ Buffer create_property_notify_message(u32 type_id, i32 object_id, u16 property_i
         .flags = MsgFlags::none,
         .type = MsgType::prop_notify,
         .reserved = 0,
-        .payload_size = static_cast<u32>(payload.size()),
+        .payload_size = checked_payload_size(payload.size()),
         .sequence_id = 0  // Unsolicited push
     };
     encode_header(buf, hdr);

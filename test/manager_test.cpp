@@ -121,6 +121,41 @@ TEST(ManagerTest, Connect) {
     mgr.stop("echo");
 }
 
+// A 4 MB string in each direction through a real pipe service: over the old
+// 1 MB string cap, under the 16 MB message cap (savannah finding 8).
+TEST(ManagerTest, MultiMegabyteStringThroughService) {
+    std::string echo_path = get_test_service_path("echo_service");
+    if (!std::filesystem::exists(echo_path)) {
+        GTEST_SKIP() << "echo_service not found";
+    }
+
+    ServiceManager mgr;
+    mgr.register_service("echo", echo_path, 1);
+    ServiceConnection conn = mgr.connect("echo");
+
+    std::string big(4 * 1024 * 1024, 'q');
+    big[0] = 'A';
+    big[big.size() - 1] = 'Z';
+
+    Buffer args;
+    encode_string(args, big);
+    Buffer result = conn.call(1, 1, args);
+    EXPECT_EQ(decode_string(result), big);
+
+    mgr.stop("echo");
+}
+
+// A message that cannot fit under the payload cap fails at the sender with a
+// clear error instead of being dropped by the receiver.
+TEST(ManagerTest, OverCapMessageFailsAtSender) {
+    Buffer args;
+    std::string half(9 * 1024 * 1024, 'h');
+    encode_string(args, half);
+    encode_string(args, half);  // 18 MB of arguments, each string legal alone
+
+    EXPECT_THROW(wire::create_call_message(1, 1, 1, args), ProtocolError);
+}
+
 TEST(ManagerTest, ConnectAutoStarts) {
     std::string echo_path = get_test_service_path("echo_service");
     if (!std::filesystem::exists(echo_path)) {

@@ -15,7 +15,7 @@ from typing import Tuple
 # Protocol constants
 MAGIC = 0x534F4E47  # "SONG" in ASCII
 HEADER_SIZE = 16
-MAX_PAYLOAD_SIZE = 64 * 1024 * 1024  # 64 MB
+MAX_PAYLOAD_SIZE = 16 * 1024 * 1024  # 16 MB, matches wire::kMaxPayloadSize in C++
 
 # Version constants
 # Version is encoded as (major << 8) | minor, so v1.0 = 0x0100 = 256
@@ -78,6 +78,10 @@ def encode_header(msg_type: MsgType, flags: int, sequence_id: int, payload_size:
     - payload_size: u32 (4 bytes) - size of payload following header
     - sequence_id: u32 (4 bytes) - request/response correlation
     """
+    if payload_size > MAX_PAYLOAD_SIZE:
+        raise ProtocolError(
+            f"Message payload {payload_size} exceeds maximum {MAX_PAYLOAD_SIZE}"
+        )
     return struct.pack(
         '<IBBHII',
         MAGIC,

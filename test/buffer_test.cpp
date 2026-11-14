@@ -440,9 +440,79 @@ TEST(BufferTest, ReadUnderflowThrows) {
 TEST(BufferTest, StringTooLargeThrows) {
     Buffer buf;
     // Manually encode a huge length
-    encode_u32(buf, 2 * 1024 * 1024);  // 2MB - exceeds limit
+    encode_u32(buf, 32 * 1024 * 1024);  // 32MB - exceeds limit
 
     EXPECT_THROW(decode_string(buf), std::runtime_error);
+}
+
+TEST(BufferTest, BytesTooLargeThrows) {
+    Buffer buf;
+    encode_u32(buf, 32 * 1024 * 1024);  // 32MB - exceeds limit
+
+    EXPECT_THROW(decode_bytes(buf), std::runtime_error);
+}
+
+// The cap used to be 1 MB, which forced callers to chunk large text by hand
+// (savannah finding 8). Strings and byte arrays now go up to the 16 MB
+// message payload cap.
+TEST(BufferTest, MultiMegabyteStringRoundTrips) {
+    std::string big(4 * 1024 * 1024, 'x');
+    big[0] = 'a';
+    big[big.size() - 1] = 'z';
+
+    Buffer buf;
+    encode_string(buf, big);
+    buf.reset_read();
+
+    EXPECT_EQ(decode_string(buf), big);
+}
+
+TEST(BufferTest, MultiMegabyteBytesRoundTrip) {
+    std::vector<std::byte> big(4 * 1024 * 1024, std::byte{0x5A});
+    big.front() = std::byte{0x01};
+    big.back() = std::byte{0x02};
+
+    Buffer buf;
+    encode_bytes(buf, big);
+    buf.reset_read();
+
+    EXPECT_EQ(decode_bytes(buf), big);
+}
+
+TEST(BufferTest, EncodeOverCapThrows) {
+    std::string too_big(kMaxStringSize + 1, 'x');
+    Buffer buf;
+    EXPECT_THROW(encode_string(buf, too_big), std::runtime_error);
+
+    std::vector<std::byte> too_many(kMaxBytesSize + 1);
+    Buffer bytes_buf;
+    EXPECT_THROW(encode_bytes(bytes_buf, too_many), std::runtime_error);
+}
+
+// A length prefix inside the cap but larger than the data present must be
+// rejected before any allocation, not after reserving len bytes.
+TEST(BufferTest, ForgedLengthWithinCapIsRejectedByRemainingData) {
+    Buffer str_buf;
+    encode_u32(str_buf, 8 * 1024 * 1024);  // claims 8 MB
+    str_buf.write("hi", 2);                // holds 2 bytes
+    str_buf.reset_read();
+    try {
+        decode_string(str_buf);
+        FAIL() << "expected a throw";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("exceeds remaining data"), std::string::npos);
+    }
+
+    Buffer bytes_buf;
+    encode_u32(bytes_buf, 8 * 1024 * 1024);
+    bytes_buf.write("hi", 2);
+    bytes_buf.reset_read();
+    try {
+        decode_bytes(bytes_buf);
+        FAIL() << "expected a throw";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("exceeds remaining data"), std::string::npos);
+    }
 }
 
 TEST(BufferTest, ArrayTooLargeThrows) {

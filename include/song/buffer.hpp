@@ -108,9 +108,14 @@ std::string decode_string(Buffer& buf);
 std::vector<std::byte> decode_bytes(Buffer& buf);
 
 // Maximum sizes for serialization
-// These match the corresponding wire:: constants
-constexpr size_t kMaxStringSize = 1 * 1024 * 1024;   // 1 MB
-constexpr size_t kMaxBytesSize = 1 * 1024 * 1024;    // 1 MB
+//
+// A string or byte array may be as large as a whole message payload
+// (wire::kMaxPayloadSize); the message it travels in must still fit under
+// that cap, so the practical ceiling is 16 MB less the other fields. Decoders
+// also check a length prefix against the bytes actually present before
+// allocating, so a forged length cannot force a large allocation.
+constexpr size_t kMaxStringSize = 16 * 1024 * 1024;  // 16 MB
+constexpr size_t kMaxBytesSize = 16 * 1024 * 1024;   // 16 MB
 constexpr size_t kMaxArrayCount = 1 * 1024 * 1024;   // 1M elements
 
 template<typename T>

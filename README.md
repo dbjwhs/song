@@ -782,6 +782,7 @@ The Python library (`python/song/`) includes its own Buffer, wire protocol, and 
 | Streaming RPC | Full | Full |
 
 **Known limitations:**
+- **Size limits** -- One message carries at most 16 MB of payload, and a single string or byte array may be as large as that (the message around it must still fit). A message over the cap fails at the sender with `ProtocolError`. Arrays are capped at 1M elements. Send anything larger as a stream of chunks.
 - **TLS requires mbedTLS** -- Optional dependency; builds without it (SONG_HAS_TLS compile flag).
 - **mDNS requires platform library** -- Bonjour on macOS (built-in), Avahi on Linux (`libavahi-client-dev`). Both optional; builds without them, discovery tests skip.
 - **Property push shares the call connection** -- `SubscriptionRegistry` fans `MSG_PROP_NOTIFY` out to subscribed transports over pipes (`run()`) and TCP. Calls and subscriptions may share one connection: the client demuxes interleaved notifications from call replies. `poll_notifications(timeout)` throws `ServiceError` when nothing arrives within the timeout.
