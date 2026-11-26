@@ -1,0 +1,96 @@
+// Compile coverage for the Rust generator: shapes the example services do
+// not use. tests/generated/coverage.rs is this file through
+// `songc --lang rust`, and tests/generated.rs compiles it under
+// #![deny(warnings)].
+
+namespace coverage;
+
+/// An enum with explicit and implied values
+enum Level {
+    low = 1,
+    high = 2,
+    /// One more than the item before
+    top,
+    off = 10
+}
+
+enum NoItems {
+}
+
+flags Mode {
+    none = 0,
+    fast = 1,
+    safe = 2
+}
+
+struct Empty {
+}
+
+/// Field names that are Rust keywords
+struct Keywords {
+    i32 type;
+    string match;
+    bool fn;
+    u8 self;
+    Level impl;
+}
+
+struct Everything {
+    bool a;
+    i8 b;
+    i16 c;
+    i32 d;
+    i64 e;
+    u8 f;
+    u16 g;
+    u32 h;
+    u64 i;
+    f32 j;
+    f64 k;
+    string l;
+    bytes m;
+    Level n;
+    Mode o;
+    NoItems p;
+    Empty q;
+    bool? oa;
+    bytes? om;
+    Level? on;
+    Mode? oo;
+    Empty? oq;
+    bytes[] am;
+    Level[] an;
+    Mode[] ao;
+    Empty[] aq;
+    string[][] deep;
+    Everything[] nested;
+    i32[]? optional_array;
+}
+
+/// A service whose every method streams
+service OnlyStreams {
+    stream ticks() -> u64;
+    stream levels(Level from) -> Level;
+    stream rows(i32[] seed) -> i32[];
+    stream maybe(string? name) -> string?;
+    stream writer_named(i32 writer) -> Empty;
+}
+
+/// A service whose methods take and return nothing
+service Quiet {
+    nop() -> void;
+    also_nop() -> void;
+}
+
+service Mixed {
+    /// Every parameter kind at once
+    all(i32 scalar, string text, bytes raw, Level level, Mode mode, Empty empty, Everything every,
+        i32? oscalar, string? otext, bytes? oraw, Level? olevel, Empty? oempty,
+        i32[] ascalar, string[] atext, Empty[] aempty, Level[] alevel, i32[][] grid) -> Everything;
+    opt_out(i32 type) -> string?;
+    arr_out(string match) -> Empty[];
+    enum_out() -> Level;
+    flags_out() -> Mode;
+    bytes_out() -> bytes;
+    stream watch(Keywords self) -> Keywords;
+}

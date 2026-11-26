@@ -79,6 +79,7 @@ add_executable(songc
     compiler/main.cpp
     compiler/codegen.cpp
     compiler/python_codegen.cpp
+    compiler/rust_codegen.cpp
     compiler/scaffold.cpp
     compiler/lexer.cpp
     compiler/parser.cpp

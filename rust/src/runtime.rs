@@ -56,6 +56,32 @@ impl StreamWriter<'_> {
     }
 }
 
+/// A `StreamWriter` that encodes each chunk from a `T`: what a generated
+/// service trait hands a streaming method.
+pub struct TypedStreamWriter<'a, 'b, T> {
+    writer: &'a mut StreamWriter<'b>,
+    encode: fn(&mut Buffer, &T) -> Result<()>,
+}
+
+impl<'a, 'b, T> TypedStreamWriter<'a, 'b, T> {
+    pub fn new(writer: &'a mut StreamWriter<'b>, encode: fn(&mut Buffer, &T) -> Result<()>) -> Self {
+        TypedStreamWriter { writer, encode }
+    }
+
+    /// Encode `value` and send it as one chunk now. An `Err` means the
+    /// value could not be encoded or the client is gone: return it.
+    pub fn write(&mut self, value: &T) -> Result<()> {
+        let mut chunk = Buffer::new();
+        (self.encode)(&mut chunk, value)?;
+        self.writer.write(&chunk)
+    }
+
+    /// Chunks written so far.
+    pub fn chunks_written(&self) -> u64 {
+        self.writer.chunks_written()
+    }
+}
+
 /// Why `serve` returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServeEnd {

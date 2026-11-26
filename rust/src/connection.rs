@@ -299,6 +299,34 @@ impl StreamCall<'_> {
     }
 }
 
+impl<'a> StreamCall<'a> {
+    /// The same stream with every chunk decoded by `decode`: what a
+    /// generated streaming proxy returns.
+    pub fn decoded<T>(self, decode: fn(&mut Buffer) -> Result<T>) -> TypedStream<'a, T> {
+        TypedStream { inner: self, decode }
+    }
+}
+
+/// The chunks of one streaming call, each decoded to a `T`. A chunk that
+/// does not decode is yielded as its error; the stream itself goes on.
+/// Dropping the stream before its end closes the connection, as for
+/// `StreamCall`.
+pub struct TypedStream<'a, T> {
+    inner: StreamCall<'a>,
+    decode: fn(&mut Buffer) -> Result<T>,
+}
+
+impl<T> Iterator for TypedStream<'_, T> {
+    type Item = Result<T>;
+
+    fn next(&mut self) -> Option<Result<T>> {
+        match self.inner.next()? {
+            Ok(mut chunk) => Some((self.decode)(&mut chunk)),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 impl Iterator for StreamCall<'_> {
     type Item = Result<Buffer>;
 

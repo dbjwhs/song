@@ -53,6 +53,7 @@ add_executable(song_tests
     codegen_test.cpp
     scaffold_test.cpp
     python_codegen_test.cpp
+    rust_codegen_test.cpp
     stress_test.cpp
     tls_test.cpp
     stream_test.cpp
@@ -67,6 +68,7 @@ add_executable(song_tests
     ${CMAKE_SOURCE_DIR}/compiler/resolver.cpp
     ${CMAKE_SOURCE_DIR}/compiler/codegen.cpp
     ${CMAKE_SOURCE_DIR}/compiler/python_codegen.cpp
+    ${CMAKE_SOURCE_DIR}/compiler/rust_codegen.cpp
     ${CMAKE_SOURCE_DIR}/compiler/scaffold.cpp
 )
 

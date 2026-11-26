@@ -1,0 +1,79 @@
+// Interop - Sing Network Integration Test
+// The service C++, Rust and Python all speak, so each can be tested against
+// the others: every kind of value, unary calls, streams, and failures.
+
+namespace interop;
+
+/// How a job ended
+enum Status {
+    ok,
+    /// The job failed and will not be retried
+    failed = 5,
+    retry
+}
+
+/// What a caller may do
+flags Access {
+    read = 1,
+    write = 2,
+    exec = 4
+}
+
+/// One measurement.
+/// A doc comment of two lines: both keep their prefix in generated code.
+struct Sample {
+    /// Identifier of the sample
+    i32 id;
+    string label;
+    f64 value;
+    Status status;
+    Access access;
+    i64? note_id;
+    string? note;
+    bytes blob;
+    i32[] counts;
+    string[] tags;
+}
+
+/// Samples with the structure around them
+struct Batch {
+    Sample[] samples;
+    Sample? best;
+    i32[][] grid;
+    Status[] history;
+}
+
+/// The interop service
+service Interop {
+    /// Add two numbers
+    add(i32 a, i32 b) -> i32;
+
+    /// Return the sample unchanged
+    echo_sample(Sample s) -> Sample;
+
+    /// Return the batch unchanged
+    echo_batch(Batch b) -> Batch;
+
+    /// "<prefix><status name>:<access bits>", prefix optional
+    describe(Status status, Access access, string? prefix) -> string;
+
+    /// Always fails, with this message
+    fail(string message) -> void;
+
+    /// Does nothing
+    ping() -> void;
+
+    /// Streams 1..n
+    stream count_to(i32 n) -> i32;
+
+    /// Streams n samples with ids 1..n and this label
+    stream samples(i32 n, string label) -> Sample;
+
+    /// Streams 1..n and then fails with this message
+    stream fail_after(i32 n, string message) -> i32;
+}
+
+/// A second service: its id comes after both ids of the first
+service Second {
+    whoami() -> string;
+}

@@ -5,6 +5,7 @@
 #include "resolver.hpp"
 #include "codegen.hpp"
 #include "python_codegen.hpp"
+#include "rust_codegen.hpp"
 #include "scaffold.hpp"
 #include <iostream>
 #include <fstream>
@@ -40,7 +41,7 @@ static void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " [options] <input.song>\n";
     std::cerr << "\nOptions:\n";
     std::cerr << "  -o, --output <dir>  Output directory (default: current)\n";
-    std::cerr << "  --lang <lang>       Output language: cpp (default), python\n";
+    std::cerr << "  --lang <lang>       Output language: cpp (default), python, rust\n";
     std::cerr << "  --single            Generate single header file (default, C++ only)\n";
     std::cerr << "  --split             Generate separate files (C++ only)\n";
     std::cerr << "  --scaffold          Generate implementation skeleton (C++ only)\n";
@@ -82,12 +83,12 @@ int main(int argc, char** argv) {
 
         if (arg == "--lang") {
             if (ndx + 1 >= argc) {
-                std::cerr << "Error: --lang requires an argument (cpp or python)\n";
+                std::cerr << "Error: --lang requires an argument (cpp, python or rust)\n";
                 return 1;
             }
             lang = argv[++ndx];
-            if (lang != "cpp" && lang != "python") {
-                std::cerr << "Error: Unknown language: " << lang << " (use cpp or python)\n";
+            if (lang != "cpp" && lang != "python" && lang != "rust") {
+                std::cerr << "Error: Unknown language: " << lang << " (use cpp, python or rust)\n";
                 return 1;
             }
             continue;
@@ -174,6 +175,13 @@ int main(int argc, char** argv) {
             PythonCodeGenerator pygen;
             std::string output_path = output_dir + "/" + base_name + ".py";
             write_file(output_path, pygen.generate_module(ns));
+            std::cout << "Generated: " << output_path << "\n";
+        } else if (lang == "rust") {
+            // Rust code generation: one module for a crate that depends on
+            // the song runtime crate (rust/)
+            RustCodeGenerator rsgen;
+            std::string output_path = output_dir + "/" + base_name + ".rs";
+            write_file(output_path, rsgen.generate_module(ns));
             std::cout << "Generated: " << output_path << "\n";
         } else if (scaffold_mode) {
             // C++ scaffold generation
