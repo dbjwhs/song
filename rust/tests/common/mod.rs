@@ -44,3 +44,82 @@ pub fn golden_vectors() -> BTreeMap<String, Vec<u8>> {
     }
     out
 }
+
+// ---- a scripted peer ---------------------------------------------------------
+
+use song::wire;
+use std::net::{TcpListener, TcpStream};
+use std::thread::JoinHandle;
+
+/// Accepts one client on a real TCP socket, sends `greeting`, then hands
+/// every message the client sends (init_ack apart) to `script`, which
+/// writes whatever frames it likes. The port of `test_streaming.py`'s
+/// ScriptedServer: the tests state the exact bytes a peer sends.
+pub struct ScriptedServer {
+    pub port: u16,
+    handle: Option<JoinHandle<Vec<Vec<u8>>>>,
+}
+
+impl ScriptedServer {
+    pub fn start<F>(greeting: Vec<u8>, mut script: F) -> ScriptedServer
+    where
+        F: FnMut(usize, &[u8], &mut TcpStream) + Send + 'static,
+    {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("local addr").port();
+        let handle = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut received = Vec::new();
+            let (mut stream, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(_) => return received,
+            };
+            if stream.write_all(&greeting).is_err() {
+                return received;
+            }
+            let mut calls = 0;
+            while let Ok(Some(msg)) = song::transport::read_message(&mut stream) {
+                let raw = msg.into_vec();
+                let is_ack = raw[5] == wire::MsgType::InitAck as u8;
+                received.push(raw.clone());
+                if is_ack {
+                    continue;
+                }
+                script(calls, &raw, &mut stream);
+                calls += 1;
+            }
+            received
+        });
+        ScriptedServer { port, handle: Some(handle) }
+    }
+
+    /// Every message the client sent, once the client has gone away.
+    pub fn received(mut self) -> Vec<Vec<u8>> {
+        self.handle.take().expect("joined once").join().expect("server thread")
+    }
+}
+
+/// The sequence id of a raw message.
+pub fn seq_of(raw: &[u8]) -> u32 {
+    u32::from_ne_bytes([raw[12], raw[13], raw[14], raw[15]])
+}
+
+pub fn init_frame(first: u16, current: u16, caps: u32, methods: &[wire::MethodDescriptor]) -> Vec<u8> {
+    wire::create_init_message(first, current, caps, methods).expect("init").into_vec()
+}
+
+/// The greeting of a current C++ service with no methods announced.
+pub fn init_v11() -> Vec<u8> {
+    init_frame(wire::FIRST_VERSION, wire::CURRENT_VERSION, wire::capability::STREAMING, &[])
+}
+
+pub fn i32_payload(value: i32) -> Vec<u8> {
+    let mut b = song::Buffer::new();
+    b.encode_i32(value);
+    b.into_vec()
+}
+
+pub fn send(stream: &mut TcpStream, frame: &[u8]) {
+    use std::io::Write;
+    let _ = stream.write_all(frame);
+}

@@ -77,11 +77,17 @@ fn built() -> BTreeMap<&'static str, Vec<u8>> {
     m.insert("msg_stream", wire::create_stream_message(9, &buf(|b| { b.encode_i32(1); Ok(()) })).unwrap().into_vec());
     m.insert("msg_stream_end", wire::create_stream_end_message(9).unwrap().into_vec());
     m.insert("msg_shutdown", wire::create_shutdown_message().unwrap().into_vec());
+
+    // The HMAC transport: the key itself, then two messages as
+    // SecureTransport puts them on the wire.
+    let key = golden_vectors()["hmac_key"].clone();
+    let call = wire::create_call_message(7, 1, 2, &args).unwrap();
+    m.insert("msg_call_tagged", song::security::tag_message(&key, call.data()).unwrap());
+    let end = wire::create_stream_end_message(9).unwrap();
+    m.insert("msg_stream_end_tagged", song::security::tag_message(&key, end.data()).unwrap());
+    m.insert("hmac_key", key);
     m
 }
-
-/// The vectors another test file covers (the HMAC transport).
-const ELSEWHERE: &[&str] = &["hmac_key", "msg_call_tagged", "msg_stream_end_tagged"];
 
 #[test]
 fn encoders_match_the_golden_vectors() {
@@ -92,9 +98,6 @@ fn encoders_match_the_golden_vectors() {
     let golden = golden_vectors();
     let ours = built();
     for (name, want) in &golden {
-        if ELSEWHERE.contains(&name.as_str()) {
-            continue;
-        }
         let got = ours.get(name.as_str()).unwrap_or_else(|| panic!("no Rust encoder for golden vector {name}"));
         assert_eq!(hex(got), hex(want), "golden vector {name}");
     }
@@ -157,6 +160,10 @@ fn decoders_read_the_golden_vectors() {
     let hdr = wire::decode_header_validated(&mut error).unwrap();
     assert_eq!(hdr.msg_type(), Some(wire::MsgType::Error));
     assert_eq!(wire::decode_error(&mut error).unwrap(), (3, "boom".to_string()));
+
+    let call = song::security::untag_message(&g["hmac_key"], &g["msg_call_tagged"]).unwrap();
+    assert_eq!(call, g["msg_call"]);
+    assert!(song::security::untag_message(b"some other key", &g["msg_call_tagged"]).is_err());
 
     let mut end = b("msg_stream_end");
     let hdr = wire::decode_header_validated(&mut end).unwrap();
