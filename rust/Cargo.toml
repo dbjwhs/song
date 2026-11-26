@@ -1,0 +1,19 @@
+# MIT License
+# Copyright (c) 2026 dbjwhs
+
+[package]
+name = "song"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Song RPC runtime for Rust: wire codecs, TCP and pipe transports, client and server"
+license = "MIT"
+publish = false
+
+# No dependencies: the runtime is std only, so the wire format is the only
+# thing it shares with the C++ and Python runtimes.
+[dependencies]
+
+[lib]
+name = "song"
+path = "src/lib.rs"
