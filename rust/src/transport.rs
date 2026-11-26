@@ -30,6 +30,26 @@ pub trait Transport: Send {
     fn is_connected(&self) -> bool;
 }
 
+/// A boxed transport is a transport, so a wrapper such as `SecureTransport`
+/// can be put around the `Box<dyn Transport>` a runtime hands out.
+impl Transport for Box<dyn Transport> {
+    fn send(&mut self, msg: &[u8]) -> Result<()> {
+        (**self).send(msg)
+    }
+
+    fn receive(&mut self, timeout: Option<Duration>) -> Result<Option<Buffer>> {
+        (**self).receive(timeout)
+    }
+
+    fn close(&mut self) {
+        (**self).close();
+    }
+
+    fn is_connected(&self) -> bool {
+        (**self).is_connected()
+    }
+}
+
 /// Read one message from `reader`: the header, a check of the magic and of
 /// the payload size against the cap, then exactly that many payload bytes.
 /// `Ok(None)` when the stream ends before the first byte of a header.

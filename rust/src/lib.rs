@@ -10,7 +10,8 @@
 //!
 //! Supported: every IDL value type, the message framing, the init
 //! handshake with capability exchange, TCP and pipe transports, HMAC
-//! message authentication, and a client with unary and streaming calls. Not supported, as in the Python
+//! message authentication, a client with unary and streaming calls, and a
+//! service runtime that serves TCP (a thread per client) and pipes. Not supported, as in the Python
 //! runtime: mDNS discovery, TLS, remote objects and properties.
 
 #![deny(warnings)]
@@ -18,6 +19,7 @@
 pub mod buffer;
 pub mod connection;
 pub mod error;
+pub mod runtime;
 pub mod security;
 pub mod sha256;
 pub mod transport;
@@ -26,5 +28,6 @@ pub mod wire;
 pub use buffer::Buffer;
 pub use connection::{ConnectOptions, ServiceConnection, StreamCall};
 pub use error::{Error, Result};
+pub use runtime::{ServeEnd, ServiceRuntime, StreamWriter};
 pub use security::SecureTransport;
 pub use transport::{PipeTransport, TcpTransport, Transport};
