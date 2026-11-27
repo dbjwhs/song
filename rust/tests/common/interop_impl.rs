@@ -76,6 +76,10 @@ impl Interop for InteropImpl {
         }
         Err(Error::service(message))
     }
+
+    fn bump(&self, id: Option<i64>, note: Option<&str>) -> Result<Option<i64>> {
+        Ok(id.map(|id| id + note.map_or(0, |note| note.len() as i64)))
+    }
 }
 
 /// Answers `whoami` with the language of the peer, so a test can tell which

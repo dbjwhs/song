@@ -18,17 +18,21 @@ pub enum Level {
     high = 2,
     /// One more than the item before
     top = 3,
-    off = 10,
+    /// A negative value
+    off = -1,
 }
 
 impl Level {
+    /// A second name for top
+    pub const peak: Level = Level::top;
+
     /// The item with this wire value, if there is one.
     pub fn from_i32(value: i32) -> Option<Level> {
         match value {
             1 => Some(Level::low),
             2 => Some(Level::high),
             3 => Some(Level::top),
-            10 => Some(Level::off),
+            -1 => Some(Level::off),
             _ => None,
         }
     }

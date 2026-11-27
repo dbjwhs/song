@@ -6,10 +6,7 @@ Python client against the Rust service runtime: the interop service of
 sing/network/rust_interop/interop.song served by
 rust/examples/interop_service.rs, with and without HMAC.
 
-The proxy is songc's Python output for the same IDL. The methods that pass
-an enum (describe, echo_sample, echo_batch, samples) are not called: the
-Python generator emits calls to encode_<Enum> and decode_<Enum> that it
-never defines, so those proxies cannot run against any peer.
+The proxy is songc's Python output for the same IDL.
 
 The Rust binary is built by cargo (`cargo build --examples` in rust/). The
 tests skip when it is absent; with SONG_REQUIRE_PEERS set (ctest sets it)
@@ -30,7 +27,11 @@ from song.generated.interop import (
     SERVICE_Interop,
     SERVICE_Interop_STREAM,
     SERVICE_Second,
+    Access,
+    Batch,
     InteropProxy,
+    Sample,
+    Status,
     SecondProxy,
 )
 
@@ -115,6 +116,27 @@ class RustServiceCase(unittest.TestCase):
         self.assertEqual(str(raised.exception), "no such job")
         self.assertEqual(raised.exception.code, 3)
         self.assertEqual(proxy.add(1, 1), 2)
+
+        # Enums and flags as parameters, and inside a struct both ways.
+        self.assertEqual(proxy.describe(Status.failed, Access.read | Access.exec, "job "), "job failed:5")
+        self.assertEqual(proxy.describe(Status.ok, Access(0), ""), "ok:0")
+        sample = Sample(id=7, label="caf\u00e9", value=-2.5, status=Status.retry,
+                        access=Access.read | Access.write, note_id=-1, note="",
+                        blob=bytes(range(256)), counts=[1, -2, 3], tags=["a", ""])
+        echoed = proxy.echo_sample(sample)
+        self.assertEqual(echoed, sample)
+        self.assertIs(type(echoed.status), Status)
+        batch = Batch(samples=[sample, sample], best=sample, grid=[[1, 2], [], [3]],
+                      history=[Status.ok, Status.failed, Status.retry])
+        self.assertEqual(proxy.echo_batch(batch), batch)
+        streamed = list(proxy.samples(3, "s", chunk_timeout=5.0))
+        self.assertEqual([s.id for s in streamed], [1, 2, 3])
+        self.assertTrue(all(isinstance(s.status, Status) for s in streamed))
+
+        # Optional parameters and an optional return, present and absent.
+        self.assertEqual(proxy.bump(5, "abc"), 8)
+        self.assertEqual(proxy.bump(-2, None), -2)
+        self.assertIsNone(proxy.bump(None, "ignored"))
 
         self.assertEqual(list(proxy.count_to(5, chunk_timeout=5.0)), [1, 2, 3, 4, 5])
         self.assertEqual(list(proxy.count_to(0, chunk_timeout=5.0)), [])

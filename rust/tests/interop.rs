@@ -76,6 +76,12 @@ fn exercise(conn: &mut ServiceConnection) {
     assert_eq!(proxy.describe(Status::failed, Access::read | Access::exec, "job ").unwrap(), "job failed:5");
     assert_eq!(proxy.describe(Status::ok, Access::default(), "").unwrap(), "ok:0");
 
+    // Optional parameters and an optional return, present and absent.
+    assert_eq!(proxy.bump(Some(5), Some("abc")).unwrap(), Some(8));
+    assert_eq!(proxy.bump(Some(-2), None).unwrap(), Some(-2));
+    assert_eq!(proxy.bump(None, Some("ignored")).unwrap(), None);
+    assert_eq!(proxy.bump(Some(i64::MAX - 1), Some("x")).unwrap(), Some(i64::MAX));
+
     // A failing unary call is a service error carrying the message, and the
     // connection goes on.
     let err = proxy.fail("no such job").unwrap_err();
@@ -121,6 +127,8 @@ fn handshake_with_a_cpp_service() {
     for method in interop::METHOD_Interop_add..=interop::METHOD_Interop_ping {
         want.push((interop::SERVICE_Interop, method, method_flags::NONE));
     }
+    // The C++ service registers its unary methods first, in its own order.
+    want.push((interop::SERVICE_Interop, interop::METHOD_Interop_bump, method_flags::NONE));
     for method in interop::METHOD_Interop_count_to..=interop::METHOD_Interop_fail_after {
         want.push((interop::SERVICE_Interop_STREAM, method, method_flags::STREAMING));
     }

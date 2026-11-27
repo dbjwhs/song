@@ -147,6 +147,11 @@ void exercise(ServiceConnection& conn) {
     EXPECT_EQ(proxy.describe(Status::failed, read_exec, "job "), "job failed:5");
     EXPECT_EQ(proxy.describe(Status::ok, static_cast<Access>(0), ""), "ok:0");
 
+    // Optional parameters and an optional return, present and absent.
+    EXPECT_EQ(proxy.bump(i64{5}, std::string("abc")), std::optional<i64>(8));
+    EXPECT_EQ(proxy.bump(i64{-2}, std::nullopt), std::optional<i64>(-2));
+    EXPECT_EQ(proxy.bump(std::nullopt, std::string("ignored")), std::nullopt);
+
     // A failing unary call is a service error carrying the message, and the
     // connection goes on.
     try {
@@ -202,15 +207,17 @@ TEST_F(RustInteropTest, HandshakeAnnouncesMethodsAndStreaming) {
     // The method list the Rust runtime announces: the same ids, with the
     // streaming flag on the stream methods of the _Stream service id.
     const auto& methods = conn.methods();
-    ASSERT_EQ(methods.size(), 10u);
+    ASSERT_EQ(methods.size(), 11u);
     EXPECT_EQ(methods[0].service_id, kService_Interop);
     EXPECT_EQ(methods[0].method_id, kMethod_Interop_add);
     EXPECT_EQ(methods[0].flags, wire::MethodFlags::none);
     EXPECT_EQ(methods[6].service_id, kService_Interop_Stream);
     EXPECT_EQ(methods[6].method_id, kMethod_Interop_count_to);
     EXPECT_EQ(methods[6].flags, wire::MethodFlags::streaming);
-    EXPECT_EQ(methods[9].service_id, kService_Second);
-    EXPECT_EQ(methods[9].method_id, kMethod_Second_whoami);
+    EXPECT_EQ(methods[9].service_id, kService_Interop);
+    EXPECT_EQ(methods[9].method_id, kMethod_Interop_bump);
+    EXPECT_EQ(methods[10].service_id, kService_Second);
+    EXPECT_EQ(methods[10].method_id, kMethod_Second_whoami);
 }
 
 TEST_F(RustInteropTest, UnaryAndStreamingCalls) {

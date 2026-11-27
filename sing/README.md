@@ -204,10 +204,9 @@ Comprehensive backup agent exercising all Song features in one project.
 ### 5. Rust Interop (`network/rust_interop/`)
 
 The service every language speaks, so each runtime can be tested against the
-others. `interop.song` has unary methods over every kind of value the C++
-generator can compile (structs, enums, flags, strings, bytes, nested
-arrays), three `stream` methods, a method that always fails and a stream
-that fails part way.
+others. `interop.song` has unary methods over every kind of value (structs,
+enums, flags, strings, bytes, nested arrays, optionals), three `stream`
+methods, a method that always fails and a stream that fails part way.
 
 **What is here:**
 - `interop_service.cpp`: the service on the C++ runtime
@@ -233,10 +232,6 @@ in `rust/tests/interop.rs`, Python client to Rust service in
 The Rust binary is built by cargo, which the CMake build does not need.
 These tests skip when it is absent. `ctest` builds it first when cargo is
 installed.
-
-**Not in the IDL, and why:** optional types (`T?`) and a service whose
-methods all take no parameters. The C++ generator's output for both fails to
-compile, so they cannot be part of a service C++ has to build.
 
 ---
 

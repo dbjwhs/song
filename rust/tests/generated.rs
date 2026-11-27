@@ -75,6 +75,7 @@ fn register_announces_every_method_with_its_flags() {
     for method in 7..=9 {
         want.push((interop::SERVICE_Interop_STREAM, method, method_flags::STREAMING));
     }
+    want.push((interop::SERVICE_Interop, 10, method_flags::NONE));
     want.push((interop::SERVICE_Second, 1, method_flags::NONE));
     assert_eq!(got, want);
     assert!(conn.has_capability(song::wire::capability::STREAMING));
@@ -83,8 +84,8 @@ fn register_announces_every_method_with_its_flags() {
 // ---- codecs ---------------------------------------------------------------------
 
 /// The exact bytes of a struct: field order, an enum as i32, flags as u32,
-/// arrays as a u32 count then items. (Optionals are in the coverage module:
-/// the interop IDL has none, because C++ cannot compile them.)
+/// arrays as a u32 count then items. (Optional fields are in the coverage
+/// module.)
 #[test]
 fn a_struct_encodes_field_by_field() {
     let sample = Sample {
@@ -149,9 +150,13 @@ fn enums_and_flags() {
 
     assert_eq!(
         (coverage::Level::low as i32, coverage::Level::top as i32, coverage::Level::off as i32),
-        (1, 3, 10),
-        "an item with no value is one more than the item before"
+        (1, 3, -1),
+        "an item with no value is one more than the item before; a value may be negative"
     );
+    // A second item with a value already taken is a name for the first.
+    assert_eq!(coverage::Level::peak, coverage::Level::top);
+    assert_eq!(coverage::Level::peak.name(), "top");
+    assert_eq!(coverage::Level::from_i32(-1), Some(coverage::Level::off));
     assert_eq!(coverage::Mode::none.bits(), 0);
 }
 

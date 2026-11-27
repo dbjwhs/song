@@ -68,6 +68,14 @@ public:
         count_to(n, writer);
         throw std::runtime_error(message);
     }
+
+    std::optional<i64> bump(const std::optional<i64>& id,
+                            const std::optional<std::string>& note) override {
+        if (!id) {
+            return std::nullopt;
+        }
+        return *id + static_cast<i64>(note ? note->size() : 0);
+    }
 };
 
 // Answers with the language of the peer, so a test can tell which
@@ -109,6 +117,7 @@ int main(int argc, char* argv[]) {
     runtime.register_method(kService_Interop, kMethod_Interop_describe);
     runtime.register_method(kService_Interop, kMethod_Interop_fail);
     runtime.register_method(kService_Interop, kMethod_Interop_ping);
+    runtime.register_method(kService_Interop, kMethod_Interop_bump);
     runtime.register_method(kService_Interop_Stream, kMethod_Interop_count_to, wire::MethodFlags::streaming);
     runtime.register_method(kService_Interop_Stream, kMethod_Interop_samples, wire::MethodFlags::streaming);
     runtime.register_method(kService_Interop_Stream, kMethod_Interop_fail_after, wire::MethodFlags::streaming);

@@ -193,6 +193,7 @@ pub const METHOD_Interop_ping: u16 = 6;
 pub const METHOD_Interop_count_to: u16 = 7;
 pub const METHOD_Interop_samples: u16 = 8;
 pub const METHOD_Interop_fail_after: u16 = 9;
+pub const METHOD_Interop_bump: u16 = 10;
 
 pub const SERVICE_Second: u16 = 3;
 pub const METHOD_Second_whoami: u16 = 1;
@@ -291,6 +292,28 @@ impl<'a> InteropProxy<'a> {
         let song_stream = self.conn.call_streaming(SERVICE_Interop_STREAM, METHOD_Interop_fail_after, &song_req, chunk_timeout)?;
         Ok(song_stream.decoded(song::Buffer::decode_i32))
     }
+
+    /// Optional values. Absent id: absent. Otherwise the id plus the length
+    /// of the note in bytes, an absent note counting as 0
+    pub fn bump(&mut self, id: Option<i64>, note: Option<&str>) -> song::Result<Option<i64>> {
+        let mut song_req = song::Buffer::new();
+        match id {
+            Some(song_v) => {
+                song_req.encode_bool(true);
+                song_req.encode_i64(song_v);
+            }
+            None => song_req.encode_bool(false),
+        }
+        match note {
+            Some(song_v) => {
+                song_req.encode_bool(true);
+                song_req.encode_string(song_v)?;
+            }
+            None => song_req.encode_bool(false),
+        }
+        let mut song_resp = self.conn.call(SERVICE_Interop, METHOD_Interop_bump, &song_req)?;
+        song_resp.decode_optional(song::Buffer::decode_i64)
+    }
 }
 
 /// The interop service
@@ -325,6 +348,10 @@ pub trait Interop: Send + Sync {
 
     /// Streams 1..n and then fails with this message
     fn fail_after(&self, n: i32, message: &str, writer: &mut song::TypedStreamWriter<'_, '_, i32>) -> song::Result<()>;
+
+    /// Optional values. Absent id: absent. Otherwise the id plus the length
+    /// of the note in bytes, an absent note counting as 0
+    fn bump(&self, id: Option<i64>, note: Option<&str>) -> song::Result<Option<i64>>;
 }
 
 /// Decode one unary call to Interop, run it on `song_impl`, encode the result.
@@ -369,6 +396,19 @@ pub fn dispatch_Interop<T: Interop + ?Sized>(
         }
         METHOD_Interop_ping => {
             song_impl.ping()?;
+            Ok(())
+        }
+        METHOD_Interop_bump => {
+            let id = song_request.decode_optional(song::Buffer::decode_i64)?;
+            let note = song_request.decode_optional(song::Buffer::decode_string)?;
+            let song_result = song_impl.bump(id, note.as_deref())?;
+            match &song_result {
+                Some(song_v) => {
+                    song_response.encode_bool(true);
+                    song_response.encode_i64(*song_v);
+                }
+                None => song_response.encode_bool(false),
+            }
             Ok(())
         }
         _ => Err(song::Error::service(format!("Unknown method ID: {song_method}"))),
@@ -429,6 +469,7 @@ pub fn register_Interop<T: Interop + ?Sized + 'static>(runtime: &mut song::Servi
     runtime.register_method(SERVICE_Interop_STREAM, METHOD_Interop_count_to, song::wire::method_flags::STREAMING);
     runtime.register_method(SERVICE_Interop_STREAM, METHOD_Interop_samples, song::wire::method_flags::STREAMING);
     runtime.register_method(SERVICE_Interop_STREAM, METHOD_Interop_fail_after, song::wire::method_flags::STREAMING);
+    runtime.register_method(SERVICE_Interop, METHOD_Interop_bump, song::wire::method_flags::NONE);
 }
 
 /// A second service: its id comes after both ids of the first

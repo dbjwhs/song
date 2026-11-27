@@ -29,6 +29,7 @@ constexpr u16 kMethod_Interop_ping = 6;
 constexpr u16 kMethod_Interop_count_to = 7;
 constexpr u16 kMethod_Interop_samples = 8;
 constexpr u16 kMethod_Interop_fail_after = 9;
+constexpr u16 kMethod_Interop_bump = 10;
 
 constexpr u16 kService_Second = 3;
 constexpr u16 kMethod_Second_whoami = 1;
@@ -320,6 +321,16 @@ public:
             chunk_timeout_ms);
     }
 
+    /// Optional values. Absent id: absent. Otherwise the id plus the length
+    /// of the note in bytes, an absent note counting as 0
+    std::optional<i64> bump(const std::optional<i64>& id, const std::optional<std::string>& note) {
+        Buffer req;
+        encode_optional(req, id, [&](const auto& v) { encode_i64(req, v); });
+        encode_optional(req, note, [&](const auto& v) { encode_string(req, v); });
+        Buffer resp = m_conn.call(kService_Interop, kMethod_Interop_bump, req);
+        return decode_optional<i64>(resp, [&]() { return decode_i64(resp); });
+    }
+
 };
 
 /// A second service: its id comes after both ids of the first
@@ -361,6 +372,9 @@ public:
     virtual void samples(i32 n, const std::string& label, StreamWriter& writer) = 0;
     /// Streams 1..n and then fails with this message
     virtual void fail_after(i32 n, const std::string& message, StreamWriter& writer) = 0;
+    /// Optional values. Absent id: absent. Otherwise the id plus the length
+    /// of the note in bytes, an absent note counting as 0
+    virtual std::optional<i64> bump(const std::optional<i64>& id, const std::optional<std::string>& note) = 0;
 };
 
 /// A second service: its id comes after both ids of the first (interface)
@@ -372,7 +386,7 @@ public:
     virtual std::string whoami(const std::string& caller) = 0;
 };
 
-inline void dispatch_Interop(IInterop& impl, u16 method_id, Buffer& request, Buffer& response) {
+inline void dispatch_Interop([[maybe_unused]] IInterop& impl, u16 method_id, [[maybe_unused]] Buffer& request, [[maybe_unused]] Buffer& response) {
     switch (method_id) {
         case kMethod_Interop_add: {
             i32 a = decode_i32(request);
@@ -410,12 +424,19 @@ inline void dispatch_Interop(IInterop& impl, u16 method_id, Buffer& request, Buf
             impl.ping();
             break;
         }
+        case kMethod_Interop_bump: {
+            std::optional<i64> id = decode_optional<i64>(request, [&]() { return decode_i64(request); });
+            std::optional<std::string> note = decode_optional<std::string>(request, [&]() { return decode_string(request); });
+            auto result = impl.bump(id, note);
+            encode_optional(response, result, [&](const auto& v) { encode_i64(response, v); });
+            break;
+        }
         default:
             throw std::runtime_error("Unknown method ID: " + std::to_string(method_id));
     }
 }
 
-inline void dispatch_Interop_stream(IInterop& impl, u16 method_id, Buffer& request, StreamWriter& writer) {
+inline void dispatch_Interop_stream(IInterop& impl, u16 method_id, [[maybe_unused]] Buffer& request, StreamWriter& writer) {
     switch (method_id) {
         case kMethod_Interop_count_to: {
             i32 n = decode_i32(request);
@@ -439,7 +460,7 @@ inline void dispatch_Interop_stream(IInterop& impl, u16 method_id, Buffer& reque
     }
 }
 
-inline void dispatch_Second(ISecond& impl, u16 method_id, Buffer& request, Buffer& response) {
+inline void dispatch_Second([[maybe_unused]] ISecond& impl, u16 method_id, [[maybe_unused]] Buffer& request, [[maybe_unused]] Buffer& response) {
     switch (method_id) {
         case kMethod_Second_whoami: {
             std::string caller = decode_string(request);

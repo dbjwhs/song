@@ -11,7 +11,10 @@ enum Level {
     high = 2,
     /// One more than the item before
     top,
-    off = 10
+    /// A second name for top
+    peak = 3,
+    /// A negative value
+    off = -1
 }
 
 enum NoItems {

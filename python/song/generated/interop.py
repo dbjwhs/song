@@ -2,7 +2,7 @@
 # Source: interop.song
 
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 from typing import Iterator, Optional, List
 
 from song.buffer import Buffer
@@ -21,6 +21,7 @@ METHOD_Interop_ping = 6
 METHOD_Interop_count_to = 7
 METHOD_Interop_samples = 8
 METHOD_Interop_fail_after = 9
+METHOD_Interop_bump = 10
 
 SERVICE_Second = 3
 METHOD_Second_whoami = 1
@@ -33,11 +34,31 @@ class Status(IntEnum):
     retry = 6
 
 
-class Access(IntEnum):
+def encode_Status(buf: Buffer, val: Status) -> None:
+    """Encode Status to buffer."""
+    buf.encode_i32(int(val))
+
+
+def decode_Status(buf: Buffer) -> Status:
+    """Decode Status from buffer."""
+    return Status(buf.decode_i32())
+
+
+class Access(IntFlag):
     """What a caller may do"""
     read = 1
     write = 2
     exec = 4
+
+
+def encode_Access(buf: Buffer, val: Access) -> None:
+    """Encode Access to buffer."""
+    buf.encode_u32(int(val))
+
+
+def decode_Access(buf: Buffer) -> Access:
+    """Decode Access from buffer."""
+    return Access(buf.decode_u32())
 
 
 @dataclass
@@ -185,6 +206,15 @@ class InteropProxy:
         req.encode_string(message)
         for resp in self._conn.call_streaming(SERVICE_Interop_STREAM, METHOD_Interop_fail_after, req, chunk_timeout):
             yield resp.decode_i32()
+
+    def bump(self, id: Optional[int], note: Optional[str]) -> Optional[int]:
+        """Optional values. Absent id: absent. Otherwise the id plus the length
+of the note in bytes, an absent note counting as 0"""
+        req = Buffer()
+        req.encode_optional(id, lambda b, v: req.encode_i64(v))
+        req.encode_optional(note, lambda b, v: req.encode_string(v))
+        resp = self._conn.call(SERVICE_Interop, METHOD_Interop_bump, req)
+        return resp.decode_optional(lambda b: resp.decode_i64())
 
 
 class SecondProxy:

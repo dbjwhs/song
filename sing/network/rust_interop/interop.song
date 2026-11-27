@@ -1,11 +1,7 @@
 // Interop - Sing Network Integration Test
 // The service C++, Rust and Python all speak, so each can be tested against
 // the others: unary calls, streams, failures, and every kind of value the
-// C++ generator can compile. That leaves out optional types (`T?`): the C++
-// generator emits calls to encode_optional and decode_optional, which the
-// C++ runtime does not have. No method of the second service is without
-// parameters for a like reason (the C++ dispatcher would not compile under
-// -Werror with an unused request).
+// generators emit, optional types included.
 
 namespace interop;
 
@@ -76,6 +72,10 @@ service Interop {
 
     /// Streams 1..n and then fails with this message
     stream fail_after(i32 n, string message) -> i32;
+
+    /// Optional values. Absent id: absent. Otherwise the id plus the length
+    /// of the note in bytes, an absent note counting as 0
+    bump(i64? id, string? note) -> i64?;
 }
 
 /// A second service: its id comes after both ids of the first
