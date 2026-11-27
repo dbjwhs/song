@@ -12,7 +12,7 @@ use crate::interop::{Access, Batch, Interop, Sample, Second, Status};
 use song::{Error, Result, TypedStreamWriter};
 
 /// Sample number `ndx` of a `samples(n, label)` stream. Every field depends
-/// on `ndx`, optional fields are present on alternate samples.
+/// on `ndx`.
 pub fn make_sample(ndx: i32, label: &str) -> Sample {
     let odd = ndx % 2 == 1;
     Sample {
@@ -21,8 +21,8 @@ pub fn make_sample(ndx: i32, label: &str) -> Sample {
         value: f64::from(ndx) * 0.5,
         status: if odd { Status::failed } else { Status::retry },
         access: Access((ndx as u32) & 7),
-        note_id: if odd { Some(i64::from(ndx) * 1_000_000_007) } else { None },
-        note: if odd { None } else { Some(format!("note {ndx}")) },
+        note_id: if odd { i64::from(ndx) * 1_000_000_007 } else { -1 },
+        note: if odd { String::new() } else { format!("note {ndx}") },
         blob: (0..ndx).map(|v| v as u8).collect(),
         counts: (1..=ndx).collect(),
         tags: (0..ndx % 3).map(|v| format!("{label}-{v}")).collect(),
@@ -44,8 +44,8 @@ impl Interop for InteropImpl {
         Ok(b.clone())
     }
 
-    fn describe(&self, status: Status, access: Access, prefix: Option<&str>) -> Result<String> {
-        Ok(format!("{}{}:{}", prefix.unwrap_or(""), status.name(), access.bits()))
+    fn describe(&self, status: Status, access: Access, prefix: &str) -> Result<String> {
+        Ok(format!("{}{}:{}", prefix, status.name(), access.bits()))
     }
 
     fn fail(&self, message: &str) -> Result<()> {
@@ -83,8 +83,8 @@ impl Interop for InteropImpl {
 pub struct SecondImpl;
 
 impl Second for SecondImpl {
-    fn whoami(&self) -> Result<String> {
-        Ok("rust".to_string())
+    fn whoami(&self, caller: &str) -> Result<String> {
+        Ok(format!("rust serving {caller}"))
     }
 }
 
@@ -96,11 +96,13 @@ pub fn interop_runtime() -> song::ServiceRuntime {
     runtime
 }
 
-/// A batch that uses every field, for echo tests.
+/// A batch that uses every field, for echo tests (the service binary does
+/// not use it).
+#[allow(dead_code)]
 pub fn make_batch() -> Batch {
     Batch {
         samples: (0..4).map(|ndx| make_sample(ndx, "batch")).collect(),
-        best: Some(make_sample(7, "best")),
+        best: make_sample(7, "best"),
         grid: vec![vec![1, 2, 3], vec![], vec![-4]],
         history: vec![Status::ok, Status::failed, Status::retry, Status::ok],
     }

@@ -101,6 +101,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     # Sing - Integration Tests
     add_subdirectory(sing)
 
+    # Rust runtime tests (optional: run from ctest when cargo is installed,
+    # reported as skipped when it is not; never part of the build)
+    add_subdirectory(rust)
+
     # Fuzz harnesses (optional, requires LLVM clang with libFuzzer)
     add_subdirectory(fuzz)
 endif()

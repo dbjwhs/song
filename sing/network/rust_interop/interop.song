@@ -1,6 +1,11 @@
 // Interop - Sing Network Integration Test
 // The service C++, Rust and Python all speak, so each can be tested against
-// the others: every kind of value, unary calls, streams, and failures.
+// the others: unary calls, streams, failures, and every kind of value the
+// C++ generator can compile. That leaves out optional types (`T?`): the C++
+// generator emits calls to encode_optional and decode_optional, which the
+// C++ runtime does not have. No method of the second service is without
+// parameters for a like reason (the C++ dispatcher would not compile under
+// -Werror with an unused request).
 
 namespace interop;
 
@@ -28,8 +33,8 @@ struct Sample {
     f64 value;
     Status status;
     Access access;
-    i64? note_id;
-    string? note;
+    i64 note_id;
+    string note;
     bytes blob;
     i32[] counts;
     string[] tags;
@@ -38,7 +43,7 @@ struct Sample {
 /// Samples with the structure around them
 struct Batch {
     Sample[] samples;
-    Sample? best;
+    Sample best;
     i32[][] grid;
     Status[] history;
 }
@@ -54,8 +59,8 @@ service Interop {
     /// Return the batch unchanged
     echo_batch(Batch b) -> Batch;
 
-    /// "<prefix><status name>:<access bits>", prefix optional
-    describe(Status status, Access access, string? prefix) -> string;
+    /// The prefix, the status name, a colon, the access bits in decimal
+    describe(Status status, Access access, string prefix) -> string;
 
     /// Always fails, with this message
     fail(string message) -> void;
@@ -75,5 +80,6 @@ service Interop {
 
 /// A second service: its id comes after both ids of the first
 service Second {
-    whoami() -> string;
+    /// Who answers: the language of the service, " serving ", the caller
+    whoami(string caller) -> string;
 }

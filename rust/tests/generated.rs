@@ -83,7 +83,8 @@ fn register_announces_every_method_with_its_flags() {
 // ---- codecs ---------------------------------------------------------------------
 
 /// The exact bytes of a struct: field order, an enum as i32, flags as u32,
-/// an optional as a bool then the value, arrays as a u32 count then items.
+/// arrays as a u32 count then items. (Optionals are in the coverage module:
+/// the interop IDL has none, because C++ cannot compile them.)
 #[test]
 fn a_struct_encodes_field_by_field() {
     let sample = Sample {
@@ -92,8 +93,8 @@ fn a_struct_encodes_field_by_field() {
         value: 1.5,
         status: Status::failed,
         access: Access::read | Access::exec,
-        note_id: Some(-2),
-        note: None,
+        note_id: -2,
+        note: "n".into(),
         blob: vec![0xAA, 0xBB],
         counts: vec![1, 2],
         tags: vec!["x".into()],
@@ -108,9 +109,9 @@ fn a_struct_encodes_field_by_field() {
     want.encode_f64(1.5);
     want.encode_i32(5);
     want.encode_u32(5);
-    want.encode_bool(true);
     want.encode_i64(-2);
-    want.encode_bool(false);
+    want.encode_u32(1);
+    want.write(b"n");
     want.encode_u32(2);
     want.write(&[0xAA, 0xBB]);
     want.encode_u32(2);
@@ -230,10 +231,10 @@ fn unary_methods() {
     let batch = make_batch();
     assert_eq!(proxy.echo_batch(&batch).unwrap(), batch);
 
-    assert_eq!(proxy.describe(Status::failed, Access::read | Access::exec, Some("job ")).unwrap(), "job failed:5");
-    assert_eq!(proxy.describe(Status::ok, Access::default(), None).unwrap(), "ok:0");
+    assert_eq!(proxy.describe(Status::failed, Access::read | Access::exec, "job ").unwrap(), "job failed:5");
+    assert_eq!(proxy.describe(Status::ok, Access::default(), "").unwrap(), "ok:0");
 
-    assert_eq!(SecondProxy::new(&mut conn).whoami().unwrap(), "rust");
+    assert_eq!(SecondProxy::new(&mut conn).whoami("a test").unwrap(), "rust serving a test");
 }
 
 #[test]

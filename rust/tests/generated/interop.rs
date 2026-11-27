@@ -104,8 +104,8 @@ pub struct Sample {
     pub value: f64,
     pub status: Status,
     pub access: Access,
-    pub note_id: Option<i64>,
-    pub note: Option<String>,
+    pub note_id: i64,
+    pub note: String,
     pub blob: Vec<u8>,
     pub counts: Vec<i32>,
     pub tags: Vec<String>,
@@ -117,20 +117,8 @@ pub fn encode_Sample(buf: &mut song::Buffer, val: &Sample) -> song::Result<()> {
     buf.encode_f64(val.value);
     encode_Status(buf, val.status);
     encode_Access(buf, val.access);
-    match &val.note_id {
-        Some(song_v) => {
-            buf.encode_bool(true);
-            buf.encode_i64(*song_v);
-        }
-        None => buf.encode_bool(false),
-    }
-    match &val.note {
-        Some(song_v) => {
-            buf.encode_bool(true);
-            buf.encode_string(song_v)?;
-        }
-        None => buf.encode_bool(false),
-    }
+    buf.encode_i64(val.note_id);
+    buf.encode_string(&val.note)?;
     buf.encode_bytes(&val.blob)?;
     buf.encode_array(&val.counts, |song_buf: &mut song::Buffer, song_v: &i32| {
         song_buf.encode_i32(*song_v);
@@ -150,8 +138,8 @@ pub fn decode_Sample(buf: &mut song::Buffer) -> song::Result<Sample> {
         value: buf.decode_f64()?,
         status: decode_Status(buf)?,
         access: decode_Access(buf)?,
-        note_id: buf.decode_optional(song::Buffer::decode_i64)?,
-        note: buf.decode_optional(song::Buffer::decode_string)?,
+        note_id: buf.decode_i64()?,
+        note: buf.decode_string()?,
         blob: buf.decode_bytes()?,
         counts: buf.decode_array(song::Buffer::decode_i32)?,
         tags: buf.decode_array(song::Buffer::decode_string)?,
@@ -162,20 +150,14 @@ pub fn decode_Sample(buf: &mut song::Buffer) -> song::Result<Sample> {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Batch {
     pub samples: Vec<Sample>,
-    pub best: Option<Sample>,
+    pub best: Sample,
     pub grid: Vec<Vec<i32>>,
     pub history: Vec<Status>,
 }
 
 pub fn encode_Batch(buf: &mut song::Buffer, val: &Batch) -> song::Result<()> {
     buf.encode_array(&val.samples, encode_Sample)?;
-    match &val.best {
-        Some(song_v) => {
-            buf.encode_bool(true);
-            encode_Sample(buf, song_v)?;
-        }
-        None => buf.encode_bool(false),
-    }
+    encode_Sample(buf, &val.best)?;
     buf.encode_array(&val.grid, |song_buf: &mut song::Buffer, song_v: &Vec<i32>| {
         song_buf.encode_array(song_v, |song_buf: &mut song::Buffer, song_v: &i32| {
             song_buf.encode_i32(*song_v);
@@ -193,7 +175,7 @@ pub fn encode_Batch(buf: &mut song::Buffer, val: &Batch) -> song::Result<()> {
 pub fn decode_Batch(buf: &mut song::Buffer) -> song::Result<Batch> {
     Ok(Batch {
         samples: buf.decode_array(decode_Sample)?,
-        best: buf.decode_optional(decode_Sample)?,
+        best: decode_Sample(buf)?,
         grid: buf.decode_array(|song_buf: &mut song::Buffer| song_buf.decode_array(song::Buffer::decode_i32))?,
         history: buf.decode_array(decode_Status)?,
     })
@@ -250,18 +232,12 @@ impl<'a> InteropProxy<'a> {
         decode_Batch(&mut song_resp)
     }
 
-    /// "<prefix><status name>:<access bits>", prefix optional
-    pub fn describe(&mut self, status: Status, access: Access, prefix: Option<&str>) -> song::Result<String> {
+    /// The prefix, the status name, a colon, the access bits in decimal
+    pub fn describe(&mut self, status: Status, access: Access, prefix: &str) -> song::Result<String> {
         let mut song_req = song::Buffer::new();
         encode_Status(&mut song_req, status);
         encode_Access(&mut song_req, access);
-        match prefix {
-            Some(song_v) => {
-                song_req.encode_bool(true);
-                song_req.encode_string(song_v)?;
-            }
-            None => song_req.encode_bool(false),
-        }
+        song_req.encode_string(prefix)?;
         let mut song_resp = self.conn.call(SERVICE_Interop, METHOD_Interop_describe, &song_req)?;
         song_resp.decode_string()
     }
@@ -332,8 +308,8 @@ pub trait Interop: Send + Sync {
     /// Return the batch unchanged
     fn echo_batch(&self, b: &Batch) -> song::Result<Batch>;
 
-    /// "<prefix><status name>:<access bits>", prefix optional
-    fn describe(&self, status: Status, access: Access, prefix: Option<&str>) -> song::Result<String>;
+    /// The prefix, the status name, a colon, the access bits in decimal
+    fn describe(&self, status: Status, access: Access, prefix: &str) -> song::Result<String>;
 
     /// Always fails, with this message
     fn fail(&self, message: &str) -> song::Result<()>;
@@ -381,8 +357,8 @@ pub fn dispatch_Interop<T: Interop + ?Sized>(
         METHOD_Interop_describe => {
             let status = decode_Status(song_request)?;
             let access = decode_Access(song_request)?;
-            let prefix = song_request.decode_optional(song::Buffer::decode_string)?;
-            let song_result = song_impl.describe(status, access, prefix.as_deref())?;
+            let prefix = song_request.decode_string()?;
+            let song_result = song_impl.describe(status, access, &prefix)?;
             song_response.encode_string(&song_result)?;
             Ok(())
         }
@@ -465,8 +441,10 @@ impl<'a> SecondProxy<'a> {
         SecondProxy { conn }
     }
 
-    pub fn whoami(&mut self) -> song::Result<String> {
-        let song_req = song::Buffer::new();
+    /// Who answers: the language of the service, " serving ", the caller
+    pub fn whoami(&mut self, caller: &str) -> song::Result<String> {
+        let mut song_req = song::Buffer::new();
+        song_req.encode_string(caller)?;
         let mut song_resp = self.conn.call(SERVICE_Second, METHOD_Second_whoami, &song_req)?;
         song_resp.decode_string()
     }
@@ -477,19 +455,21 @@ impl<'a> SecondProxy<'a> {
 /// The service side of Second: implement this and hand it to `register_Second`.
 /// An `Err` is sent to the client as an error.
 pub trait Second: Send + Sync {
-    fn whoami(&self) -> song::Result<String>;
+    /// Who answers: the language of the service, " serving ", the caller
+    fn whoami(&self, caller: &str) -> song::Result<String>;
 }
 
 /// Decode one unary call to Second, run it on `song_impl`, encode the result.
 pub fn dispatch_Second<T: Second + ?Sized>(
     song_impl: &T,
     song_method: u16,
-    _song_request: &mut song::Buffer,
+    song_request: &mut song::Buffer,
     song_response: &mut song::Buffer,
 ) -> song::Result<()> {
     match song_method {
         METHOD_Second_whoami => {
-            let song_result = song_impl.whoami()?;
+            let caller = song_request.decode_string()?;
+            let song_result = song_impl.whoami(&caller)?;
             song_response.encode_string(&song_result)?;
             Ok(())
         }
