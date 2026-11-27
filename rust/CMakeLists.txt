@@ -50,6 +50,13 @@ set_tests_properties(rust_cargo_test PROPERTIES
     ENVIRONMENT "SONG_BUILD_DIR=${CMAKE_BINARY_DIR};SONG_REQUIRE_PEERS=1"
     TIMEOUT 1200)
 
+# The fuzz harnesses (fuzz/rust) on deterministic input. The libFuzzer
+# binaries themselves are built by fuzz/rust/build.sh, not from here.
+add_test(NAME rust_fuzz_smoke
+    COMMAND ${SONG_CARGO} test
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/fuzz/rust)
+set_tests_properties(rust_fuzz_smoke PROPERTIES TIMEOUT 1200)
+
 # clippy is a rustup component and may be absent where cargo is present.
 execute_process(COMMAND ${SONG_CARGO} clippy --version
     RESULT_VARIABLE SONG_CLIPPY_RESULT OUTPUT_QUIET ERROR_QUIET)

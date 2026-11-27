@@ -58,3 +58,11 @@ dist/
 # Rust build output
 rust/target/
 rust/Cargo.lock
+fuzz/rust/target/
+fuzz/rust/Cargo.lock
+
+# Rust fuzz binaries and corpora (fuzz/rust/build.sh)
+fuzz/rust/fuzz_rust_*_decoder
+fuzz/rust/fuzz_rust_*_decoder.dSYM/
+fuzz/rust/corpus_*/
+fuzz/rust/crash-*

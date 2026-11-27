@@ -1,0 +1,37 @@
+# MIT License
+# Copyright (c) 2026 dbjwhs
+
+# Fuzz harnesses for the Rust runtime's decoders, beside the C++ ones in
+# fuzz/. No third-party crates: the libFuzzer entry point is exported by
+# hand (src/lib.rs) and linked against clang's libFuzzer runtime by
+# build.sh, so `libfuzzer-sys` and `cargo fuzz` are not needed.
+#
+#   cargo test          the harnesses on deterministic pseudo-random input
+#   ./build.sh          libFuzzer binaries (needs LLVM clang, not Apple clang)
+
+[package]
+name = "song-fuzz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+song = { path = "../../rust" }
+
+[features]
+# Exactly one of these exports LLVMFuzzerTestOneInput (one per binary).
+wire = []
+buffer = []
+
+# The fuzz binaries: optimized, but with the checks a fuzzer is there to
+# trip, and a panic is an abort so libFuzzer records the input.
+[profile.release]
+debug = true
+debug-assertions = true
+overflow-checks = true
+panic = "abort"
+codegen-units = 1
