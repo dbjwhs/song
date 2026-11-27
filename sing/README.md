@@ -279,16 +279,16 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 
 | Category | Tests |
 |----------|-------|
-| IPC Calculator | 13 |
+| IPC Calculator | 26 |
 | IPC StockTicker | 15 |
 | IPC Chat | 23 |
 | IPC DataCopy | 25 |
 | Network TCP Calculator | 9 |
-| Network Discovery | 4 |
+| Network Discovery | 5 |
 | Network Secure | 5 |
 | Network Backup Agent | 44 |
 | Network Rust Interop | 9 |
-| **Total** | **147** |
+| **Total** | **161** |
 
 ## Requirements
 
