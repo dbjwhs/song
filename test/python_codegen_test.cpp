@@ -645,3 +645,100 @@ TEST(PythonCodegenTest, ServiceWithoutStreamsHasNoStreamId) {
 
     EXPECT_EQ(code.find("_STREAM"), std::string::npos);
 }
+
+// Generated Python for enums, flags, optionals and awkward doc comments is
+// imported and run: the module once called encode_<Enum> / decode_<Enum>
+// that it never defined, and a doc comment ending in a double quote made
+// the docstring a syntax error.
+TEST(PythonCodegenTest, EnumCodecsAndQuotedDocstringsRun) {
+    if (std::system("python3 --version >/dev/null 2>&1") != 0) {
+        GTEST_SKIP() << "python3 not available";
+    }
+
+    std::string module = parse_and_generate_python(R"SONG(
+        namespace edge;
+
+        /// "quoted" from end to "end"
+        enum Level {
+            off = -1,
+            low,
+            normal = 1,
+            standard = 1,
+            high
+        }
+
+        /// A back\slash and three """ quotes
+        flags Access {
+            read = 1,
+            write = 2
+        }
+
+        /// ends with a quote"
+        struct Note {
+            Level level;
+            Access access;
+            Level[] history;
+            Level? maybe;
+            i32? count;
+        }
+
+        /// The "service"
+        service Notes {
+            /// say "hi"
+            echo(Level level, Access access) -> Level;
+        }
+    )SONG");
+
+    EXPECT_NE(module.find("class Access(IntFlag):"), std::string::npos);
+    EXPECT_NE(module.find("def encode_Level(buf: Buffer, val: Level) -> None:"), std::string::npos);
+    EXPECT_NE(module.find("def decode_Access(buf: Buffer) -> Access:"), std::string::npos);
+
+    auto tmp_dir = std::filesystem::temp_directory_path() / "song_python_edge_test";
+    std::filesystem::create_directories(tmp_dir);
+    {
+        std::ofstream mf(tmp_dir / "edge.py");
+        ASSERT_TRUE(mf.is_open());
+        mf << module;
+    }
+    {
+        std::ofstream sf(tmp_dir / "run_edge.py");
+        ASSERT_TRUE(sf.is_open());
+        sf << R"PY(
+import edge
+from edge import Access, Level, Note
+from song.buffer import Buffer
+
+assert Level.off == -1 and Level.low == 0 and Level.high == 2
+assert Level.standard is Level.normal                      # an alias
+assert edge.Level.__doc__ == '"quoted" from end to "end"'
+assert edge.Access.__doc__ == 'A back\\slash and three """ quotes'
+assert edge.Note.__doc__ == 'ends with a quote"'
+assert edge.NotesProxy.echo.__doc__ == 'say "hi"'
+
+note = Note(level=Level.off, access=Access.read | Access.write,
+            history=[Level.high, Level.off], maybe=None, count=7)
+buf = Buffer()
+edge.encode_Note(buf, note)
+back = edge.decode_Note(Buffer(buf.data()))
+assert back == note, back
+assert type(back.level) is Level and type(back.access) is Access
+
+# An integer that is no item of the enum is an error, not a silent value.
+bad = Buffer()
+bad.encode_i32(99)
+try:
+    edge.decode_Level(Buffer(bad.data()))
+    raise SystemExit("decode_Level accepted 99")
+except ValueError:
+    pass
+)PY";
+    }
+
+    std::string python_dir = (std::filesystem::path(SONG_SOURCE_DIR) / "python").string();
+    std::string cmd = "PYTHONPATH=" + python_dir + ":" + tmp_dir.string() +
+                      " python3 " + (tmp_dir / "run_edge.py").string() + " 2>&1";
+    int ret = std::system(cmd.c_str());
+    std::filesystem::remove_all(tmp_dir);
+
+    EXPECT_EQ(ret, 0) << "Generated Python module failed.\nCommand: " << cmd << "\nModule:\n" << module;
+}

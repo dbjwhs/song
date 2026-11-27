@@ -83,43 +83,43 @@ class Buffer:
 
     def encode_i8(self, val: int) -> None:
         """Encode a signed 8-bit integer."""
-        self._data.extend(struct.pack('<b', val))
+        self._data.extend(struct.pack('=b', val))
 
     def encode_i16(self, val: int) -> None:
         """Encode a signed 16-bit integer."""
-        self._data.extend(struct.pack('<h', val))
+        self._data.extend(struct.pack('=h', val))
 
     def encode_i32(self, val: int) -> None:
         """Encode a signed 32-bit integer."""
-        self._data.extend(struct.pack('<i', val))
+        self._data.extend(struct.pack('=i', val))
 
     def encode_i64(self, val: int) -> None:
         """Encode a signed 64-bit integer."""
-        self._data.extend(struct.pack('<q', val))
+        self._data.extend(struct.pack('=q', val))
 
     def encode_u8(self, val: int) -> None:
         """Encode an unsigned 8-bit integer."""
-        self._data.extend(struct.pack('<B', val))
+        self._data.extend(struct.pack('=B', val))
 
     def encode_u16(self, val: int) -> None:
         """Encode an unsigned 16-bit integer."""
-        self._data.extend(struct.pack('<H', val))
+        self._data.extend(struct.pack('=H', val))
 
     def encode_u32(self, val: int) -> None:
         """Encode an unsigned 32-bit integer."""
-        self._data.extend(struct.pack('<I', val))
+        self._data.extend(struct.pack('=I', val))
 
     def encode_u64(self, val: int) -> None:
         """Encode an unsigned 64-bit integer."""
-        self._data.extend(struct.pack('<Q', val))
+        self._data.extend(struct.pack('=Q', val))
 
     def encode_f32(self, val: float) -> None:
         """Encode a 32-bit float."""
-        self._data.extend(struct.pack('<f', val))
+        self._data.extend(struct.pack('=f', val))
 
     def encode_f64(self, val: float) -> None:
         """Encode a 64-bit float."""
-        self._data.extend(struct.pack('<d', val))
+        self._data.extend(struct.pack('=d', val))
 
     def encode_string(self, val: str) -> None:
         """Encode a string (length-prefixed UTF-8)."""
@@ -146,43 +146,43 @@ class Buffer:
 
     def decode_i8(self) -> int:
         """Decode a signed 8-bit integer."""
-        return struct.unpack('<b', self.read(1))[0]
+        return struct.unpack('=b', self.read(1))[0]
 
     def decode_i16(self) -> int:
         """Decode a signed 16-bit integer."""
-        return struct.unpack('<h', self.read(2))[0]
+        return struct.unpack('=h', self.read(2))[0]
 
     def decode_i32(self) -> int:
         """Decode a signed 32-bit integer."""
-        return struct.unpack('<i', self.read(4))[0]
+        return struct.unpack('=i', self.read(4))[0]
 
     def decode_i64(self) -> int:
         """Decode a signed 64-bit integer."""
-        return struct.unpack('<q', self.read(8))[0]
+        return struct.unpack('=q', self.read(8))[0]
 
     def decode_u8(self) -> int:
         """Decode an unsigned 8-bit integer."""
-        return struct.unpack('<B', self.read(1))[0]
+        return struct.unpack('=B', self.read(1))[0]
 
     def decode_u16(self) -> int:
         """Decode an unsigned 16-bit integer."""
-        return struct.unpack('<H', self.read(2))[0]
+        return struct.unpack('=H', self.read(2))[0]
 
     def decode_u32(self) -> int:
         """Decode an unsigned 32-bit integer."""
-        return struct.unpack('<I', self.read(4))[0]
+        return struct.unpack('=I', self.read(4))[0]
 
     def decode_u64(self) -> int:
         """Decode an unsigned 64-bit integer."""
-        return struct.unpack('<Q', self.read(8))[0]
+        return struct.unpack('=Q', self.read(8))[0]
 
     def decode_f32(self) -> float:
         """Decode a 32-bit float."""
-        return struct.unpack('<f', self.read(4))[0]
+        return struct.unpack('=f', self.read(4))[0]
 
     def decode_f64(self) -> float:
         """Decode a 64-bit float."""
-        return struct.unpack('<d', self.read(8))[0]
+        return struct.unpack('=d', self.read(8))[0]
 
     def decode_string(self) -> str:
         """Decode a string."""

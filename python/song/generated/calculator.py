@@ -2,7 +2,7 @@
 # Source: calculator.song
 
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 from typing import Iterator, Optional, List
 
 from song.buffer import Buffer

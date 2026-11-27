@@ -23,7 +23,16 @@ def make_version(major: int, minor: int) -> int:
     return (major << 8) | minor
 
 FIRST_VERSION = make_version(1, 0)   # 0x0100 = 256
-CURRENT_VERSION = make_version(1, 0)  # 0x0100 = 256
+CURRENT_VERSION = make_version(1, 1)  # 0x0101 = 257
+
+# Capability bits exchanged in init / init_ack (wire.hpp Capability). The
+# negotiated set is the AND of both peers'.
+CAP_STREAMING = 0x00000001
+CAP_HMAC = 0x00000040
+
+# What this client supports: streaming calls. (HMAC is a property of the
+# connection, not announced here, as in the C++ client.)
+CLIENT_CAPABILITIES = CAP_STREAMING
 
 
 class MsgType(IntEnum):
@@ -70,7 +79,7 @@ def encode_header(msg_type: MsgType, flags: int, sequence_id: int, payload_size:
     """
     Encode a wire protocol header.
 
-    Header format (16 bytes, little-endian):
+    Header format (16 bytes, native byte order, as the C++ runtime writes it):
     - magic: u32 (4 bytes) - 0x534F4E47 "SONG"
     - flags: u8 (1 byte) - message flags
     - type: u8 (1 byte) - message type
@@ -83,7 +92,7 @@ def encode_header(msg_type: MsgType, flags: int, sequence_id: int, payload_size:
             f"Message payload {payload_size} exceeds maximum {MAX_PAYLOAD_SIZE}"
         )
     return struct.pack(
-        '<IBBHII',
+        '=IBBHII',
         MAGIC,
         flags,
         msg_type,
@@ -110,7 +119,7 @@ def decode_header(data: bytes) -> Header:
         raise ProtocolError(f"Header must be {HEADER_SIZE} bytes, got {len(data)}")
 
     magic, flags, msg_type, _, payload_size, sequence_id = struct.unpack(
-        '<IBBHII', data
+        '=IBBHII', data
     )
 
     if magic != MAGIC:
@@ -126,6 +135,18 @@ def decode_header(data: bytes) -> Header:
         sequence_id=sequence_id,
         payload_size=payload_size
     )
+
+
+def create_init_ack_message(first_version: int, current_version: int,
+                            capabilities: int) -> bytes:
+    """
+    The client's answer to a v1.1+ service's init message: the same payload
+    layout as init (magic, first version, current version, capabilities,
+    method count), with no methods.
+    """
+    payload = struct.pack('=IHHII', MAGIC, first_version, current_version,
+                          capabilities, 0)
+    return encode_header(MsgType.init_ack, 0, 0, len(payload)) + payload
 
 
 def create_call_message(sequence_id: int, service_id: int, method_id: int,

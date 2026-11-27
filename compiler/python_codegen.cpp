@@ -7,6 +7,8 @@
 
 namespace song::compiler {
 
+static std::string py_docstring(const std::string& doc);
+
 using u16 = std::uint16_t;
 
 // Convert Type to Python type string for runtime
@@ -198,7 +200,7 @@ std::string PythonCodeGenerator::generate_struct_def(const StructDef& s) {
     out << "class " << s.name << ":\n";
 
     if (!s.doc.empty()) {
-        out << "    \"\"\"" << s.doc << "\"\"\"\n";
+        out << "    " << py_docstring(s.doc) << "\n";
     }
 
     if (s.fields.empty()) {
@@ -257,16 +259,40 @@ std::string PythonCodeGenerator::generate_struct_def(const StructDef& s) {
 }
 
 // =============================================================================
+// Docstrings
+// =============================================================================
+
+// A doc comment as a Python docstring literal. The text is free-form, so a
+// backslash, a run of three double quotes, or a double quote at the very end
+// would otherwise change or break the literal.
+static std::string py_docstring(const std::string& doc) {
+    std::string body;
+    for (size_t ndx = 0; ndx < doc.size(); ++ndx) {
+        char c = doc[ndx];
+        if (c == '\\') {
+            body += "\\\\";
+        } else if (c == '"' && (ndx + 1 == doc.size() || doc.compare(ndx, 3, "\"\"\"") == 0)) {
+            body += "\\\"";
+        } else {
+            body += c;
+        }
+    }
+    return "\"\"\"" + body + "\"\"\"";
+}
+
+// =============================================================================
 // Enum Generation
 // =============================================================================
 
 std::string PythonCodeGenerator::generate_enum_def(const EnumDef& e) {
     std::ostringstream out;
 
-    out << "class " << e.name << "(IntEnum):\n";
+    // A flags value is any combination of bits, so it is an IntFlag (u32 on
+    // the wire); an enum is one of its items (i32 on the wire).
+    out << "class " << e.name << (e.is_flags ? "(IntFlag):\n" : "(IntEnum):\n");
 
     if (!e.doc.empty()) {
-        out << "    \"\"\"" << e.doc << "\"\"\"\n";
+        out << "    " << py_docstring(e.doc) << "\n";
     }
 
     int64_t next_value = 0;
@@ -280,6 +306,21 @@ std::string PythonCodeGenerator::generate_enum_def(const EnumDef& e) {
         }
         out << "\n";
     }
+    if (e.items.empty() && e.doc.empty()) {
+        out << "    pass\n";
+    }
+
+    // Codecs, named like the struct ones so fields, parameters, returns and
+    // array elements all call encode_<Name>(buf, val) / decode_<Name>(buf).
+    const char* wire = e.is_flags ? "u32" : "i32";
+    out << "\n\n";
+    out << "def encode_" << e.name << "(buf: Buffer, val: " << e.name << ") -> None:\n";
+    out << "    \"\"\"Encode " << e.name << " to buffer.\"\"\"\n";
+    out << "    buf.encode_" << wire << "(int(val))\n";
+    out << "\n\n";
+    out << "def decode_" << e.name << "(buf: Buffer) -> " << e.name << ":\n";
+    out << "    \"\"\"Decode " << e.name << " from buffer.\"\"\"\n";
+    out << "    return " << e.name << "(buf.decode_" << wire << "())\n";
 
     return out.str();
 }
@@ -339,7 +380,7 @@ std::string PythonCodeGenerator::generate_service_proxy(const ServiceDef& s) {
     out << "class " << s.name << "Proxy:\n";
 
     if (!s.doc.empty()) {
-        out << "    \"\"\"" << s.doc << "\"\"\"\n";
+        out << "    " << py_docstring(s.doc) << "\n";
     } else {
         out << "    \"\"\"Client proxy for " << s.name << " service.\"\"\"\n";
     }
@@ -363,7 +404,7 @@ std::string PythonCodeGenerator::generate_service_proxy(const ServiceDef& s) {
                 << return_type << "]:\n";
 
             if (!m.doc.empty()) {
-                out << "        \"\"\"" << m.doc << "\"\"\"\n";
+                out << "        " << py_docstring(m.doc) << "\n";
             }
 
             out << "        req = Buffer()\n";
@@ -388,7 +429,7 @@ std::string PythonCodeGenerator::generate_service_proxy(const ServiceDef& s) {
             << ") -> " << return_type << ":\n";
 
         if (!m.doc.empty()) {
-            out << "        \"\"\"" << m.doc << "\"\"\"\n";
+            out << "        " << py_docstring(m.doc) << "\n";
         }
 
         // Encode request
@@ -423,7 +464,7 @@ std::string PythonCodeGenerator::generate_module(const Namespace& ns) {
     out << "# Source: " << ns.name << ".song\n\n";
 
     out << "from dataclasses import dataclass\n";
-    out << "from enum import IntEnum\n";
+    out << "from enum import IntEnum, IntFlag\n";
     out << "from typing import Iterator, Optional, List\n";
     out << "\n";
     out << "from song.buffer import Buffer\n";

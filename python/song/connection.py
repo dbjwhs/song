@@ -25,6 +25,9 @@ from .wire import (
     decode_error_message,
     FIRST_VERSION,
     CURRENT_VERSION,
+    CLIENT_CAPABILITIES,
+    make_version,
+    create_init_ack_message,
 )
 
 
@@ -86,6 +89,8 @@ class ServiceConnection:
         self._sequence_id = 0
         self._lock = threading.Lock()
         self._connected = False
+        self._negotiated_version = FIRST_VERSION
+        self._negotiated_capabilities = 0
 
     def connect(self) -> None:
         """
@@ -117,6 +122,9 @@ class ServiceConnection:
         if header.msg_type != MsgType.init:
             raise ProtocolError(f"Expected init message, got {header.msg_type}")
 
+        self._negotiated_version = FIRST_VERSION
+        self._negotiated_capabilities = 0
+
         if payload_data:
             buf = Buffer(payload_data)
 
@@ -129,8 +137,8 @@ class ServiceConnection:
 
             first_version = buf.decode_u16()
             current_version = buf.decode_u16()
-            _ = buf.decode_u32()  # capabilities (unused for now)
-            _ = buf.decode_u32()  # method_count (unused for now)
+            service_capabilities = buf.decode_u32()
+            _ = buf.decode_u32()  # method_count (the descriptors are not used)
 
             # Version check
             if CURRENT_VERSION < first_version:
@@ -143,6 +151,27 @@ class ServiceConnection:
                     f"Service version {current_version} too old, "
                     f"client requires at least {FIRST_VERSION}"
                 )
+
+            # Both sides speak the lower of the two current versions and the
+            # capabilities both announced.
+            self._negotiated_version = min(CURRENT_VERSION, current_version)
+            self._negotiated_capabilities = service_capabilities & CLIENT_CAPABILITIES
+
+            # A v1.1+ service is told what this client speaks. A 1.0 service
+            # does not know the message, so it is not sent one.
+            if self._negotiated_version >= make_version(1, 1):
+                self._send_message(create_init_ack_message(
+                    FIRST_VERSION, CURRENT_VERSION, CLIENT_CAPABILITIES))
+
+    @property
+    def negotiated_version(self) -> int:
+        """The protocol version in use: the lower of the two peers' current versions."""
+        return self._negotiated_version
+
+    @property
+    def negotiated_capabilities(self) -> int:
+        """The capability bits both peers announced."""
+        return self._negotiated_capabilities
 
     def close(self) -> None:
         """Close the connection."""
@@ -296,8 +325,8 @@ class ServiceConnection:
 
         # The tag rides at the end of the payload: payload_size (offset 8)
         # grows by the tag size, and the tag covers the original bytes.
-        payload_size = struct.unpack_from('<I', message, 8)[0]
-        patched = (message[:8] + struct.pack('<I', payload_size + HMAC_TAG_SIZE)
+        payload_size = struct.unpack_from('=I', message, 8)[0]
+        patched = (message[:8] + struct.pack('=I', payload_size + HMAC_TAG_SIZE)
                    + message[12:])
         self._send_all(patched + self._tag(message))
 
@@ -318,7 +347,7 @@ class ServiceConnection:
             raise SecurityError("message payload too short for HMAC verification")
 
         payload, received_tag = body[:-HMAC_TAG_SIZE], body[-HMAC_TAG_SIZE:]
-        original = (header_data[:8] + struct.pack('<I', len(payload))
+        original = (header_data[:8] + struct.pack('=I', len(payload))
                     + header_data[12:] + payload)
         if not hmac.compare_digest(self._tag(original), received_tag):
             self.close()

@@ -79,9 +79,12 @@ class OneShotServer:
         with client:
             try:
                 client.sendall(self._greeting)
-                header = recv_exact(client, HEADER_SIZE)
-                size = struct.unpack_from('<I', header, 8)[0]
-                self.received = header + recv_exact(client, size)
+                while True:
+                    header = recv_exact(client, HEADER_SIZE)
+                    size = struct.unpack_from('<I', header, 8)[0]
+                    self.received = header + recv_exact(client, size)
+                    if header[5] != MsgType.init_ack:
+                        break       # the client's init_ack comes before its call
                 if self._reply:
                     client.sendall(self._reply(self.received))
                     recv_exact(client, 1)  # hold open until the client closes

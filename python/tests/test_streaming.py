@@ -27,11 +27,14 @@ from song.wire import (
     create_result_message,
     decode_header,
     encode_header,
+    make_version,
+    CAP_STREAMING,
+    CLIENT_CAPABILITIES,
 )
 
 
-def init_frame() -> bytes:
-    payload = struct.pack('<IHHII', MAGIC, FIRST_VERSION, CURRENT_VERSION, 0, 0)
+def init_frame(current_version: int = CURRENT_VERSION, capabilities: int = 0) -> bytes:
+    payload = struct.pack('<IHHII', MAGIC, FIRST_VERSION, current_version, capabilities, 0)
     return encode_header(MsgType.init, 0, 0, len(payload)) + payload
 
 
@@ -40,6 +43,10 @@ def stream_frame(seq: int, value: int) -> bytes:
     buf.encode_i32(value)
     payload = buf.data()
     return encode_header(MsgType.stream, 0, seq, len(payload)) + payload
+
+
+def result_frame(seq: int) -> bytes:
+    return encode_header(MsgType.result, 0, seq, 0)
 
 
 def stream_end_frame(seq: int) -> bytes:
@@ -59,7 +66,9 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
 class ScriptedServer:
     """Accepts one client; answers each call with script(call_index, seq)."""
 
-    def __init__(self, script):
+    def __init__(self, script, greeting: bytes = None):
+        self.acks = []
+        self._greeting = init_frame() if greeting is None else greeting
         self._script = script
         self.calls = []
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -76,10 +85,14 @@ class ScriptedServer:
             return
         with client:
             try:
-                client.sendall(init_frame())
+                client.sendall(self._greeting)
                 while True:
                     header = decode_header(recv_exact(client, HEADER_SIZE))
                     payload = recv_exact(client, header.payload_size)
+                    if header.msg_type == MsgType.init_ack:
+                        # What a v1.1 service does: note it and carry on.
+                        self.acks.append(payload)
+                        continue
                     service_id, method_id = struct.unpack('<HH', payload[:4])
                     self.calls.append((service_id, method_id, payload[4:]))
                     for frame in self._script(len(self.calls) - 1, header.sequence_id):
@@ -90,6 +103,44 @@ class ScriptedServer:
     def close(self) -> None:
         self._listener.close()
         self._thread.join(timeout=2)
+
+
+class TestHandshake(unittest.TestCase):
+    """The version and capability exchange (init, then init_ack to a v1.1+ service)."""
+
+    def start(self, greeting: bytes):
+        server = ScriptedServer(lambda ndx, seq: [result_frame(seq)], greeting)
+        self.addCleanup(server.close)
+        conn = ServiceConnection("127.0.0.1", server.port, timeout=2.0)
+        conn.connect()
+        self.addCleanup(conn.close)
+        return server, conn
+
+    def test_a_v11_service_is_sent_an_init_ack(self):
+        server, conn = self.start(init_frame(make_version(1, 1), CAP_STREAMING | 0x08))
+        conn.call(1, 1, Buffer())      # the ack is on the wire before the call
+        self.assertEqual(len(server.acks), 1)
+        # The init payload layout: magic, first and current version,
+        # capabilities, no methods.
+        self.assertEqual(server.acks[0], struct.pack(
+            '<IHHII', MAGIC, make_version(1, 0), make_version(1, 1), CLIENT_CAPABILITIES, 0))
+        self.assertEqual(conn.negotiated_version, make_version(1, 1))
+        # Only what both sides announced: the service's properties bit is dropped.
+        self.assertEqual(conn.negotiated_capabilities, CAP_STREAMING)
+
+    def test_a_v10_service_is_not_sent_one(self):
+        server, conn = self.start(init_frame(make_version(1, 0), 0))
+        conn.call(1, 1, Buffer())
+        self.assertEqual(server.acks, [])
+        self.assertEqual(len(server.calls), 1)
+        self.assertEqual(conn.negotiated_version, make_version(1, 0))
+        self.assertEqual(conn.negotiated_capabilities, 0)
+
+    def test_a_newer_service_negotiates_down_to_this_client(self):
+        server, conn = self.start(init_frame(make_version(1, 7), CAP_STREAMING))
+        conn.call(1, 1, Buffer())
+        self.assertEqual(conn.negotiated_version, CURRENT_VERSION)
+        self.assertEqual(len(server.acks), 1)
 
 
 class TestCallStreaming(unittest.TestCase):
