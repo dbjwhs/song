@@ -514,8 +514,8 @@ std::string CodeGenerator::generate_service_interface(const ServiceDef& s) {
 std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
     std::ostringstream out;
 
-    out << "inline void dispatch_" << s.name << "(I" << s.name << "& impl, "
-        << "u16 method_id, Buffer& request, Buffer& response) {\n";
+    out << "inline void dispatch_" << s.name << "([[maybe_unused]] I" << s.name << "& impl, "
+        << "u16 method_id, [[maybe_unused]] Buffer& request, [[maybe_unused]] Buffer& response) {\n";
     out << "    switch (method_id) {\n";
 
     bool has_stream = false;
@@ -564,7 +564,7 @@ std::string CodeGenerator::generate_service_dispatcher(const ServiceDef& s) {
     // the unary dispatcher above. Register with runtime.register_stream_dispatcher.
     if (has_stream) {
         out << "\ninline void dispatch_" << s.name << "_stream(I" << s.name
-            << "& impl, u16 method_id, Buffer& request, StreamWriter& writer) {\n";
+            << "& impl, u16 method_id, [[maybe_unused]] Buffer& request, StreamWriter& writer) {\n";
         out << "    switch (method_id) {\n";
 
         for (const auto& m : s.methods) {

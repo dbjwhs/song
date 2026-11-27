@@ -567,3 +567,54 @@ TEST(ResolverTest, ErrorHasLocation) {
     EXPECT_GT(resolver->errors()[0].column(), 0);
 }
 
+// =============================================================================
+// Enum values: aliases, negatives, range
+// =============================================================================
+
+TEST(ResolverTest, EnumAliasAndNegativeValuesAreAccepted) {
+    EXPECT_TRUE(parse_and_resolve(R"(
+        namespace test;
+        enum Level {
+            off = -1,
+            low,
+            normal = 1,
+            standard = 1,
+            high
+        }
+    )"));
+}
+
+TEST(ResolverTest, EnumValueMustFitI32) {
+    Resolver* resolver;
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        enum Big { huge = 2147483648 }
+    )", &resolver));
+    ASSERT_GE(resolver->errors().size(), 1u);
+    EXPECT_NE(std::string(resolver->errors().front().what()).find("does not fit i32"), std::string::npos);
+
+    // The item after the largest value has no value left to take.
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        enum Edge { last = 2147483647, over }
+    )"));
+    EXPECT_TRUE(parse_and_resolve(R"(
+        namespace test;
+        enum Edge { first = -2147483648, last = 2147483647 }
+    )"));
+}
+
+TEST(ResolverTest, FlagsValueMustFitU32) {
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        flags Bits { bad = -1 }
+    )"));
+    EXPECT_FALSE(parse_and_resolve(R"(
+        namespace test;
+        flags Bits { bad = 0x100000000 }
+    )"));
+    EXPECT_TRUE(parse_and_resolve(R"(
+        namespace test;
+        flags Bits { top = 0x80000000, all = 0xFFFFFFFF }
+    )"));
+}

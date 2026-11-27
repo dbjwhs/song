@@ -2,6 +2,7 @@
 // Copyright (c) 2026 dbjwhs
 
 #include "resolver.hpp"
+#include <cstdint>
 
 namespace song {
 
@@ -136,7 +137,7 @@ void Resolver::validate_types() {
 }
 
 void Resolver::validate_enum(const compiler::EnumDef& e) {
-    check_duplicate_enum_items(e.items, e.name);
+    check_duplicate_enum_items(e.items, e.name, e.is_flags);
 }
 
 void Resolver::validate_struct(const compiler::StructDef& s) {
@@ -352,7 +353,7 @@ void Resolver::check_duplicate_methods(const std::vector<compiler::Method>& meth
 }
 
 void Resolver::check_duplicate_enum_items(const std::vector<compiler::EnumItem>& items,
-                                          const std::string& parent_name) {
+                                          const std::string& parent_name, bool is_flags) {
     std::unordered_set<std::string> seen;
     for (const auto& item : items) {
         if (seen.count(item.name)) {
@@ -362,18 +363,17 @@ void Resolver::check_duplicate_enum_items(const std::vector<compiler::EnumItem>&
         seen.insert(item.name);
     }
 
-    // Check for duplicate explicit values
-    std::unordered_map<int64_t, std::string> seen_values;
+    // Two items may share a value (an alias); the generators handle that.
+    // A value must fit the wire type: i32 for an enum, u32 for flags.
+    const int64_t min_value = is_flags ? 0 : static_cast<int64_t>(INT32_MIN);
+    const int64_t max_value = is_flags ? static_cast<int64_t>(UINT32_MAX) : static_cast<int64_t>(INT32_MAX);
     int64_t auto_value = 0;
     for (const auto& item : items) {
         int64_t val = item.value.value_or(auto_value);
-        auto it = seen_values.find(val);
-        if (it != seen_values.end()) {
-            error(item.loc, "Enum value " + std::to_string(val) + " for '" +
-                  item.name + "' collides with '" + it->second +
-                  "' in " + parent_name);
+        if (val < min_value || val > max_value) {
+            error(item.loc, "Value " + std::to_string(val) + " for '" + item.name +
+                  "' in " + parent_name + " does not fit " + (is_flags ? "u32" : "i32"));
         }
-        seen_values[val] = item.name;
         auto_value = val + 1;
     }
 }

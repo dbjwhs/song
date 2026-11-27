@@ -219,7 +219,7 @@ TEST(CodegenTest, StreamMethodGeneratesStreamingProxy) {
 
     // Separate stream dispatcher; the unary dispatcher does NOT dispatch watch.
     EXPECT_NE(code.find("void dispatch_Feed_stream(IFeed& impl, u16 method_id, "
-                        "Buffer& request, StreamWriter& writer)"), std::string::npos);
+                        "[[maybe_unused]] Buffer& request, StreamWriter& writer)"), std::string::npos);
     EXPECT_NE(code.find("impl.watch(count, writer)"), std::string::npos);
 
     // The unary proxy for `poll` still uses plain call().
@@ -810,6 +810,97 @@ TEST(CodegenTest, GeneratedHeaderCompiles) {
     int ret = std::system(cmd.c_str());
 
     // Clean up temp files
+    std::filesystem::remove(header_path);
+    std::filesystem::remove(source_path);
+
+    EXPECT_EQ(ret, 0) << "Generated C++ header failed to compile.\n"
+                       << "Command: " << cmd << "\n"
+                       << "Generated header:\n" << header;
+}
+
+// Forms the generator once emitted code for that did not compile: optional
+// types (the runtime had no encode_optional / decode_optional), a service
+// whose methods take no parameters (an unused `request` under -Werror), and
+// enums with negative values and aliases. Compiled with the project's own
+// warning flags, and the optional and enum codecs are instantiated.
+TEST(CodegenTest, OptionalsParameterlessServiceAndEnumAliasesCompile) {
+    const char* source = R"(
+        namespace edge;
+
+        enum Level {
+            off = -1,
+            low,
+            normal = 1,
+            standard = 1,
+            high
+        }
+
+        struct Note {
+            i32? count;
+            string? text;
+            Level? level;
+            i32[] plain;
+        }
+
+        service Quiet {
+            ping() -> void;
+            version() -> i32;
+        }
+
+        service OnlyStreams {
+            stream ticks() -> i32;
+        }
+
+        service Maybe {
+            find(i64? id, string? name) -> Note?;
+        }
+    )";
+
+    Parser parser(source);
+    auto ast = parser.parse();
+    Resolver resolver(ast);
+    ASSERT_TRUE(resolver.resolve());
+
+    CodeGenerator gen;
+    std::string header = gen.generate_header(ast.namespaces.front());
+
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto header_path = tmp_dir / "song_codegen_edge_test.hpp";
+    auto source_path = tmp_dir / "song_codegen_edge_test.cpp";
+    {
+        std::ofstream hf(header_path);
+        ASSERT_TRUE(hf.is_open());
+        hf << header;
+    }
+    {
+        std::ofstream sf(source_path);
+        ASSERT_TRUE(sf.is_open());
+        sf << "#include \"song_codegen_edge_test.hpp\"\n"
+           << "#include <cstring>\n"
+           << "int main() {\n"
+           << "    using namespace song;\n"
+           << "    using namespace song::edge;\n"
+           << "    Note note;\n"
+           << "    note.count = 3;\n"
+           << "    note.level = Level::off;\n"
+           << "    Buffer buf;\n"
+           << "    encode_Note(buf, note);\n"
+           << "    buf.reset_read();\n"
+           << "    Note back = decode_Note(buf);\n"
+           << "    bool same = back.count == note.count && !back.text.has_value() && back.level == Level::off;\n"
+           << "    bool alias = Level::normal == Level::standard && static_cast<i32>(Level::low) == 0;\n"
+           << "    return (same && alias && std::strcmp(Level_name(Level::standard), \"normal\") == 0) ? 0 : 1;\n"
+           << "}\n";
+    }
+
+    std::filesystem::path song_include = std::filesystem::path(SONG_SOURCE_DIR) / "include";
+    std::string cmd = std::string(SONG_CXX_COMPILER) + " -std=c++20 -fsyntax-only -Wall -Wextra -Werror"
+                      " -I" + song_include.string() +
+                      " -I" + tmp_dir.string() +
+                      " " + source_path.string() +
+                      " 2>&1";
+    int ret = std::system(cmd.c_str());
+
     std::filesystem::remove(header_path);
     std::filesystem::remove(source_path);
 

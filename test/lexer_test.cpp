@@ -449,3 +449,38 @@ TEST(LexerTest, IntegerTokenToString) {
     EXPECT_TRUE(str.find("Integer") != std::string::npos);
     EXPECT_TRUE(str.find("int_value=42") != std::string::npos);
 }
+
+// =============================================================================
+// Negative integers
+// =============================================================================
+
+TEST(LexerTest, NegativeInteger) {
+    Lexer lexer("= -1 -0x10 -> 7");
+    auto equals = lexer.next_token();
+    ASSERT_TRUE(equals.has_value());
+    EXPECT_EQ(equals->m_type, TokenType::Equals);
+
+    auto minus_one = lexer.next_token();
+    ASSERT_TRUE(minus_one.has_value());
+    EXPECT_EQ(minus_one->m_type, TokenType::Integer);
+    EXPECT_EQ(minus_one->m_int_value, -1);
+    EXPECT_EQ(minus_one->m_value, "-1");
+
+    auto minus_hex = lexer.next_token();
+    ASSERT_TRUE(minus_hex.has_value());
+    EXPECT_EQ(minus_hex->m_int_value, -16);
+
+    // A minus before '>' is still the arrow.
+    auto arrow = lexer.next_token();
+    ASSERT_TRUE(arrow.has_value());
+    EXPECT_EQ(arrow->m_type, TokenType::Arrow);
+
+    auto seven = lexer.next_token();
+    ASSERT_TRUE(seven.has_value());
+    EXPECT_EQ(seven->m_int_value, 7);
+}
+
+TEST(LexerTest, IntegerOutOfRangeIsALexerError) {
+    Lexer lexer("99999999999999999999999");
+    EXPECT_THROW(lexer.next_token(), LexerError);
+}

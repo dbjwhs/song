@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -159,6 +160,25 @@ void encode_array(Buffer& buf, std::span<const T> vals) {
             static_assert(sizeof(T) == 0, "Unsupported array element type");
         }
     }
+}
+
+// An optional is a bool, then the value when the bool is true. The value's
+// own encoder and decoder are passed in, so any type works (generated code
+// passes a lambda around the field's encode or decode call).
+template<typename T, typename Encoder>
+void encode_optional(Buffer& buf, const std::optional<T>& val, Encoder&& encode_value) {
+    encode_bool(buf, val.has_value());
+    if (val.has_value()) {
+        encode_value(*val);
+    }
+}
+
+template<typename T, typename Decoder>
+std::optional<T> decode_optional(Buffer& buf, Decoder&& decode_value) {
+    if (!decode_bool(buf)) {
+        return std::nullopt;
+    }
+    return std::optional<T>(decode_value());
 }
 
 template<typename T>

@@ -208,8 +208,8 @@ std::optional<Token> Lexer::next_token() {
         return Token(TokenType::Arrow, "->", start_line, start_column);
     }
 
-    // Integer literals
-    if (std::isdigit(c)) {
+    // Integer literals, with an optional leading minus (an enum value)
+    if (std::isdigit(c) || (c == '-' && std::isdigit(static_cast<unsigned char>(peek_next())))) {
         return lex_integer();
     }
 
@@ -244,6 +244,12 @@ std::optional<Token> Lexer::lex_integer() {
     size_t start_column = m_column;
     std::string value;
     int64_t int_value = 0;
+    bool negative = false;
+
+    if (peek() == '-') {
+        negative = true;
+        advance();
+    }
 
     // Check for hex prefix
     if (peek() == '0' && (peek_next() == 'x' || peek_next() == 'X')) {
@@ -259,14 +265,27 @@ std::optional<Token> Lexer::lex_integer() {
             throw LexerError("Invalid hex literal: missing digits", m_line, start_column);
         }
 
-        int_value = std::stoll(value, nullptr, 16);
+        try {
+            int_value = std::stoll(value, nullptr, 16);
+        } catch (const std::out_of_range&) {
+            throw LexerError("Integer literal out of range: " + value, m_line, start_column);
+        }
     } else {
         // Decimal
         while (!at_end() && std::isdigit(peek())) {
             value += peek();
             advance();
         }
-        int_value = std::stoll(value, nullptr, 10);
+        try {
+            int_value = std::stoll(value, nullptr, 10);
+        } catch (const std::out_of_range&) {
+            throw LexerError("Integer literal out of range: " + value, m_line, start_column);
+        }
+    }
+
+    if (negative) {
+        int_value = -int_value;
+        value = "-" + value;
     }
 
     return Token(TokenType::Integer, value, m_line, start_column, int_value);

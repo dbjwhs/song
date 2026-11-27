@@ -113,7 +113,7 @@ private:
     void check_duplicate_methods(const std::vector<compiler::Method>& methods,
                                  const std::string& parent_name);
     void check_duplicate_enum_items(const std::vector<compiler::EnumItem>& items,
-                                    const std::string& parent_name);
+                                    const std::string& parent_name, bool is_flags);
 
     // Cycle detection
     bool has_inheritance_cycle(const std::string& name);

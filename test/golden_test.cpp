@@ -133,10 +133,17 @@ std::map<std::string, std::function<Buffer()>> builders(const std::string& hmac_
         encode_array<std::vector<i32>>(b, v);
         return b;
     };
-    // An optional is a bool, then the value when true (the generated
-    // encode_optional helper; the runtime has no function of its own).
-    m["optional_i32_some_7"] = [] { Buffer b; encode_bool(b, true); encode_i32(b, 7); return b; };
-    m["optional_none"] = [] { Buffer b; encode_bool(b, false); return b; };
+    // An optional is a bool, then the value when true.
+    m["optional_i32_some_7"] = [] {
+        Buffer b;
+        encode_optional(b, std::optional<i32>(7), [&](const auto& v) { encode_i32(b, v); });
+        return b;
+    };
+    m["optional_none"] = [] {
+        Buffer b;
+        encode_optional(b, std::optional<i32>(), [&](const auto& v) { encode_i32(b, v); });
+        return b;
+    };
     m["header_call_seq7_size4"] = [] {
         Buffer b;
         wire::encode_header(b, wire::Header{wire::kMagic, wire::MsgFlags::none, wire::MsgType::call, 0, 4, 7});
@@ -240,4 +247,22 @@ TEST(GoldenVectorTest, DecodersReadTheSharedVectors) {
     std::memcpy(tag.data(), tagged_call.data() + tagged_call.size() - kHmacTagSize, kHmacTagSize);
     EXPECT_TRUE(verify_hmac(key, call, tag));
     EXPECT_FALSE(verify_hmac(key + "x", call, tag));
+}
+
+TEST(GoldenVectorTest, OptionalRoundTrips) {
+    Buffer b;
+    encode_optional(b, std::optional<std::string>("hi"), [&](const auto& v) { encode_string(b, v); });
+    encode_optional(b, std::optional<i64>(), [&](const auto& v) { encode_i64(b, v); });
+    encode_optional(b, std::optional<i64>(-9), [&](const auto& v) { encode_i64(b, v); });
+    b.reset_read();
+    EXPECT_EQ(decode_optional<std::string>(b, [&]() { return decode_string(b); }), std::optional<std::string>("hi"));
+    EXPECT_EQ(decode_optional<i64>(b, [&]() { return decode_i64(b); }), std::nullopt);
+    EXPECT_EQ(decode_optional<i64>(b, [&]() { return decode_i64(b); }), std::optional<i64>(-9));
+    EXPECT_EQ(b.remaining(), 0u);
+
+    // A present optional with its value cut off is an error, not a default.
+    Buffer cut;
+    encode_bool(cut, true);
+    cut.reset_read();
+    EXPECT_THROW(decode_optional<i32>(cut, [&]() { return decode_i32(cut); }), std::exception);
 }

@@ -139,11 +139,17 @@ int main(int argc, char** argv) {
     }
 
     // Parse
-    Parser parser(source);
+    // The parser's constructor already reads the first token, so a lexical
+    // error can surface there as well as in parse().
     AST ast;
     try {
+        Parser parser(source);
         ast = parser.parse();
     } catch (const ParserError& e) {
+        std::cerr << input_path << ":" << e.line() << ":" << e.column()
+                  << ": error: " << e.what() << "\n";
+        return 1;
+    } catch (const LexerError& e) {
         std::cerr << input_path << ":" << e.line() << ":" << e.column()
                   << ": error: " << e.what() << "\n";
         return 1;
