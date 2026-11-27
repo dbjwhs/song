@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Song (**S**ervices **O**ver **N**ative **G**ateways) is a C++20 service framework: process-isolated services that talk over Unix pipes or TCP, with an IDL compiler (`songc`) that generates the proxy/dispatcher code.
+Song (**S**ervices **O**ver **N**ative **G**ateways) is a C++20 service framework: process-isolated services that talk over Unix pipes or TCP, with an IDL compiler (`songc`) that generates the proxy/dispatcher code. There are three runtimes that speak the same wire format: C++ (the reference, full feature set), a Python client (`python/`), and a Rust client and service runtime (`rust/`).
 
 ## Reference Material Outside This Repo
 
@@ -40,9 +40,16 @@ ctest --test-dir build -R sing_
 ./build/songc foo.song -o outdir --split       # types / wire / client / server files
 ./build/songc foo.song -o outdir --scaffold    # implementation skeleton; re-run appends a sync report
 ./build/songc foo.song -o outdir --lang python # Python client proxy
+./build/songc foo.song -o outdir --lang rust   # Rust module <namespace>.rs: proxy, service trait, dispatch
 
 # Python client library (tests spawn the built C++ TCP calculator service, so build first)
 cd python && python -m unittest discover tests
+
+# Rust runtime crate (std only; interop tests start the built C++ services, so build first)
+cd rust && cargo test && cargo clippy --all-targets -- -D warnings
+cargo test --test client                       # one integration test file
+cargo test --test interop long_stream          # one test by name
+ctest --test-dir build -R 'rust|RustInterop'   # everything Rust-related, as CI would run it
 
 # libFuzzer harnesses (needs LLVM clang, not Apple clang)
 cmake -B build-fuzz -DCMAKE_BUILD_TYPE=Debug -DSONG_ENABLE_FUZZ=ON
@@ -54,6 +61,8 @@ Notes on running tests:
 - Unit tests that bind network ports share a ctest `RESOURCE_LOCK`, so `ctest -j` is safe.
 - Tests for optional features skip (not fail) when the dependency is absent: TLS needs mbedTLS (`SONG_HAS_TLS`), Linux mDNS needs Avahi (`SONG_HAS_AVAHI`). A green local run does not prove those paths compile; CI builds both macOS (clang, Bonjour) and Linux (GCC, Avahi with a live daemon) for that reason.
 - GoogleTest is fetched via FetchContent at configure time (network needed on first configure).
+- Cargo is never needed to configure or build. `rust/CMakeLists.txt` only adds tests: with cargo on the path, `rust_build` (a fixture the others wait for), `rust_cargo_test`, `rust_clippy`, `rust_generated_is_current`, `rust_fuzz_smoke`, `python_rust_interop`; without it, one `rust_tests` test that reports Skipped. Keep it that way: no `add_custom_target` or build step may call cargo.
+- Tests that start a peer service process hold one lock for the life of that process (`PeerService` in `rust/tests/common/mod.rs`). Running them in parallel made child processes inherit other tests' sockets and produced intermittent connection resets.
 
 ## Code Style
 
@@ -71,16 +80,18 @@ Notes on running tests:
 ### Layout
 
 - `include/song/`, `src/`: `libsong`, the runtime. `song.hpp` is the umbrella header.
-- `compiler/`: `songc`. Pipeline is `lexer -> parser (ast.hpp) -> resolver -> codegen`, with three back ends: `codegen.cpp` (C++), `python_codegen.cpp`, `scaffold.cpp` (implementation skeleton plus sync report against an existing file).
+- `compiler/`: `songc`. Pipeline is `lexer -> parser (ast.hpp) -> resolver -> codegen`, with four back ends: `codegen.cpp` (C++), `python_codegen.cpp`, `rust_codegen.cpp`, `scaffold.cpp` (implementation skeleton plus sync report against an existing file).
 - `test/`: all unit tests, linked into one `song_tests` binary. It compiles the `compiler/*.cpp` sources directly (minus `main.cpp`), so compiler internals are testable without going through the CLI.
 - `sing/`: integration projects (`ipc/` over pipes, `network/` over TCP). Each has a `.song` file, the generated header, a service executable, and a gtest binary named `sing_<kind>_<project>_test`.
 - `examples/`: hand-written (non-IDL) services, including `registry_service`, the cross-subnet discovery registry.
 - `python/song/`: a pure-Python reimplementation of Buffer, wire, and connection (not FFI). It must stay byte-compatible with the C++ runtime. Client only: unary and streaming calls over TCP, optional HMAC (`key=`); no TLS, discovery, objects, or properties.
-- `fuzz/`: libFuzzer harnesses for the wire and buffer decoders.
+- `rust/`: the `song` crate, a third implementation of the wire format (not FFI), standard library only: no third-party crates, including for SHA-256 and HMAC (`sha256.rs`). Client (`ServiceConnection`: unary and streaming over TCP) and service (`ServiceRuntime`: unary and stream dispatchers, method flags, capabilities, TCP thread per client, pipes), with HMAC `SecureTransport`. No mDNS, registry, TLS, objects, properties, or `ServiceManager`; do not add them without being asked. `rust/tests/generated/` is checked-in `songc --lang rust` output.
+- `test/golden/wire_vectors.txt`: byte vectors that the C++, Python and Rust tests all read, written by `test/golden/generate.py`, which uses none of the three runtimes. A new encoding gets a vector there first.
+- `fuzz/`: libFuzzer harnesses for the wire and buffer decoders. `fuzz/rust/` is the Rust counterpart: its own small crate, built by `fuzz/rust/build.sh` (not CMake), with deterministic smoke tests under `cargo test`.
 
 ### Generated code is checked in and not rebuilt by CMake
 
-The `.hpp` next to each `.song` in `sing/` and `examples/`, and `python/song/generated/`, are `songc` output committed to the repo. CMake never invokes `songc` on them. After changing a code generator or a `.song` file, regenerate the affected headers by hand and commit them, or the integration tests keep exercising stale output.
+The `.hpp` next to each `.song` in `sing/` and `examples/`, `python/song/generated/`, and `rust/tests/generated/` are `songc` output committed to the repo. CMake never invokes `songc` on them. After changing a code generator or a `.song` file, regenerate the affected headers by hand and commit them, or the integration tests keep exercising stale output. Only the Rust output is checked for staleness (`rust_generated_is_current`, which lists the IDL file behind each module in `rust/check_generated.cmake`).
 
 ### Wire protocol (`wire.hpp`)
 
@@ -90,7 +101,7 @@ Message types go beyond plain RPC: `init`/`init_ack` (handshake), `call`/`result
 
 The init handshake negotiates a 32-bit `Capability` bitfield (the AND of both peers): bits 0-15 are framework features, 16-23 are runtime-registered extensions (`ServiceRuntime::register_extension`), 24-31 are vendor slots. Gate any new optional protocol feature on a capability bit rather than a version bump.
 
-A change to wire layout or Buffer encoding has to land in three places: `src/wire.cpp`/`src/buffer.cpp`, the C++ and Python code generators, and `python/song/wire.py`/`buffer.py`.
+A change to wire layout or Buffer encoding has to land in four places: `src/wire.cpp`/`src/buffer.cpp`, the C++, Python and Rust code generators, `python/song/wire.py`/`buffer.py`, and `rust/src/wire.rs`/`buffer.rs`, with the golden vectors updated to match.
 
 ### Runtime
 
@@ -108,6 +119,8 @@ A change to wire layout or Buffer encoding has to land in three places: `src/wir
 - Size limits: 16 MB per message payload, and a string or byte array may be that large. Decoders must check a length prefix against `Buffer::remaining()` before allocating.
 - Remote objects are owned by their creating connection and destroyed when it drops, even if another client holds the id. Object ids carry no ownership check.
 - The parser and resolver accept more than the generators emit: `error` types and `throws` clauses, struct inheritance, and the `optional` method modifier validate but generate nothing; `T[]?` generates as a plain `std::vector<T>`. See "Accepted but Not Yet Generated" in README.md before assuming an IDL feature works end to end.
+- The three generators do not accept the same IDL. Known gaps, none of them fixed: the C++ output for an optional type (`T?`) calls `encode_optional`/`decode_optional`, which the C++ runtime lacks, and `dispatch_<Service>` has an unused `request` parameter when no unary method takes parameters (both fail to compile); the Python output for a method with an enum calls `encode_<Enum>`/`decode_<Enum>`, which it never defines, and a doc comment that starts or ends with a double quote breaks the generated docstring; `songc` aborts on a negative enum value. `sing/network/rust_interop/interop.song` is written around these, so check a new IDL feature against all three before adding it there.
+- Rust rejects an enum value that is no item of the enum; C++ casts any integer. Python writes little-endian always; C++ and Rust use native order.
 
 ## Downstream consumer
 

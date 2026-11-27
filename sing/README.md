@@ -16,7 +16,8 @@ sing/
 │   ├── tcp_calculator/     # Calculator over TCP (explicit host:port)
 │   ├── discovery/          # mDNS zero-config service discovery
 │   ├── secure/             # HMAC-SHA256 authenticated communication
-│   └── backup/             # Comprehensive backup agent (all features)
+│   ├── backup/             # Comprehensive backup agent (all features)
+│   └── rust_interop/       # C++ client and service against the Rust runtime
 │
 └── README.md
 ```
@@ -200,6 +201,45 @@ Comprehensive backup agent exercising all Song features in one project.
 
 ---
 
+### 5. Rust Interop (`network/rust_interop/`)
+
+The service every language speaks, so each runtime can be tested against the
+others. `interop.song` has unary methods over every kind of value the C++
+generator can compile (structs, enums, flags, strings, bytes, nested
+arrays), three `stream` methods, a method that always fails and a stream
+that fails part way.
+
+**What is here:**
+- `interop_service.cpp`: the service on the C++ runtime
+  (`sing_network_rust_interop_service <port> [key]`)
+- `interop_test.cpp`: a C++ client against the same service on the Rust
+  runtime (`rust/examples/interop_service.rs`), over TCP, with HMAC, and over
+  pipes through `ServiceProcess::spawn`
+- `interop_samples.hpp`: the values both implementations must produce
+
+**What is covered:**
+- C++ client to Rust service: handshake and method list, every method,
+  unknown service and method, several clients at once
+- HMAC on both sides, a wrong key refused, a keyless client refused, a keyed
+  client refusing an unkeyed service
+- A stream that fails part way: the chunks written first arrive, then the
+  error, never a clean end
+- The Rust service spawned as a local pipe service by the C++ runtime
+
+The other directions use the service built here: Rust client to C++ service
+in `rust/tests/interop.rs`, Python client to Rust service in
+`python/tests/test_rust_interop.py`.
+
+The Rust binary is built by cargo, which the CMake build does not need.
+These tests skip when it is absent. `ctest` builds it first when cargo is
+installed.
+
+**Not in the IDL, and why:** optional types (`T?`) and a service whose
+methods all take no parameters. The C++ generator's output for both fails to
+compile, so they cannot be part of a service C++ has to build.
+
+---
+
 ## Building
 
 ```bash
@@ -217,6 +257,7 @@ make sing_ipc_calculator
 make sing_network_tcp_calculator
 make sing_network_secure
 make sing_network_backup
+make sing_network_rust_interop
 ```
 
 ## Running Tests
@@ -236,6 +277,7 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 ./sing/network/tcp_calculator/sing_network_tcp_calculator_test
 ./sing/network/secure/sing_network_secure_test
 ./sing/network/backup/sing_network_backup_test
+./sing/network/rust_interop/sing_network_rust_interop_test   # needs: (cd rust && cargo build --examples)
 ```
 
 ## Test Counts
@@ -250,7 +292,8 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 | Network Discovery | 4 |
 | Network Secure | 5 |
 | Network Backup Agent | 44 |
-| **Total** | **138** |
+| Network Rust Interop | 9 |
+| **Total** | **147** |
 
 ## Requirements
 
