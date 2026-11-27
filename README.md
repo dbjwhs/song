@@ -2,7 +2,7 @@
 
 A zero-dependency C++20 microservice framework with a custom IDL compiler, binary wire protocol, and process-isolated service hosting. Define services in `.song` IDL files, generate type-safe C++, Python and Rust code, and communicate over pipes or TCP with TLS encryption, HMAC-SHA256 security, streaming RPC, and zero-config mDNS discovery.
 
-**824 C++ tests (663 unit + 161 integration), plus the Python and Rust suites | Zero warnings (-Wall -Wextra -Werror) | ~31K lines of C++20**
+**826 C++ tests (663 unit + 163 integration), plus the Python and Rust suites | Zero warnings (-Wall -Wextra -Werror) | ~31K lines of C++20**
 
 ```song
 // calculator.song                     // Write an IDL definition...
@@ -714,7 +714,7 @@ All core features are complete and tested:
 | **Object System** | Complete | Reference-counted remote objects, create/release/property/method dispatch |
 | **Logging** | Complete | Handler-based, colored console, source location capture, introspection |
 | **Rust Target** | Complete for its scope | `rust/` runtime crate (client and service, TCP and pipes, streaming, HMAC) and `songc --lang rust`; no discovery, TLS, objects or properties |
-| **Tests** | 824 C++ total | 663 unit tests + 161 integration tests across 9 projects; plus 83 Rust tests (`cargo test`) and the Python suite |
+| **Tests** | 826 C++ total | 663 unit tests + 163 integration tests across 9 projects; plus 84 Rust tests (`cargo test`) and the Python suite |
 
 ## Code Quality
 
@@ -781,7 +781,7 @@ result = calc.add(5, 3)        # Python encodes → wire → C++ decodes → C++
 div = calc.divide(17, 5)       # Returns DivResult(quotient=3, remainder=2)
 ```
 
-The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations — not FFI bindings. It covers unary and streaming calls over TCP, with optional HMAC-SHA256 authentication (`key=`) matching the C++ `SecureTransport`; TLS, discovery, objects, and properties are C++ only. Both languages serialize to the same byte layout, verified by cross-language integration tests.
+The Python library (`python/song/`) includes its own Buffer, wire protocol, and connection implementations, not FFI bindings. It covers unary and streaming calls over TCP, with optional HMAC-SHA256 authentication (`key=`) matching the C++ `SecureTransport`; TLS, discovery, objects, and properties are C++ only. All three runtimes (C++, Python, Rust) serialize to the same byte layout, verified by the shared golden vectors and cross-language integration tests.
 
 The Rust runtime (`rust/`) is the third implementation of the same wire
 format. All three are checked against one file of byte vectors,

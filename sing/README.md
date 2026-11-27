@@ -287,8 +287,8 @@ ctest -R "^(TcpCalculator|Discovery|SecureTransport|BackupAgent|SecureBackup|Dis
 | Network Discovery | 5 |
 | Network Secure | 5 |
 | Network Backup Agent | 44 |
-| Network Rust Interop | 9 |
-| **Total** | **161** |
+| Network Rust Interop | 11 |
+| **Total** | **163** |
 
 ## Requirements
 

@@ -314,3 +314,57 @@ TEST(RustInteropPipeTest, UnaryAndStreamingCallsOverPipes) {
         proc.terminate();
     }
 }
+
+// =============================================================================
+// Generated array codecs: the element count is the peer's word
+// =============================================================================
+
+namespace {
+
+std::string decode_failure(Buffer& buf, bool structs) {
+    buf.reset_read();
+    try {
+        if (structs) {
+            decode_array_Sample(buf);
+        } else {
+            decode_array_Status(buf);
+        }
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return "";
+}
+
+}  // namespace
+
+// Needs no service: the generated decoders for arrays of structs and enums
+// refuse a count over the cap, as decode_array<T> does, before reserving.
+TEST(InteropArrayLimitTest, ForgedCountIsRefused) {
+    for (bool structs : {true, false}) {
+        Buffer forged;
+        encode_u32(forged, 0xFFFFFFFFu);
+        EXPECT_EQ(decode_failure(forged, structs), "Array too large");
+
+        Buffer over;
+        encode_u32(over, static_cast<u32>(kMaxArrayCount + 1));
+        EXPECT_EQ(decode_failure(over, structs), "Array too large");
+
+        // At the cap the count is allowed, and the missing elements are
+        // the error.
+        Buffer at_cap;
+        encode_u32(at_cap, static_cast<u32>(kMaxArrayCount));
+        std::string what = decode_failure(at_cap, structs);
+        EXPECT_FALSE(what.empty());
+        EXPECT_NE(what, "Array too large");
+    }
+}
+
+TEST(InteropArrayLimitTest, EncodingOverTheCapIsRefused) {
+    Buffer buf;
+    std::vector<Status> at_cap(kMaxArrayCount, Status::ok);
+    EXPECT_NO_THROW(encode_array_Status(buf, at_cap));
+
+    std::vector<Status> over(kMaxArrayCount + 1, Status::ok);
+    Buffer buf2;
+    EXPECT_THROW(encode_array_Status(buf2, over), std::runtime_error);
+}

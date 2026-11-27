@@ -190,6 +190,9 @@ std::string CodeGenerator::generate_struct_decode(const StructDef& s) {
 std::string generate_struct_array_encode(const StructDef& s) {
     std::ostringstream out;
     out << "inline void encode_array_" << s.name << "(Buffer& buf, const std::vector<" << s.name << ">& arr) {\n";
+    out << "    if (arr.size() > kMaxArrayCount) {\n";
+    out << "        throw std::runtime_error(\"Array too large\");\n";
+    out << "    }\n";
     out << "    encode_u32(buf, static_cast<u32>(arr.size()));\n";
     out << "    for (const auto& val : arr) {\n";
     out << "        encode_" << s.name << "(buf, val);\n";
@@ -203,8 +206,13 @@ std::string generate_struct_array_decode(const StructDef& s) {
     std::ostringstream out;
     out << "inline std::vector<" << s.name << "> decode_array_" << s.name << "(Buffer& buf) {\n";
     out << "    u32 count = decode_u32(buf);\n";
+    out << "    if (count > kMaxArrayCount) {\n";
+    out << "        throw std::runtime_error(\"Array too large\");\n";
+    out << "    }\n";
     out << "    std::vector<" << s.name << "> arr;\n";
-    out << "    arr.reserve(count);\n";
+    // The count is the peer's word: reserve no more elements than there
+    // are bytes left to decode them from.
+    out << "    arr.reserve(count < buf.remaining() ? count : buf.remaining());\n";
     out << "    for (u32 i = 0; i < count; ++i) {\n";
     out << "        arr.push_back(decode_" << s.name << "(buf));\n";
     out << "    }\n";
@@ -269,6 +277,9 @@ std::string generate_enum_name(const EnumDef& e) {
 std::string generate_enum_array_encode(const EnumDef& e) {
     std::ostringstream out;
     out << "inline void encode_array_" << e.name << "(Buffer& buf, const std::vector<" << e.name << ">& arr) {\n";
+    out << "    if (arr.size() > kMaxArrayCount) {\n";
+    out << "        throw std::runtime_error(\"Array too large\");\n";
+    out << "    }\n";
     out << "    encode_u32(buf, static_cast<u32>(arr.size()));\n";
     out << "    for (const auto& val : arr) {\n";
     out << "        encode_" << e.name << "(buf, val);\n";
@@ -281,8 +292,13 @@ std::string generate_enum_array_decode(const EnumDef& e) {
     std::ostringstream out;
     out << "inline std::vector<" << e.name << "> decode_array_" << e.name << "(Buffer& buf) {\n";
     out << "    u32 count = decode_u32(buf);\n";
+    out << "    if (count > kMaxArrayCount) {\n";
+    out << "        throw std::runtime_error(\"Array too large\");\n";
+    out << "    }\n";
     out << "    std::vector<" << e.name << "> arr;\n";
-    out << "    arr.reserve(count);\n";
+    // The count is the peer's word: reserve no more elements than there
+    // are bytes left to decode them from.
+    out << "    arr.reserve(count < buf.remaining() ? count : buf.remaining());\n";
     out << "    for (u32 i = 0; i < count; ++i) {\n";
     out << "        arr.push_back(decode_" << e.name << "(buf));\n";
     out << "    }\n";

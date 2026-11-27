@@ -120,7 +120,7 @@ A change to wire layout or Buffer encoding has to land in four places: `src/wire
 - Remote objects are owned by their creating connection and destroyed when it drops, even if another client holds the id. Object ids carry no ownership check.
 - The parser and resolver accept more than the generators emit: `error` types and `throws` clauses, struct inheritance, and the `optional` method modifier validate but generate nothing; `T[]?` generates as a plain `std::vector<T>`. See "Accepted but Not Yet Generated" in README.md before assuming an IDL feature works end to end.
 - A generator change is not done until its output is compiled or run, with the project's warning flags, for the awkward cases: `CodegenTest.OptionalsParameterlessServiceAndEnumAliasesCompile` (C++), `PythonCodegenTest.EnumCodecsAndQuotedDocstringsRun`, and `rust/tests/idl/coverage.song`. `sing/network/rust_interop/interop.song` is the IDL all three languages serve or call, so a new IDL feature goes there once all three generate it.
-- Rust and Python reject an enum value that is no item of the enum; C++ casts any integer. Generated C++ decoders for arrays of structs and enums do not cap the element count (`decode_array<T>` caps at 1M); a known gap, not yet fixed.
+- Rust and Python reject an enum value that is no item of the enum; C++ casts any integer. Every array decoder, generated or `decode_array<T>`, refuses a count over `kMaxArrayCount` (1M) and reserves no more elements than there are bytes left.
 - All three runtimes write native byte order. The Python client speaks protocol 1.1 and sends `init_ack` to a 1.1 service, as the C++ and Rust clients do.
 
 ## Downstream consumer

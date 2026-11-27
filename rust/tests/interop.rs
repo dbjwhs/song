@@ -159,6 +159,22 @@ fn unknown_service_and_method_on_a_cpp_service() {
     assert_eq!(InteropProxy::new(&mut conn).add(1, 2).unwrap(), 3);
 }
 
+/// An array count far beyond the bytes sent: the generated C++ decoder
+/// refuses it as too large, at once, and the service carries on.
+#[test]
+fn a_forged_array_count_is_refused_by_a_cpp_service() {
+    let Some(service) = cpp_interop(None) else { return };
+    let mut conn = connect(&service, None).unwrap();
+    // echo_batch(Batch b): a Batch starts with the count of its samples.
+    let mut request = Buffer::new();
+    request.encode_u32(u32::MAX);
+    let started = std::time::Instant::now();
+    let err = conn.call(interop::SERVICE_Interop, interop::METHOD_Interop_echo_batch, &request).unwrap_err();
+    assert!(matches!(&err, Error::Service { message, .. } if message.contains("Array too large")), "{err}");
+    assert!(started.elapsed() < Duration::from_millis(250), "{:?}", started.elapsed());
+    assert_eq!(InteropProxy::new(&mut conn).add(1, 2).unwrap(), 3);
+}
+
 /// The chunk timeout is the caller's against a real service too: a stream
 /// of many chunks is read with a timeout far shorter than the whole stream
 /// takes, because the timeout is per chunk.
